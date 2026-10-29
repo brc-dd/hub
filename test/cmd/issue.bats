@@ -305,6 +305,70 @@ load ../test_helper
   assert_output_equals "gh issue close 12 --duplicate-of https://github.com/mislav/dotfiles/pull/7/files"
 }
 
+@test "issue update -s closed refuses to close an issue as a duplicate of itself before running gh" {
+  run hub --noop issue update 12 -s closed --title New --duplicate-of 12
+  assert_failure
+  assert_output_equals "Aborted: issue 12 cannot be closed as a duplicate of itself (--duplicate-of 12)."
+  run hub issue update 12 13 -s closed -r duplicate --duplicate-of '#13' -c Dup
+  assert_failure
+  assert_output_equals "Aborted: issue 13 cannot be closed as a duplicate of itself (--duplicate-of #13)."
+  run hub issue update '#012' --add-label dup -s closed --duplicate-of=12
+  assert_failure
+  assert_output_equals "Aborted: issue #012 cannot be closed as a duplicate of itself (--duplicate-of 12)."
+  # gh reads a bare --duplicate-of number in the closed issue's repository, here its URL's.
+  run hub issue update https://github.com/corp/app/issues/12 -s closed --duplicate-of 12
+  assert_failure
+  assert_output_equals "Aborted: issue https://github.com/corp/app/issues/12 cannot be closed as a duplicate of itself (--duplicate-of 12)."
+  run hub issue update -s closed --duplicate-of https://github.com/Corp/App/issues/12#issuecomment-1 -- https://github.com/corp/app/issues/12
+  assert_failure
+  assert_output_contains "cannot be closed as a duplicate of itself"
+  assert_gh_not_called
+}
+
+@test "issue update -s closed refuses a --duplicate-of URL for an issue being closed in the current repository" {
+  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
+  run hub issue update 12 -t New -s closed --duplicate-of https://github.com/mislav/dotfiles/issues/12
+  assert_failure
+  assert_output_equals "Aborted: issue 12 cannot be closed as a duplicate of itself (--duplicate-of https://github.com/mislav/dotfiles/issues/12)."
+  run hub issue update 13 '#12' -s closed --duplicate-of https://www.github.com/Mislav/Dotfiles/pull/012/files
+  assert_failure
+  assert_output_equals "Aborted: issue #12 cannot be closed as a duplicate of itself (--duplicate-of https://www.github.com/Mislav/Dotfiles/pull/012/files)."
+  run hub issue update 12 -R corp/app -s closed --duplicate-of https://github.com/corp/app/issues/12
+  assert_failure
+  assert_output_contains "issue 12 cannot be closed as a duplicate of itself"
+  run hub issue -R https://ghe.example.com/corp/app update 12 -s closed --duplicate-of https://ghe.example.com/corp/app/issues/12
+  assert_failure
+  assert_output_contains "issue 12 cannot be closed as a duplicate of itself"
+  export GH_REPO=ghe.example.com/corp/app
+  run hub issue update 12 -s closed --duplicate-of https://ghe.example.com/corp/app/issues/12
+  assert_failure
+  assert_output_contains "issue 12 cannot be closed as a duplicate of itself"
+  assert_gh_not_called
+}
+
+@test "issue update -s closed takes a duplicate with the same number in another repository" {
+  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
+  run hub --noop issue update 12 -s closed --duplicate-of https://github.com/other/dotfiles/issues/12
+  assert_success
+  assert_output_equals "gh issue close 12 --duplicate-of https://github.com/other/dotfiles/issues/12"
+  run hub --noop issue update 12 -R other/dotfiles -s closed --duplicate-of https://github.com/mislav/dotfiles/issues/12
+  assert_success
+  assert_output_equals "gh issue close 12 -R other/dotfiles --duplicate-of https://github.com/mislav/dotfiles/issues/12"
+  run hub --noop issue update https://github.com/other/dotfiles/issues/12 -s closed --duplicate-of https://github.com/mislav/dotfiles/issues/12
+  assert_success
+  assert_output_equals "gh issue close https://github.com/other/dotfiles/issues/12 --duplicate-of https://github.com/mislav/dotfiles/issues/12"
+  # gh takes the last --duplicate-of.
+  run hub --noop issue update 12 -s closed --duplicate-of 12 --duplicate-of 7
+  assert_success
+  assert_output_equals "gh issue close 12 --duplicate-of 12 --duplicate-of 7"
+  # Where hub cannot tell which repository 12 is in, it leaves the check to gh.
+  cd "$HUB_TEST_TMP"
+  run hub --noop issue update 12 -s closed --duplicate-of https://github.com/mislav/dotfiles/issues/12
+  assert_success
+  assert_output_equals "gh issue close 12 --duplicate-of https://github.com/mislav/dotfiles/issues/12"
+  assert_gh_not_called
+}
+
 @test "issue update -s aborts on an unknown state or a missing number before running gh" {
   run hub issue update 12 -t New -s merged
   assert_failure

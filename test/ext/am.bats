@@ -52,7 +52,7 @@ git am -3 TMP/1.patch"
   run hub --noop am "https://github.com/mislav/dotfiles/commit/$SHA"
   assert_success
   untmp
-  assert_output_equals "gh api repos/mislav/dotfiles/commits/$SHA $ACCEPT > TMP/1.patch
+  assert_output_equals "gh api --hostname github.com repos/mislav/dotfiles/commits/$SHA $ACCEPT > TMP/1.patch
 git am TMP/1.patch"
 }
 
@@ -61,23 +61,40 @@ git am TMP/1.patch"
   run hub --noop am "$PR/commits/abc1234"
   assert_success
   untmp
-  assert_line_equals 0 "gh api repos/mislav/dotfiles/commits/abc1234 $ACCEPT > TMP/1.patch"
+  assert_line_equals 0 "gh api --hostname github.com repos/mislav/dotfiles/commits/abc1234 $ACCEPT > TMP/1.patch"
 }
 
-@test "am tells gh the URL's host when gh would default to another" {
+@test "am always tells gh api the commit URL's host" {
   use_tmpdir
   git config --global hub.host ghe.example.com
   run hub --noop am https://ghe.example.com/team/app/commit/abc1234
   assert_success
   untmp
   assert_line_equals 0 "gh api --hostname ghe.example.com repos/team/app/commits/abc1234 $ACCEPT > TMP/1.patch"
+  # Also when that host is gh's default anyway.
   export GH_HOST=ghe.example.com
   run hub --noop am https://ghe.example.com/team/app/commit/abc1234
+  assert_success
   untmp
-  assert_line_equals 0 "gh api repos/team/app/commits/abc1234 $ACCEPT > TMP/1.patch"
-  run hub --noop am https://github.com/mislav/dotfiles/commit/abc1234
+  assert_line_equals 0 "gh api --hostname ghe.example.com repos/team/app/commits/abc1234 $ACCEPT > TMP/1.patch"
+}
+
+@test "am looks up a github.com commit on github.com, whatever host gh defaults to" {
+  use_tmpdir
+  export GH_HOST=enterprise.example
+  run hub --noop am https://github.com/org/repo/commit/abcdef0
+  assert_success
   untmp
-  assert_line_equals 0 "gh api --hostname github.com repos/mislav/dotfiles/commits/abc1234 $ACCEPT > TMP/1.patch"
+  assert_output_equals "gh api --hostname github.com repos/org/repo/commits/abcdef0 $ACCEPT > TMP/1.patch
+git am TMP/1.patch"
+  # No GH_HOST, and gh is logged in to enterprise.example only, which makes that gh's default host.
+  unset GH_HOST
+  mkdir -p "$GH_CONFIG_DIR"
+  printf 'enterprise.example:\n    user: me\n' >"$GH_CONFIG_DIR/hosts.yml"
+  run hub --noop am https://github.com/org/repo/commit/abcdef0
+  assert_success
+  untmp
+  assert_line_equals 0 "gh api --hostname github.com repos/org/repo/commits/abcdef0 $ACCEPT > TMP/1.patch"
 }
 
 @test "am passes --allow-escape-sequences to gh when gh has it, asking gh once per command" {
@@ -88,8 +105,8 @@ git am TMP/1.patch"
   assert_success
   untmp
   assert_output_equals "gh pr diff $PR --patch --color=never --allow-escape-sequences > TMP/1.patch
-gh api repos/mislav/dotfiles/commits/$SHA $ACCEPT --allow-escape-sequences > TMP/2.patch
-gh api repos/mislav/dotfiles/commits/abc1234 $ACCEPT --allow-escape-sequences > TMP/3.patch
+gh api --hostname github.com repos/mislav/dotfiles/commits/$SHA $ACCEPT --allow-escape-sequences > TMP/2.patch
+gh api --hostname github.com repos/mislav/dotfiles/commits/abc1234 $ACCEPT --allow-escape-sequences > TMP/3.patch
 gh pr diff https://github.com/mislav/dotfiles/pull/13 --patch --color=never --allow-escape-sequences > TMP/4.patch
 git am TMP/1.patch TMP/2.patch TMP/3.patch TMP/4.patch"
   [[ $(gh_calls) == $'gh pr diff --help\ngh api --help' ]]
@@ -104,7 +121,7 @@ git am TMP/1.patch TMP/2.patch TMP/3.patch TMP/4.patch"
   assert_success
   untmp
   assert_output_equals "gh pr diff $PR --patch --color=never > TMP/1.patch
-gh api repos/mislav/dotfiles/commits/$SHA $ACCEPT > TMP/2.patch
+gh api --hostname github.com repos/mislav/dotfiles/commits/$SHA $ACCEPT > TMP/2.patch
 git am TMP/1.patch TMP/2.patch"
   [[ $(gh_calls) == $'gh pr diff --help\ngh api --help' ]]
 }
@@ -115,7 +132,7 @@ git am TMP/1.patch TMP/2.patch"
   assert_success
   untmp
   assert_output_equals "gh pr diff $PR --patch --color=never > TMP/1.patch
-gh api repos/mislav/dotfiles/commits/$SHA $ACCEPT > TMP/2.patch
+gh api --hostname github.com repos/mislav/dotfiles/commits/$SHA $ACCEPT > TMP/2.patch
 git am --signoff local.patch TMP/1.patch -3 TMP/2.patch"
 }
 
@@ -133,7 +150,7 @@ git am --signoff local.patch TMP/1.patch -3 TMP/2.patch"
   run hub --noop am --exclude "$PR" "https://github.com/mislav/dotfiles/commit/$SHA"
   assert_success
   untmp
-  assert_output_equals "gh api repos/mislav/dotfiles/commits/$SHA $ACCEPT > TMP/1.patch
+  assert_output_equals "gh api --hostname github.com repos/mislav/dotfiles/commits/$SHA $ACCEPT > TMP/1.patch
 git am --exclude $PR TMP/1.patch"
   assert_tmp_cleaned
 }

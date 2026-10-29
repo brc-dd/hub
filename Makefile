@@ -1,6 +1,6 @@
 SHELL := bash
 SH_FILES := bin/hub lib/hub/*.sh lib/hub/*/*.sh test/stubs/gh test/*.bash completions/hub.bash $(wildcard script/*)
-.PHONY: test lint fmt fmt-check check
+.PHONY: test lint fmt fmt-check selftest check
 
 test:            ## run the bats test suite
 	bats --recursive test
@@ -14,7 +14,10 @@ fmt:             ## format with shfmt (settings in .editorconfig)
 fmt-check:       ## fail if shfmt would change anything
 	shfmt -d $(SH_FILES)
 
-check: lint fmt-check test
+selftest:        ## run the scripts' built-in self-tests (SemVer comparator)
+	script/update-formula --self-test
+
+check: lint fmt-check test selftest
 
 # make install [PREFIX=/usr/local] [DESTDIR=...]
 # Symlinks bin/hub into $(PREFIX)/bin (hub follows the link back to lib/hub),

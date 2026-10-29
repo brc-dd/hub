@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Usage: script/update-formula [--sha256 HEX] [--dry-run] [--force] vX.Y.Z
+#        script/update-formula --self-test
 #
 # Points Formula/hub.rb at the source tarball of tag vX.Y.Z: downloads
 # https://github.com/OWNER/REPO/archive/refs/tags/vX.Y.Z.tar.gz, computes its
@@ -8,7 +9,8 @@
 #
 # It never goes back to an older version on its own: when the formula's url
 # already names a newer one (a tag pushed late or by hand), it changes nothing
-# and fails, unless --force is given.
+# and fails, unless --force is given. Newer is SemVer 2.0.0 precedence, so
+# v1.0.0-rc.1 is older than v1.0.0, and v1.0.0-alpha.1 than v1.0.0-alpha.beta.
 #
 # OWNER/REPO comes from the origin remote when that is a GitHub URL, else from
 # $HUB_GITHUB_REPO, else it is brc-dd/hub. It has to match REPO in the formula.
@@ -17,6 +19,7 @@
 #       --sha256 HEX   use this checksum instead of downloading the tarball
 #   -n, --dry-run      print the new url and sha256 lines instead of writing them
 #   -f, --force        point the formula at vX.Y.Z even when it names a newer version
+#       --self-test    check the version order against the examples in this script
 #   -h, --help         show this help
 
 set -euo pipefail
@@ -55,15 +58,88 @@ github_slug() {
   fi
 }
 
-# version_lt A B : version A (X.Y.Z or X.Y.Z-PRE) is older than version B. sort -V orders
-# them, except that it puts X.Y.Z before X.Y.Z-PRE, so that case is decided here (semver).
+# version_lt A B : version A has lower precedence than version B, both X.Y.Z or X.Y.Z-PRE as
+# semver_re has it, by SemVer 2.0.0: X, Y and Z compare as numbers; a release is above all of
+# its pre-releases; two pre-releases compare identifier by identifier, and when one's
+# identifiers all begin the other's, the one with fewer is lower.
 version_lt() {
-  [[ $1 != "$2" ]] || return 1
-  if [[ ${1%%-*} == "${2%%-*}" ]]; then
-    [[ $1 == *-* ]] || return 1
-    [[ $2 == *-* ]] || return 0
+  local -a a b
+  local i n
+  IFS=. read -ra a <<<"${1%%-*}"
+  IFS=. read -ra b <<<"${2%%-*}"
+  for i in 0 1 2; do
+    if [[ ${a[i]} != "${b[i]}" ]]; then
+      identifier_lt "${a[i]}" "${b[i]}"
+      return
+    fi
+  done
+  [[ $1 == *-* ]] || return 1 # A is the release
+  [[ $2 == *-* ]] || return 0 # B is the release, A one of its pre-releases
+  IFS=. read -ra a <<<"${1#*-}"
+  IFS=. read -ra b <<<"${2#*-}"
+  n=$((${#a[@]} < ${#b[@]} ? ${#a[@]} : ${#b[@]}))
+  for ((i = 0; i < n; i++)); do
+    if [[ ${a[i]} != "${b[i]}" ]]; then
+      identifier_lt "${a[i]}" "${b[i]}"
+      return
+    fi
+  done
+  ((${#a[@]} < ${#b[@]}))
+}
+
+# identifier_lt A B : SemVer identifier A is below a different identifier B. Numeric ones
+# (digits only, so no leading zeros) compare as numbers of any length and are below the
+# others, which compare in ASCII order.
+identifier_lt() {
+  local LC_ALL=C num='^[0-9]+$' # [[ < ]] collates by the locale; SemVer wants ASCII
+  if [[ $1 =~ $num ]]; then
+    [[ $2 =~ $num ]] || return 0
+    if ((${#1} != ${#2})); then
+      ((${#1} < ${#2}))
+      return
+    fi
+  elif [[ $2 =~ $num ]]; then
+    return 1
   fi
-  [[ $(printf '%s\n' "$1" "$2" | LC_ALL=C sort -V) == "$1"$'\n'"$2" ]]
+  [[ $1 < "$2" ]]
+}
+
+# Precedence that version_lt must reproduce (--self-test checks it), each line in ascending
+# order. The first line is SemVer 2.0.0's own example.
+version_order=(
+  '1.0.0-alpha 1.0.0-alpha.1 1.0.0-alpha.beta 1.0.0-beta 1.0.0-beta.2 1.0.0-beta.11 1.0.0-rc.1 1.0.0'
+  '1.0.0 1.0.1 1.1.0 2.0.0'
+  '1.9.0 1.10.0'
+  '1.9.9 2.0.0-0 2.0.0'
+  '1.0.0-2 1.0.0-10 1.0.0-99999999999999999999 1.0.0-100000000000000000000 1.0.0-1a 1.0.0-Alpha 1.0.0-a-b 1.0.0-a0 1.0.0-alpha'
+)
+
+# self_test : within each line of version_order, every version is a release version and is
+# below each later one, and not below itself or any earlier one.
+self_test() {
+  local line i j count=0 failed=0
+  local -a v
+  for line in "${version_order[@]}"; do
+    read -ra v <<<"$line"
+    for ((i = 0; i < ${#v[@]}; i++)); do
+      if ! [[ ${v[i]} =~ $semver_re ]]; then
+        printf 'not a release version: %s\n' "${v[i]}"
+        failed=1
+      fi
+      for ((j = 0; j < ${#v[@]}; j++)); do
+        count=$((count + 1))
+        if ((i < j)) && ! version_lt "${v[i]}" "${v[j]}"; then
+          printf 'wrong: %s is not below %s\n' "${v[i]}" "${v[j]}"
+          failed=1
+        elif ((i >= j)) && version_lt "${v[i]}" "${v[j]}"; then
+          printf 'wrong: %s is below %s\n' "${v[i]}" "${v[j]}"
+          failed=1
+        fi
+      done
+    done
+  done
+  ((! failed)) || die "the version order is wrong"
+  printf 'The version order is right (%d comparisons).\n' "$count"
 }
 
 # sha256_of FILE : print the file's SHA-256
@@ -79,7 +155,7 @@ sha256_of() {
   printf '%s\n' "${sum%% *}"
 }
 
-dry_run=0 force=0 sha256='' tag=''
+dry_run=0 force=0 run_self_test=0 sha256='' tag=''
 while (($#)); do
   case $1 in
     --sha256)
@@ -90,6 +166,7 @@ while (($#)); do
     --sha256=*) sha256=${1#*=} ;;
     -n | --dry-run) dry_run=1 ;;
     -f | --force) force=1 ;;
+    --self-test) run_self_test=1 ;;
     -h | --help)
       usage
       exit 0
@@ -102,6 +179,10 @@ while (($#)); do
   esac
   shift
 done
+if ((run_self_test)); then
+  self_test
+  exit
+fi
 [[ -n $tag ]] || usage_error "missing the tag (vX.Y.Z)"
 [[ ${tag#v} =~ $semver_re ]] || die "not a release tag (vX.Y.Z or vX.Y.Z-PRE): $tag"
 tag=v${tag#v}
@@ -132,10 +213,12 @@ else
   url="https://github.com/$repo/archive/refs/tags/$tag.tar.gz"
 fi
 
-# The version the formula points at now: the vX.Y.Z[-PRE] tarball on its first url line.
+# The version the formula points at now: the vX.Y.Z[-PRE] tarball on its first url line (none
+# when that is not a release version, as version_lt needs).
 current=$(awk '/^[ \t]*url[ \t]+"/ { print; exit }' "$formula")
 if [[ $current =~ /v([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)\.tar\.gz\" ]]; then
   current=${BASH_REMATCH[1]}
+  [[ $current =~ $semver_re ]] || current=''
 else
   current=''
 fi

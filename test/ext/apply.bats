@@ -52,11 +52,11 @@ git apply TMP/1.diff"
   run hub --noop apply "https://github.com/mislav/dotfiles/commit/$SHA"
   assert_success
   untmp
-  assert_output_equals "gh api repos/mislav/dotfiles/commits/$SHA $ACCEPT > TMP/1.diff
+  assert_output_equals "gh api --hostname github.com repos/mislav/dotfiles/commits/$SHA $ACCEPT > TMP/1.diff
 git apply TMP/1.diff"
   run hub --noop apply "$PR/commits/abc1234"
   untmp
-  assert_line_equals 0 "gh api repos/mislav/dotfiles/commits/abc1234 $ACCEPT > TMP/1.diff"
+  assert_line_equals 0 "gh api --hostname github.com repos/mislav/dotfiles/commits/abc1234 $ACCEPT > TMP/1.diff"
 }
 
 @test "apply passes --allow-escape-sequences to gh when gh has it" {
@@ -67,18 +67,23 @@ git apply TMP/1.diff"
   assert_success
   untmp
   assert_output_equals "gh pr diff $PR --color=never --allow-escape-sequences > TMP/1.diff
-gh api repos/mislav/dotfiles/commits/$SHA $ACCEPT --allow-escape-sequences > TMP/2.diff
+gh api --hostname github.com repos/mislav/dotfiles/commits/$SHA $ACCEPT --allow-escape-sequences > TMP/2.diff
 git apply TMP/1.diff TMP/2.diff"
   [[ $(gh_calls) == $'gh pr diff --help\ngh api --help' ]]
 }
 
-@test "apply tells gh an enterprise URL's host" {
+@test "apply always tells gh api the commit URL's host, whatever host gh defaults to" {
   use_tmpdir
   git config --global hub.host ghe.example.com
   run hub --noop apply https://ghe.example.com/team/app/commit/abc1234
   assert_success
   untmp
   assert_line_equals 0 "gh api --hostname ghe.example.com repos/team/app/commits/abc1234 $ACCEPT > TMP/1.diff"
+  export GH_HOST=enterprise.example
+  run hub --noop apply https://github.com/mislav/dotfiles/commit/abc1234
+  assert_success
+  untmp
+  assert_line_equals 0 "gh api --hostname github.com repos/mislav/dotfiles/commits/abc1234 $ACCEPT > TMP/1.diff"
 }
 
 @test "apply keeps git-apply options and other patches in place" {
@@ -172,7 +177,7 @@ git apply --directory=x TMP/1.diff"
 
 @test "apply aborts when a download fails" {
   use_tmpdir
-  stub_gh "api repos/mislav/dotfiles/commits/$SHA *" '' 1
+  stub_gh "api --hostname github.com repos/mislav/dotfiles/commits/$SHA *" '' 1
   run hub apply "https://github.com/mislav/dotfiles/commit/$SHA"
   assert_failure
   assert_output_equals "Aborted: could not download https://github.com/mislav/dotfiles/commit/$SHA"

@@ -141,7 +141,12 @@ setup() {
   [[ $(hub::current_user) == mislav ]]
   [[ $(GH_TOKEN=x hub::current_user) == tokenuser ]]
   [[ $(GITHUB_TOKEN=x hub::current_user) == tokenuser ]]
-  [[ $(GH_ENTERPRISE_TOKEN=x hub::current_user) == tokenuser ]]
+  # an Enterprise token does not apply to github.com, so the cached login still counts there
+  [[ $(GH_ENTERPRISE_TOKEN=x hub::current_user) == mislav ]]
+  stub_gh 'config get user -h ghe.example.com' 'ghe-cached'
+  stub_gh 'api --hostname ghe.example.com user -q .login' 'ghe-token'
+  [[ $(GH_TOKEN=x hub::current_user ghe.example.com) == ghe-cached ]]
+  [[ $(GH_ENTERPRISE_TOKEN=x hub::current_user ghe.example.com) == ghe-token ]]
 }
 
 @test "split_message takes the first paragraph as title and the rest as body" {

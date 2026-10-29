@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # Summary: Fetch from GitHub users' forks, adding remotes for them first.
 # Usage: hub fetch USER[,USER2...] [<git-fetch arguments>]
-#        hub fetch --multiple USER [USER2...] [<git-fetch arguments>]
+#        hub fetch --multiple [<git-fetch options>] USER [USER2...]
 #
 # Adds a remote named USER for each USER in the comma-separated list that is
 # not a remote (or remote group) yet, pointing at USER's copy of the current
@@ -9,10 +9,11 @@
 # `git fetch --multiple` for a list, plain `git fetch` for one name. Arguments
 # after the list are passed to git fetch as they are.
 #
-# With --multiple (or -m) first, the list is instead the names that follow
-# it, up to the first argument that starts with "-". The missing remotes are
-# added in the same way, then `git fetch --multiple` gets the other arguments,
-# as they are, followed by the names.
+# With --multiple (or -m) first, the list is instead every name that follows
+# it, before, between or after git fetch's options; the value of an option,
+# as in --depth 1, is not a name. The missing remotes are added in the same
+# way, then `git fetch --multiple` gets the rest of the arguments unchanged and
+# in their order.
 #
 # Nothing is looked up on GitHub: if USER has no such repository, git fetch
 # fails and the new remote stays (`git remote remove USER` drops it). This is
@@ -28,9 +29,9 @@
 #   > git remote add jingweno https://github.com/jingweno/REPO.git
 #   > git fetch --multiple jingweno mislav --prune
 #
-#   $ hub fetch --multiple jingweno mislav --prune
+#   $ hub fetch --multiple --prune jingweno --depth 1 mislav
 #   > git remote add jingweno https://github.com/jingweno/REPO.git
-#   > git fetch --multiple --prune jingweno mislav
+#   > git fetch --multiple --prune jingweno --depth 1 mislav
 #
 # For git's own options, see `man git-fetch`.
 
@@ -46,11 +47,19 @@ hub_ext_fetch() {
   local -a list=() rest=()
   if [[ ${1-} == --multiple || ${1-} == -m ]]; then
     multiple=1
+    # The names are the operands, wherever the options are: neither an option nor an option's value.
+    local value=0 operands=0
     for arg in "${@:2}"; do
-      [[ $arg == -* ]] && break
-      list+=("$arg")
+      if ((value)); then
+        value=0
+      elif ((operands)) || [[ $arg != -?* ]]; then
+        list+=("$arg")
+      elif [[ $arg == -- ]]; then
+        operands=1
+      elif _hub_fetch_takes_value "$arg"; then
+        value=1
+      fi
     done
-    rest=("${@:${#list[@]}+2}") # what follows the names
   elif [[ ${1-} =~ ^[A-Za-z0-9][A-Za-z0-9_.,-]*$ && ! -e $1 ]]; then
     IFS=, read -r -a list <<<"$1"
     rest=("${@:2}")
@@ -65,7 +74,11 @@ hub_ext_fetch() {
   while IFS= read -r name; do known[$name]=1; done < <(hub::git_query remote)
   ((! multiple)) && [[ -n ${known[$1]-} ]] && hub::exec_git fetch "$@" # an existing remote first
   for name in "${list[@]}"; do
-    [[ -n $name && -z ${seen[$name]-} ]] || continue
+    if [[ -z $name ]]; then
+      ((multiple)) && hub::exec_git fetch "$@" # git rejects it; the comma form skips it (alice,,bob)
+      continue
+    fi
+    [[ -z ${seen[$name]-} ]] || continue
     seen[$name]=1
     names+=("$name")
     [[ -n ${known[$name]-} ]] && continue
@@ -82,8 +95,21 @@ hub_ext_fetch() {
     done
   fi
   if ((multiple)); then
-    hub::exec_git fetch --multiple "${rest[@]}" "${names[@]}"
+    hub::exec_git fetch --multiple "${@:2}" # every other argument as given, in its place
   fi
   ((${#names[@]} > 1)) && names=(--multiple "${names[@]}")
   hub::exec_git fetch "${names[@]}" "${rest[@]}"
+}
+
+# _hub_fetch_takes_value OPTION : true if the git fetch OPTION takes the next argument as its value.
+_hub_fetch_takes_value() {
+  case $1 in
+    --depth | --deepen | --shallow-since | --shallow-exclude | --negotiation-tip | --refmap | --upload-pack) return 0 ;;
+    --server-option | --jobs | --filter | --submodule-prefix | --recurse-submodules-default) return 0 ;;
+    --*) return 1 ;; # a flag, or a value attached with "="
+  esac
+  # -j and -o take the rest of a short option cluster (-j4), or the next argument when last (-pj 4).
+  local opts=${1#-} head
+  head=${opts%%[jo]*}
+  [[ $head != "$opts" ]] && ((${#head} + 1 == ${#opts}))
 }

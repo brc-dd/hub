@@ -208,6 +208,51 @@ load ../test_helper
   assert_output_equals "open https://github.com/cli/cli"
 }
 
+@test "browse in a REPO.wiki repository opens the wiki" {
+  make_repo dotfiles.wiki origin=git@github.com:mislav/dotfiles.wiki.git
+  set_remote_head origin main
+  run hub --noop browse
+  assert_success
+  assert_output_equals "open https://github.com/mislav/dotfiles/wiki"
+  run hub --noop browse -- commits
+  assert_output_equals "open https://github.com/mislav/dotfiles/wiki/_history"
+  run hub --noop browse -- pages
+  assert_output_equals "open https://github.com/mislav/dotfiles/wiki/_pages"
+  run hub --noop browse -- wiki
+  assert_output_equals "open https://github.com/mislav/dotfiles/wiki"
+  run hub --noop browse -- tree
+  assert_output_equals "open https://github.com/mislav/dotfiles/wiki"
+  assert_gh_not_called
+}
+
+@test "browse in a wiki ignores the branch you are on" {
+  make_repo dotfiles.wiki origin=https://github.com/mislav/dotfiles.wiki.git
+  git checkout -q -b feature
+  run hub --noop browse
+  assert_success
+  assert_output_equals "open https://github.com/mislav/dotfiles/wiki"
+  run hub --noop browse -- commits
+  assert_output_equals "open https://github.com/mislav/dotfiles/wiki/_history"
+  run hub --noop browse -- tree
+  assert_output_equals "open https://github.com/mislav/dotfiles/wiki"
+  assert_gh_not_called # no default-branch lookup either
+}
+
+@test "browse OWNER/REPO.wiki and GH_REPO=OWNER/REPO.wiki open the wiki" {
+  run hub --noop browse cli/cli.wiki
+  assert_success
+  assert_output_equals "open https://github.com/cli/cli/wiki"
+  run hub --noop browse cli/cli.wiki commits
+  assert_output_equals "open https://github.com/cli/cli/wiki/_history"
+  run hub --noop browse ghe.example.com/corp/app.wiki pages
+  assert_output_equals "open https://ghe.example.com/corp/app/wiki/_pages"
+  GH_REPO=cli/cli.wiki run hub browse -u -- commits
+  assert_output_equals "https://github.com/cli/cli/wiki/_history"
+  assert_gh_not_called
+  run hub --noop browse dotfiles.wiki
+  assert_output_equals "open https://github.com/mislav/dotfiles/wiki"
+}
+
 @test "browse outside a GitHub repository fails" {
   make_repo local-only
   run hub --noop browse

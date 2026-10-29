@@ -10,6 +10,25 @@ heading.
 
 ### Fixed
 
+- `pull-request` always passes the repository hub resolved to gh (`--repo`),
+  unless `-R` is given; the head owner comes from the push remote's push URL,
+  not its fetch URL, and all push URLs must agree; gh's `-H` inside an option
+  cluster counts as hub's `-h`.
+- `am`, `apply` and `cherry-pick` always name the URL's host when asking the
+  API, so a single Enterprise login cannot divert a github.com lookup.
+- `fork` takes the fork's real name from the API response, so an existing,
+  renamed fork gets the right remote; `issue update -s closed --duplicate-of`
+  rejects closing an issue as a duplicate of itself.
+- `fetch --multiple` handles options before, between and after the names.
+- `-c` and `--config-env` are forwarded to git verbatim (valueless `-c` and
+  any environment name work), apply to hub's own git queries, and show up in
+  `--noop` output; only a token that applies to the host overrides gh's cached
+  login.
+- `browse` and `compare` understand `OWNER/REPO.wiki` projects; `compare`
+  refuses an unpushed branch and a base equal to the head.
+- Release publishing recovers when the other publisher created the release
+  first; the formula downgrade guard compares SemVer precedence properly
+  (`script/update-formula --self-test` runs its fixtures, also in `make check`).
 - `pull-request --dry-run` pins the head so gh cannot push or fork during its
   own dry run; issue conversion and `-b OWNER:BRANCH` always hand gh the
   repository and host hub resolved; `-p -h OWNER:BRANCH` refuses a remote

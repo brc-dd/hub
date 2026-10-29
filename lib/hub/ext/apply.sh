@@ -8,7 +8,9 @@
 # place. A pull request gives its combined diff, as on its "Files changed" tab.
 # Other arguments go to git apply unchanged, and without any URL this is plain
 # `git apply`. A URL that is the value of an option (as in --exclude URL) or
-# that comes after `--` is left as it is. To make commits instead, see `hub am`.
+# that comes after `--` is left as it is. Each diff comes from the URL's own
+# host, even when gh's default host (GH_HOST, or the only host gh is logged in
+# to) is another one. To make commits instead, see `hub am`.
 #
 # gh 2.103 and later refuse to write a download that contains terminal escape
 # bytes unless given --allow-escape-sequences, which would stop such a diff
@@ -21,7 +23,7 @@
 #   > git apply $TMPDIR/hub-apply.XXXXXX/1.diff
 #
 #   $ hub apply https://github.com/jingweno/gh/commit/fdb9921
-#   > gh api repos/jingweno/gh/commits/fdb9921 -H 'Accept: application/vnd.github.v3.diff' > ...
+#   > gh api --hostname github.com repos/jingweno/gh/commits/fdb9921 -H 'Accept: application/vnd.github.v3.diff' > ...
 
 # shellcheck source=lib/hub/ext/am.sh
 source "$HUB_LIB/ext/am.sh"

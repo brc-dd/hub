@@ -11,6 +11,11 @@
 # straight from its URL; a commit of a pull request is fetched along with the
 # pull request's head. Anything else is plain `git cherry-pick`.
 #
+# A short SHA is first looked up with gh, since the fetch needs the full one.
+# gh is asked on the commit's own host (the URL's, or the current project's
+# for USER@SHA), even when its default host (GH_HOST, or the only host it is
+# logged in to) is another one.
+#
 #   $ hub cherry-pick https://github.com/jingweno/gh/commit/a319d88
 #   > git fetch --no-tags https://github.com/jingweno/gh.git a319d88...  (the full SHA, looked up with gh)
 #   > git cherry-pick a319d88...
@@ -46,11 +51,9 @@ hub_ext_cherry_pick() {
 
   if [[ -z $fetch ]]; then
     # Fetch the commit itself. GitHub serves a commit no ref advertises only by its full SHA.
+    # Always name the host: gh's default is GH_HOST, or the only host it is logged in to.
     if [[ ! $sha =~ ^[0-9a-f]{40}$ ]]; then
-      local -a api=(api)
-      local gh_host=${GH_HOST:-github.com}
-      [[ ${host,,} == "${gh_host,,}" ]] || api+=(--hostname "$host")
-      sha=$(hub::gh_query "${api[@]}" "repos/$owner/$repo/commits/$sha" --jq .sha) && [[ $sha =~ ^[0-9a-f]{40}$ ]] \
+      sha=$(hub::gh_query api --hostname "$host" "repos/$owner/$repo/commits/$sha" --jq .sha) && [[ $sha =~ ^[0-9a-f]{40}$ ]] \
         || hub::die "Aborted: could not find commit $ref"
     fi
     fetch=$sha

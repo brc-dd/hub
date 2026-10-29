@@ -28,11 +28,29 @@ load test_helper
   assert_output_equals $'git push origin main\ngit push staging main'
 }
 
-@test "-c key=value reaches git through the environment" {
+@test "-c and --config-env are forwarded to git in order and shown by --noop" {
   make_repo r1
   run hub -c hub.protocol=ssh --noop status
   assert_success
-  assert_output_equals "git status"
+  assert_output_equals "git -c hub.protocol=ssh status"
+  run hub --noop --config-env=foo.bar=HUB_X -c foo.bar=x status
+  assert_output_equals "git --config-env=foo.bar=HUB_X -c foo.bar=x status"
+}
+
+@test "-c also applies to the git commands hub runs itself" {
+  make_repo r1
+  run hub -c hub.protocol=ssh --noop remote add alice
+  assert_success
+  assert_output_equals "git -c hub.protocol=ssh remote add alice git@github.com:alice/r1.git"
+}
+
+@test "a valueless -c keeps git's meaning" {
+  make_repo r1
+  run hub -c foo.bar config --get foo.bar
+  assert_success
+  assert_output_equals ""
+  run hub -c foo.bar config --type=bool --get foo.bar
+  assert_output_equals "true"
 }
 
 @test "an unknown leading option is left for git to reject" {
@@ -108,8 +126,8 @@ load test_helper
   make_repo r1
   run env -u HUB_MISSING "$HUB_BIN" --config-env=foo.bar=HUB_MISSING config foo.bar
   assert_failure
-  assert_output_contains "missing environment variable HUB_MISSING"
-  run hub --config-env=nonsense config foo.bar
-  assert_failure
-  assert_output_contains "invalid config format"
+  assert_output_contains "missing environment variable"
+  run env 'CONFIG.VAR=other' "$HUB_BIN" --config-env=foo.bar=CONFIG.VAR config foo.bar
+  assert_success
+  assert_output_equals "other"
 }

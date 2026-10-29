@@ -28,12 +28,13 @@
 #                                   in turn, with -c COMMENT. Closing also takes
 #                                   -r REASON (completed, "not planned" or
 #                                   duplicate) and --duplicate-of ISSUE (a number
-#                                   or URL, with no -r or -r duplicate);
-#                                   reopening doesn't, so -s open with them is an
-#                                   error. Any other options go to one gh issue
-#                                   edit first. hub checks everything before it
-#                                   runs gh, and stops at the first gh command
-#                                   that fails.
+#                                   or URL, with no -r or -r duplicate), which
+#                                   must not be one of the NUMBERs; reopening
+#                                   doesn't, so -s open with them is an error.
+#                                   Any other options go to one gh issue edit
+#                                   first. hub checks everything before it runs
+#                                   gh, and stops at the first gh command that
+#                                   fails.
 #
 # hub 2.x's update -l LABELS and -a USERS replaced the whole set; gh issue edit
 # has no such options and refuses them. Use --add-label and --remove-label
@@ -157,7 +158,7 @@ _hub_issue_message() {
 # close or reopen runs once per NUMBER. Everything is checked before gh runs.
 _hub_issue_update() {
   local -a numbers=() edit=() state_args=() repo=() messages=() title=() reasons=() duplicates=()
-  local opt val n state='' has_state=0 file='' at=-1 close_only='' reason duplicate
+  local opt val n state='' has_state=0 file='' at=-1 close_only='' repo_name='' reason duplicate
   while (($#)); do
     opt=$1 val='' n=1
     case $1 in
@@ -198,7 +199,7 @@ _hub_issue_update() {
         duplicates+=("$val")
         close_only=$opt
         ;;
-      -R | --repo) repo+=("${@:1:n}") ;;
+      -R | --repo) repo+=("${@:1:n}") repo_name=$val ;; # gh takes the last
       -?*) edit+=("${@:1:n}") ;;
       *) numbers+=("$1") ;;
     esac
@@ -222,14 +223,15 @@ _hub_issue_update() {
         *) hub::die "Aborted: --reason must be 'completed', 'not planned' or 'duplicate', not '$reason'." ;;
       esac
     done
-    local number_re='^#?[0-9]+$' url_re='^https?://[^/?#]+/[^/?#]+/[^/?#]+/(issues|pull)/[0-9]+([/?#].*)?$'
     for duplicate in "${duplicates[@]}"; do
-      [[ $duplicate =~ $number_re || $duplicate =~ $url_re ]] \
+      _hub_issue_parse "$duplicate" \
         || hub::die "Aborted: --duplicate-of must be an issue number or URL, not '$duplicate'."
     done
     if ((${#duplicates[@]} && ${#reasons[@]})) && [[ ${reasons[-1]} != duplicate ]]; then
       hub::die "Aborted: --duplicate-of only goes with --reason duplicate, not with --reason '${reasons[-1]}'."
     fi
+    # gh takes the last --duplicate-of.
+    if ((${#duplicates[@]})); then _hub_issue_not_itself "${duplicates[-1]}" "$repo_name" "${numbers[@]}"; fi
   fi
   ((${#numbers[@]})) || hub::die "Usage: hub issue update NUMBER... [-s open|closed] [-m MESSAGE | -F FILE] [gh issue edit options]"
   if ((at >= 0)); then
@@ -248,4 +250,68 @@ _hub_issue_update() {
     hub::gh issue "$sub" "${numbers[i]}" "${repo[@]}" "${state_args[@]}" || exit
   done
   hub::exec_gh issue "$sub" "${numbers[last]}" "${repo[@]}" "${state_args[@]}"
+}
+
+# _hub_issue_not_itself ISSUE REPO NUMBER... : die if ISSUE (the --duplicate-of value) is one of
+# the NUMBERs being closed. As in gh issue close, a bare ISSUE number is in the closed issue's
+# repository: its URL's, else REPO (the -R value) or, without one, hub's current project. When
+# hub cannot tell that repository, it leaves the check to gh.
+_hub_issue_not_itself() {
+  local dup=$1 repo_name=$2 dup_repo dup_number number closed here=''
+  shift 2
+  _hub_issue_parse "$dup" || return 0
+  dup_repo=$HUB_ISSUE_REPO dup_number=$HUB_ISSUE_NUMBER
+  for number; do
+    if ! _hub_issue_parse "$number" || [[ $HUB_ISSUE_NUMBER != "$dup_number" ]]; then continue; fi
+    closed=$HUB_ISSUE_REPO
+    if [[ -n $dup_repo ]]; then
+      if [[ -z $closed ]]; then
+        [[ -n $here ]] || here=$(_hub_issue_repo "$repo_name") || here=-
+        closed=$here
+      fi
+      [[ $closed == "$dup_repo" ]] || continue
+    fi
+    hub::die "Aborted: issue $number cannot be closed as a duplicate of itself (--duplicate-of $dup)."
+  done
+  return 0
+}
+
+# _hub_issue_parse ISSUE : read ISSUE as gh does: NUMBER, #NUMBER or an issue or pull request URL.
+# Sets HUB_ISSUE_NUMBER (without leading zeros) and HUB_ISSUE_REPO (the URL's HOST/OWNER/REPO,
+# lowercased; empty for a bare number). Fails for anything else.
+_hub_issue_parse() {
+  local host
+  HUB_ISSUE_NUMBER='' HUB_ISSUE_REPO=''
+  if [[ $1 =~ ^#?([0-9]+)$ ]]; then
+    HUB_ISSUE_NUMBER=${BASH_REMATCH[1]}
+  elif [[ $1 =~ ^https?://([^/?#]+)/([^/?#]+)/([^/?#]+)/(issues|pull)/([0-9]+)([/?#].*)?$ ]]; then
+    HUB_ISSUE_NUMBER=${BASH_REMATCH[5]}
+    host=${BASH_REMATCH[1],,}
+    host=${host##*@}
+    host=${host%:*}
+    HUB_ISSUE_REPO=${host#www.}/${BASH_REMATCH[2],,}/${BASH_REMATCH[3],,}
+  else
+    return 1
+  fi
+  while [[ $HUB_ISSUE_NUMBER == 0?* ]]; do HUB_ISSUE_NUMBER=${HUB_ISSUE_NUMBER#0}; done
+}
+
+# _hub_issue_repo [REPO] : print HOST/OWNER/REPO, lowercased, of REPO (-R's [HOST/]OWNER/REPO or
+# URL), or else of hub's current project (GH_REPO, else the main remote). Fails if there is none.
+_hub_issue_repo() {
+  local out
+  if [[ -z ${1-} ]]; then
+    out=$(hub::main_project 2>/dev/null && printf '%s\n' "$HUB_PROJECT_HOST") || return 1
+    out=${out#*$'\n'}/${out%%$'\n'*}
+  elif hub::parse_remote_url "$1"; then
+    out=$HUB_URL_HOST/$HUB_URL_OWNER/$HUB_URL_REPO
+  elif [[ $1 =~ ^[^/]+/[^/]+/[^/]+$ ]]; then
+    out=$1
+  elif [[ $1 =~ ^[^/]+/[^/]+$ ]]; then
+    out=$(hub::host)/$1
+  else
+    return 1
+  fi
+  out=${out,,}
+  printf '%s\n' "${out#www.}"
 }

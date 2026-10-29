@@ -14,7 +14,8 @@
 #
 # Global options understood before the command word:
 #   --noop            print the git/gh commands that would run instead of running them
-#   -C <path>, -c <key>=<value> and git's other global options are honoured and forwarded.
+#   -C <path>, -c <key>=<value>, --config-env and git's other global options are honoured and forwarded
+#   (they also apply to the git commands hub runs itself).
 
 if ((BASH_VERSINFO[0] < 5)); then
   printf 'hub: bash 5 or newer is required, but this is bash %s.\n' "$BASH_VERSION" >&2
@@ -49,27 +50,6 @@ HUB_NOOP=${HUB_NOOP:-0}
 HUB_GIT_OPTS=() # git global options to forward on every git invocation
 hub_cmd=
 
-# hub_config_add KEY VALUE : queue a config entry for git (and hub's own git queries) through the
-# GIT_CONFIG_* environment, keeping the left-to-right order of -c and --config-env.
-hub_config_add() {
-  export "GIT_CONFIG_KEY_${GIT_CONFIG_COUNT:-0}=$1" "GIT_CONFIG_VALUE_${GIT_CONFIG_COUNT:-0}=$2"
-  export GIT_CONFIG_COUNT=$((${GIT_CONFIG_COUNT:-0} + 1))
-}
-
-# hub_config_env NAME=ENVVAR : the value of --config-env, read from the named environment variable.
-hub_config_env() {
-  local key=${1%%=*} var=${1#*=}
-  if [[ $1 != *=* || -z $key || -z $var ]]; then
-    printf 'fatal: invalid config format: %s\n' "$1" >&2
-    return 1
-  fi
-  if [[ -z ${!var+x} ]]; then
-    printf 'fatal: missing environment variable %s for configuration %s\n' "$var" "$key" >&2
-    return 1
-  fi
-  hub_config_add "$key" "${!var}"
-}
-
 # Separate git's global options from the command word.
 while (($#)); do
   case $1 in
@@ -93,29 +73,14 @@ while (($#)); do
       if [[ -n $2 ]]; then cd -- "$2" || exit 1; fi
       shift 2
       ;;
-    -c)
-      (($# >= 2)) || break
-      hub_key=${2%%=*}
-      hub_val=${2#*=}
-      [[ $2 == *=* ]] || hub_val=true
-      hub_config_add "$hub_key" "$hub_val"
-      shift 2
-      ;;
-    --config-env)
-      (($# >= 2)) || break
-      hub_config_env "$2" || exit 128
-      shift 2
-      ;;
-    --config-env=*)
-      hub_config_env "${1#--config-env=}" || exit 128
-      shift
-      ;;
-    --git-dir | --work-tree | --namespace | --attr-source)
+    -c | --config-env | --git-dir | --work-tree | --namespace | --attr-source)
+      # Forwarded to git as given, in order, and used by hub's own git queries too, so git's
+      # precedence rules apply unchanged (including valueless -c foo.bar and any env name).
       (($# >= 2)) || break
       HUB_GIT_OPTS+=("$1" "$2")
       shift 2
       ;;
-    --exec-path=* | --git-dir=* | --work-tree=* | --namespace=* | --attr-source=* | --list-cmds=*)
+    --config-env=* | --exec-path=* | --git-dir=* | --work-tree=* | --namespace=* | --attr-source=* | --list-cmds=*)
       HUB_GIT_OPTS+=("$1")
       shift
       ;;

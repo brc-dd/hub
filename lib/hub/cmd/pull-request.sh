@@ -5,12 +5,21 @@
 #                         [--no-maintainer-edits] [-o] [-c] [gh pr create options]
 #        hub pull-request -i ISSUE | ISSUE-URL [-b BASE] [-h HEAD] [-p] [-d] [-o] [-c]
 #
-# Creates the pull request with `gh pr create`. The options are hub's and are
-# translated for gh; any other option is passed to gh unchanged, together with
-# its value (--fill, --title TITLE, -T TEMPLATE, -R OWNER/REPO, --dry-run, ...).
-# Where hub and gh use the same letter, hub's meaning wins: spell gh's -b, -F,
-# -m and -p as --body, --body-file, --milestone and --project NAME. gh's -B and
-# -H are the same as hub's -b and -h.
+# Creates the pull request with `gh pr create` in the repository hub resolves
+# (GH_REPO, else the upstream, github or origin remote, else another GitHub
+# remote), and always names that repository for gh (--repo HOST/OWNER/REPO):
+# gh's own pick (gh repo set-default, GH_HOST, its order of remotes) can be
+# another one, and in a fork clone gh may refuse to pick. -b OWNER[/REPO]:BRANCH
+# names another repository of the network instead. If you give -R/--repo, in
+# any spelling (-R X, -RX, -R=X, --repo=X, -wR X), hub passes it on to gh and
+# adds no --repo of its own.
+#
+# The options are hub's and are translated for gh; any other option is passed
+# to gh unchanged, together with its value (--fill, --title TITLE, -T TEMPLATE,
+# -R OWNER/REPO, --dry-run, ...). Where hub and gh use the same letter, hub's
+# meaning wins: spell gh's -b, -F, -m and -p as --body, --body-file,
+# --milestone and --project NAME. gh's -B and -H are the same as hub's -b and
+# -h, and so is -H inside a cluster of gh's short options (-wH BRANCH).
 #
 #   -m, --message MSG      The first paragraph is the title, the rest the body.
 #                          Repeat -m to add paragraphs.
@@ -22,7 +31,8 @@
 #                          is a base in another repository of the network (gh
 #                          --repo HOST/OWNER/REPO, on the current repository's
 #                          host); OWNER:BRANCH, in OWNER's repository of this name.
-#   -h, --head [OWNER:]BRANCH  The branch with the changes (gh --head).
+#   -h, --head [OWNER:]BRANCH  The branch with the changes (gh --head). Give it
+#                          once: two different heads (-h, -H, --head) abort.
 #   -d, --draft            Open it as a draft.
 #   -r, --reviewer LIST    Request reviews from users or ORG/TEAMs (comma-separated).
 #   -a, --assign LIST      Assign users (gh --assignee).
@@ -31,19 +41,24 @@
 #       --no-maintainer-edits  Don't let maintainers push to the branch.
 #   -p, --push             First push the current branch to its push remote
 #                          (branch.<name>.pushRemote, remote.pushDefault,
-#                          branch.<name>.remote, else origin). With -h BRANCH,
-#                          push HEAD to BRANCH on that remote (and name the
-#                          remote's owner in the head if it is a fork); with
-#                          -h OWNER:BRANCH, to BRANCH on the remote for OWNER's
-#                          repository of this name, which must push nowhere
-#                          else: hub stops if any URL it pushes to (git remote
-#                          get-url --push --all) is another repository.
+#                          branch.<name>.remote, else origin), and name it as the
+#                          head. With -h BRANCH, push HEAD to BRANCH there; with
+#                          -h OWNER:BRANCH, to BRANCH on the remote that pushes to
+#                          OWNER's repository of this name, and only there: hub
+#                          stops if any URL it pushes to is another repository.
 #   -f, --force            Use the branch as it already is on GitHub, so gh neither
 #                          pushes nor forks (gh --head BRANCH, or OWNER:BRANCH when
-#                          the branch's push remote is a fork).
+#                          the branch's push remote pushes to a fork).
 #   -o, --browse           Open the new pull request in the browser.
 #   -c, --copy             Copy the new pull request's URL to the clipboard.
 #   -i, --issue ISSUE      Turn an issue (number or URL) into the pull request.
+#
+# Where hub works the head out from the push remote (-p, -f, --dry-run, -i),
+# its owner is that of the repository the remote pushes to (git remote get-url
+# --push --all, which applies insteadOf and pushInsteadOf), not of the one it
+# fetches from, and hub stops if those URLs name two repositories, or one that
+# is not on GitHub: a local or mirror push URL only works where hub can leave
+# the head to gh, as with -p alone, which then passes no --head.
 #
 # Without -m, -F, -e or --no-edit, gh asks for the title and body. With -o or
 # -c, hub reads the URL gh prints, so gh cannot prompt: give a title (-m, -F,
@@ -67,7 +82,7 @@
 #
 #   $ hub pull-request -p -m "Fix the frobnicator" -b develop -r alice
 #   > git push --set-upstream origin HEAD
-#   > gh pr create --title "Fix the frobnicator" --body "" --base develop --reviewer alice
+#   > gh pr create --title "Fix the frobnicator" --body "" --repo github.com/mislav/dotfiles --base develop --head feature --reviewer alice
 #
 #   $ hub pull-request -i 123
 #   > gh api --hostname github.com repos/mislav/dotfiles/pulls -F issue=123 -F head=mislav:feature -f base=main --jq .html_url
@@ -75,14 +90,15 @@
 hub_cmd_pull_request() {
   local -a messages=() reviewers=() assignees=() labels=() passthrough=() rest=() cmd=() push_cmd=()
   local file='' base='' head='' milestone='' issue='' repo='' arg opt value i
-  local edit=0 no_edit=0 draft=0 no_maint=0 push=0 force=0 browse=0 copy=0 dry_run=0 gh_head=0
+  local edit=0 no_edit=0 draft=0 no_maint=0 push=0 force=0 browse=0 copy=0 dry_run=0 repo_given=0
 
   while (($#)); do
     arg=$1
     shift
     if [[ $arg == -[!-]?* ]]; then
       # Split clusters: -pf -> -p -f, -mMSG -> -m MSG. A cluster that starts with
-      # a letter hub doesn't know is one of gh's and goes through untouched.
+      # a letter hub doesn't know is one of gh's, and goes to gh as it is, but
+      # for a head given in it with -H (below).
       case ${arg:1:1} in
         [edpfoc])
           set -- "${arg:0:2}" "-${arg:2}" "$@"
@@ -102,6 +118,8 @@ hub_cmd_pull_request() {
       -h | -H | --head)
         [[ $arg == -h && ($# -eq 0 || $1 == -*) ]] && hub::usage # a bare -h asks for help
         _hub_pull_request_need "$arg" $#
+        [[ -z $head || $head == "$1" ]] \
+          || hub::die "Aborted: two different heads given ($head and $1); give the head once, with -h, -H or --head."
         head=$1
         shift
         ;;
@@ -159,8 +177,8 @@ hub_cmd_pull_request() {
         ;;
       # gh's options from here on. Each goes to gh together with the value gh reads
       # from the next word, so that value is never taken for a hub option or an
-      # issue URL. hub also notes --dry-run, the -R/--repo it is given and a head
-      # given with -H inside a cluster of gh's short options (-wH BRANCH).
+      # issue URL. hub also notes --dry-run and any -R/--repo, and takes a head
+      # given with -H inside a cluster of gh's short options (-wH BRANCH) as -h.
       --dry-run | --dry-run=*)
         passthrough+=("$arg")
         case ${arg#--dry-run} in
@@ -173,9 +191,9 @@ hub_cmd_pull_request() {
         repo=${arg#-R}
         repo=${repo#=} # gh takes -R=X as X
         repo=${repo#--repo=}
+        repo_given=1
         ;;
       -?*)
-        passthrough+=("$arg")
         # The option in it that takes a value: the word itself (--title), or the first
         # such letter of a cluster of short options (-wt), whose value is the rest of
         # the word (-wtTitle) if there is one. Otherwise gh reads the next word.
@@ -187,15 +205,21 @@ hub_cmd_pull_request() {
             [[ $value != =?* ]] || value=${value:1} # gh takes -wR=X as X
           fi
         fi
+        if [[ $opt == -H ]]; then
+          # -wH BRANCH or -wHBRANCH: the rest of the cluster goes to gh, the head is hub's -h.
+          passthrough+=("${arg:0:i}")
+          if [[ -n $value ]]; then set -- -H "$value" "$@"; else set -- -H "$@"; fi
+          continue
+        fi
+        passthrough+=("$arg")
         if [[ -z $value ]] && (($#)) && _hub_pull_request_gh_value "$opt"; then
           value=$1
           passthrough+=("$1")
           shift
         fi
-        case $opt in
-          -R | --repo) repo=$value ;;
-          -H) gh_head=1 ;;
-        esac
+        if [[ $opt == -R || $opt == --repo ]]; then
+          repo=$value repo_given=1
+        fi
         ;;
       *)
         if [[ -z $issue ]] && _hub_pull_request_issue_url "$arg"; then
@@ -213,14 +237,14 @@ hub_cmd_pull_request() {
   fi
   # here: the current project, base_repo: the one -b OWNER[/REPO]:BRANCH names, target:
   # the issue's (-i); all as HOST/OWNER/REPO, and empty until known.
-  local branch here='' base_repo='' target='' base_target remote project number owner
+  local branch here='' base_repo='' target='' base_target remote project number owner mode
   branch=$(hub::current_branch) || branch=''
 
   if [[ $base == *:* ]]; then
     [[ $base =~ ^([^:/]+)(/[^:/]+)?:(.+)$ ]] \
       || hub::die "Aborted: not a base: $base (use BRANCH, OWNER:BRANCH or OWNER/REPO:BRANCH)"
     base_repo=${BASH_REMATCH[1]}${BASH_REMATCH[2]} base=${BASH_REMATCH[3]}
-    [[ -z $repo ]] || hub::die "Aborted: -b OWNER:BRANCH and -R/--repo both name the base repository; use one."
+    ((! repo_given)) || hub::die "Aborted: -b OWNER:BRANCH and -R/--repo both name the base repository; use one."
     here=$(_hub_pull_request_full_name hub::main_project) || exit
     [[ $base_repo == */* ]] || base_repo+=/${here##*/}
     base_repo=${here%%/*}/$base_repo
@@ -248,16 +272,21 @@ hub_cmd_pull_request() {
       [[ -n $here ]] || here=$(_hub_pull_request_full_name hub::main_project) || exit
       target=${base_repo:-$here}
     fi
+  elif [[ -z $base_repo ]] && ((! repo_given)); then
+    # the current repository, which hub names for gh: gh's own pick may be another
+    here=$(_hub_pull_request_full_name hub::main_project 2>/dev/null) \
+      || hub::die "Aborted: could not find a GitHub remote in this repository (looked for upstream, github, origin); name the repository with -R [HOST/]OWNER/REPO."
   fi
-  base_target=${target:-${base_repo:-$repo}} # the base repository, if not the current one
+  base_target=${target:-${base_repo:-${repo:-$here}}} # the base repository, if known
 
   if ((push)); then
     if [[ -z $head ]]; then
+      # the current branch, to the same name on its push remote; hub names the head below
       [[ -n $branch ]] || hub::die "Aborted: not currently on any branch."
       push_cmd=(push --set-upstream "$(_hub_pull_request_push_remote "$branch")" HEAD)
     elif [[ $head == *:* ]]; then
-      # OWNER:BRANCH: to BRANCH on the remote for OWNER's repository of this name,
-      # provided that is the only repository the remote pushes to.
+      # OWNER:BRANCH: to BRANCH on the remote that pushes to OWNER's repository of this
+      # name, provided that is the only repository the remote pushes to.
       [[ $head =~ ^[^:/]+:.+$ ]] || hub::die "Aborted: -p cannot push to $head; give the head as BRANCH or OWNER:BRANCH."
       [[ -n $here ]] || here=$(_hub_pull_request_full_name hub::main_project) || exit
       project=${here%%/*}/${head%%:*}/${here##*/}
@@ -267,18 +296,23 @@ hub_cmd_pull_request() {
       push_cmd=(push "$remote" "HEAD:refs/heads/${head#*:}")
     else
       # BRANCH: to BRANCH on the push remote. gh looks for a bare BRANCH in the base
-      # repository, so the head names the remote's owner when the remote is a fork.
+      # repository, so the head names the owner of the repository the remote pushes
+      # to when that is a fork.
       remote=$(_hub_pull_request_push_remote "$branch")
       push_cmd=(push "$remote" "HEAD:refs/heads/$head")
-      head=$(_hub_pull_request_head "$remote" "$head" "$base_target")
+      head=$(_hub_pull_request_head "$remote" "$head" "$base_target" push) || exit
     fi
   fi
 
   if [[ -n $issue ]]; then
     if [[ -z $head ]]; then
       [[ -n $branch ]] || hub::die "Aborted: not currently on any branch."
-      owner=$(hub::remote_project "$(_hub_pull_request_push_remote "$branch")") \
-        || owner=$(hub::main_project) || exit
+      # the owner of the repository the push remote pushes to; the current one's if there is no such remote
+      mode='head'
+      ((push)) && mode=push
+      owner=$(_hub_pull_request_push_repo "$(_hub_pull_request_push_remote "$branch")" "$mode") || exit
+      owner=${owner#*/}
+      [[ -n $owner ]] || owner=$(hub::main_project) || exit
       head=${owner%%/*}:$branch
     fi
     [[ -n $base ]] || base=$(_hub_pull_request_default_branch "$target") || exit
@@ -308,13 +342,25 @@ hub_cmd_pull_request() {
         hub::die "Aborted: the pull request title is empty."
       fi
     fi
-    if ((force && ! gh_head)) && [[ -z $head ]]; then
-      [[ -n $branch ]] || hub::die "Aborted: not currently on any branch."
-      head=$(_hub_pull_request_head "$(_hub_pull_request_push_remote "$branch")" "$branch" "$base_target")
+    # hub names the head itself where it can work it out from the push remote: after -p,
+    # as gh would go by the remote's fetch URL rather than where the push went; and for
+    # -f and --dry-run, as gh may push the branch or fork the repository otherwise.
+    if [[ -z $head ]] && ((push || force || dry_run)); then
+      if [[ -z $branch ]]; then
+        ((force)) || hub::die "Aborted: not currently on any branch; with --dry-run, name the head with -h [OWNER:]BRANCH."
+        hub::die "Aborted: not currently on any branch."
+      fi
+      if ((force || dry_run)); then
+        mode='head'
+        ((push)) && mode=push
+      else
+        mode=any # -p alone: gh can work the head out where hub can't
+      fi
+      head=$(_hub_pull_request_head "$(_hub_pull_request_push_remote "$branch")" "$branch" "$base_target" "$mode") || exit
     fi
     ((edit)) && cmd+=(--editor)
     ((no_edit)) && cmd+=(--fill-first)
-    [[ -n $base_repo ]] && cmd+=(--repo "$base_repo")
+    ((repo_given)) || cmd+=(--repo "${base_repo:-$here}")
     [[ -n $base ]] && cmd+=(--base "$base")
     [[ -n $head ]] && cmd+=(--head "$head")
     ((draft)) && cmd+=(--draft)
@@ -323,14 +369,7 @@ hub_cmd_pull_request() {
     [[ -n $milestone ]] && cmd+=(--milestone "$milestone")
     for value in "${labels[@]}"; do cmd+=(--label "$value"); done
     ((no_maint)) && cmd+=(--no-maintainer-edit)
-    cmd+=("${passthrough[@]}")
-    # gh's dry run may still push the branch or fork the repository while it works
-    # out the head, but not when it is given one: name it, as -f does.
-    if ((dry_run && ! gh_head)) && [[ -z $head ]]; then
-      [[ -n $branch ]] || hub::die "Aborted: not currently on any branch; with --dry-run, name the head with -h [OWNER:]BRANCH."
-      cmd+=(--head "$(_hub_pull_request_head "$(_hub_pull_request_push_remote "$branch")" "$branch" "$base_target")")
-    fi
-    cmd+=("${rest[@]}")
+    cmd+=("${passthrough[@]}" "${rest[@]}")
   fi
 
   if ((${#push_cmd[@]})); then
@@ -401,6 +440,13 @@ _hub_pull_request_url_project() {
   printf '%s/%s/%s\n' "$host" "$HUB_URL_OWNER" "$HUB_URL_REPO"
 }
 
+# _hub_pull_request_url_shown URL : URL as a message shows it, without the credentials in it.
+_hub_pull_request_url_shown() {
+  local url=$1
+  [[ $url =~ ^([A-Za-z][A-Za-z0-9+.-]*://)[^/@]*@(.*)$ ]] && url=${BASH_REMATCH[1]}${BASH_REMATCH[2]}
+  printf '%s\n' "$url"
+}
+
 # _hub_pull_request_check_push REMOTE HOST/OWNER/REPO : die unless every URL that `git push
 # REMOTE` sends to (git remote get-url --push --all, which applies insteadOf and
 # pushInsteadOf) is that repository; a remote's push URLs need not be its fetch URL.
@@ -409,9 +455,38 @@ _hub_pull_request_check_push() {
   while IFS= read -r url; do
     name=$(_hub_pull_request_url_project "$url") || name=''
     [[ ${name,,} == "${2,,}" ]] && continue
-    [[ $url =~ ^([A-Za-z][A-Za-z0-9+.-]*://)[^/@]*@(.*)$ ]] && url=${BASH_REMATCH[1]}${BASH_REMATCH[2]} # no credentials
-    hub::die "Aborted: remote $1 is for $2, but it pushes to $url; fix its push URL (git remote set-url --push), or push it yourself and drop -p."
+    hub::die "Aborted: remote $1 is for $2, but it pushes to $(_hub_pull_request_url_shown "$url"); fix its push URL (git remote set-url --push), or push it yourself and drop -p."
   done < <(hub::git_query remote get-url --push --all "$1")
+}
+
+# _hub_pull_request_push_repo REMOTE MODE : print HOST/OWNER/REPO for the GitHub repository
+# that `git push REMOTE` sends to, which hub names the head after. Every URL REMOTE pushes
+# to (as _hub_pull_request_check_push reads them) must be that repository: if two name
+# different ones, or one is not on GitHub (a local path, a mirror), hub can't tell where
+# the head is and dies. Nothing is printed if REMOTE is not a remote here. MODE is head,
+# push if hub pushes too, or any for -p alone, where a URL not on GitHub is no error (gh
+# works the head out then, and nothing is printed).
+_hub_pull_request_push_repo() {
+  local url name repo='' first='' other='' advice
+  case $2 in
+    head) advice='name the head with -h OWNER:BRANCH' ;;
+    any) advice='push it yourself and drop -p' ;;
+    *) advice='push it yourself and name the head with -h OWNER:BRANCH, without -p' ;;
+  esac
+  while IFS= read -r url; do
+    if ! name=$(_hub_pull_request_url_project "$url"); then
+      [[ -n $other ]] || other=$url
+    elif [[ -z $repo ]]; then
+      repo=$name first=$url
+    elif [[ ${name,,} != "${repo,,}" ]]; then
+      hub::die "Aborted: remote $1 pushes to both $(_hub_pull_request_url_shown "$first") and $(_hub_pull_request_url_shown "$url"); fix its push URLs (git remote set-url --push), or $advice."
+    fi
+  done < <(hub::git_query remote get-url --push --all "$1")
+  if [[ -n $other ]]; then
+    [[ $2 == any ]] && return 0
+    hub::die "Aborted: remote $1 pushes to $(_hub_pull_request_url_shown "$other"), which is not a GitHub repository; a local or mirror push URL is only accepted when hub does not have to work out the head from it, so $advice."
+  fi
+  [[ -z $repo ]] || printf '%s\n' "$repo"
 }
 
 # _hub_pull_request_push_remote [BRANCH] : the remote `git push` sends BRANCH to:
@@ -428,31 +503,45 @@ _hub_pull_request_push_remote() {
   printf 'origin\n'
 }
 
-# _hub_pull_request_remote_for HOST/OWNER/REPO [REMOTE] : the local remote for that
-# project, by its fetch URL: REMOTE if it is one, else the first that is.
+# _hub_pull_request_remote_for HOST/OWNER/REPO [REMOTE] : the local remote to push to that
+# project: REMOTE, else the first remote, whose push URLs are all that project; failing
+# that, the first whose fetch URL is (for _hub_pull_request_check_push to refuse with the
+# reason). Fails if there is neither.
 _hub_pull_request_remote_for() {
-  local want=${1,,} r name
+  local want=${1,,} r url name all fetch=''
   local -a remotes
   mapfile -t remotes < <(hub::git_query remote)
   for r in ${2:+"$2"} "${remotes[@]}"; do
-    name=$(_hub_pull_request_full_name hub::remote_project "$r") || continue
-    if [[ ${name,,} == "$want" ]]; then
+    all=''
+    while IFS= read -r url; do
+      name=$(_hub_pull_request_url_project "$url") || name=''
+      if [[ ${name,,} != "$want" ]]; then all=no; elif [[ -z $all ]]; then all=yes; fi
+    done < <(hub::git_query remote get-url --push --all "$r")
+    if [[ $all == yes ]]; then
       printf '%s\n' "$r"
       return 0
     fi
+    if [[ -z $fetch ]] && name=$(_hub_pull_request_full_name hub::remote_project "$r") && [[ ${name,,} == "$want" ]]; then
+      fetch=$r
+    fi
   done
-  return 1
+  [[ -n $fetch ]] || return 1
+  printf '%s\n' "$fetch"
 }
 
-# _hub_pull_request_head REMOTE BRANCH [BASE-REPO] : BRANCH, or OWNER:BRANCH when REMOTE
-# belongs to someone other than the owner of the base repository (a fork). BASE-REPO is
-# [HOST/]OWNER/REPO or a URL; without it, the base is the current project.
+# _hub_pull_request_head REMOTE BRANCH BASE-REPO MODE : the head for BRANCH on REMOTE:
+# OWNER:BRANCH when the repository REMOTE pushes to (_hub_pull_request_push_repo REMOTE
+# MODE) belongs to someone other than the owner of BASE-REPO ([HOST/]OWNER/REPO or a URL;
+# the current project if empty), else BRANCH, which is also the head when REMOTE is not a
+# remote here. In MODE any, nothing is printed if hub can't tell that repository.
 _hub_pull_request_head() {
-  local fork base=${3:-}
-  fork=$(hub::remote_project "$1") || fork=''
+  local fork base=$3
+  fork=$(_hub_pull_request_push_repo "$1" "$4") || exit
+  [[ -n $fork || $4 != any ]] || return 0
   [[ -n $base ]] || base=$(hub::main_project 2>/dev/null) || base=''
   base=${base#*://}
   [[ $base == */*/* ]] && base=${base#*/}
+  fork=${fork#*/} # OWNER/REPO
   fork=${fork%%/*} base=${base%%/*}
   if [[ -n $fork && ${fork,,} != "${base,,}" ]]; then
     printf '%s:%s\n' "$fork" "$2"

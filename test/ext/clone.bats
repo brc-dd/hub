@@ -62,7 +62,7 @@ serve_github() {
 @test "clone honours hub -c hub.protocol=ssh" {
   run hub -c hub.protocol=ssh --noop clone mislav/dotfiles
   assert_success
-  assert_output_equals "git clone git@github.com:mislav/dotfiles.git"
+  assert_output_equals "git -c hub.protocol=ssh clone git@github.com:mislav/dotfiles.git"
 }
 
 @test "clone follows gh's git_protocol when hub.protocol is unset" {

@@ -375,11 +375,21 @@ hub::parse_github_url() {
 # ---------------------------------------------------------------------------
 # Identity, protocol, project shorthand
 # ---------------------------------------------------------------------------
+# hub::token_overrides HOST : true when an environment token takes precedence over gh's stored
+# credentials for HOST, following gh's rule: GH_TOKEN/GITHUB_TOKEN for github.com and *.ghe.com,
+# GH_ENTERPRISE_TOKEN/GITHUB_ENTERPRISE_TOKEN for every other host.
+hub::token_overrides() {
+  case ${1,,} in
+    github.com | *.ghe.com) [[ -n ${GH_TOKEN:-}${GITHUB_TOKEN:-} ]] ;;
+    *) [[ -n ${GH_ENTERPRISE_TOKEN:-}${GITHUB_ENTERPRISE_TOKEN:-} ]] ;;
+  esac
+}
+
 # hub::current_user [HOST] : your login on HOST. Uses gh's cached login unless a token in the
 # environment overrides gh's stored credentials (then only the API knows whose token it is). Dies if unknown.
 hub::current_user() {
   local host=${1:-$(hub::host)} user
-  if [[ -z ${GH_TOKEN:-}${GITHUB_TOKEN:-}${GH_ENTERPRISE_TOKEN:-}${GITHUB_ENTERPRISE_TOKEN:-} ]]; then
+  if ! hub::token_overrides "$host"; then
     user=$(hub::gh_query config get user -h "$host" 2>/dev/null) && [[ -n $user ]] && {
       printf '%s\n' "$user"
       return 0

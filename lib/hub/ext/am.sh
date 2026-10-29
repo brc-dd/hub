@@ -10,7 +10,9 @@
 # to git am unchanged, and without any URL this is plain `git am`.
 #
 # A URL that is the value of an option (as in --exclude URL) or that comes
-# after `--` is left as it is.
+# after `--` is left as it is. Each patch comes from the URL's own host, even
+# when gh's default host (GH_HOST, or the only host gh is logged in to) is
+# another one.
 #
 # gh 2.103 and later refuse to write a download that contains terminal escape
 # bytes unless given --allow-escape-sequences, which would stop such a patch
@@ -23,7 +25,7 @@
 #   > git am -3 $TMPDIR/hub-am.XXXXXX/1.patch
 #
 #   $ hub am https://github.com/jingweno/gh/commit/fdb9921
-#   > gh api repos/jingweno/gh/commits/fdb9921 -H 'Accept: application/vnd.github.v3.patch' > ...
+#   > gh api --hostname github.com repos/jingweno/gh/commits/fdb9921 -H 'Accept: application/vnd.github.v3.patch' > ...
 
 hub_ext_am() {
   [[ ${1-} == --help ]] && hub::usage
@@ -74,19 +76,18 @@ _hub_am_parse() {
 
 # _hub_am_download URL patch|diff FILE : save the patch or diff behind URL to FILE (printed under --noop).
 _hub_am_download() {
-  local url=$1 media=$2 file=$3 gh_host=${GH_HOST:-github.com}
+  local url=$1 media=$2 file=$3
   local -a gh_args
   _hub_am_parse "$url" || hub::die "Aborted: not a pull request or commit URL: $url"
   if [[ $HUB_URL_KIND == pull && -z $HUB_URL_SHA ]]; then
-    gh_args=(pr diff "$url")
+    gh_args=(pr diff "$url") # gh takes the host from the URL
     [[ $media == patch ]] && gh_args+=(--patch)
     gh_args+=(--color=never)
     _hub_am_escapes pr diff && gh_args+=(--allow-escape-sequences)
   else
     # One commit, also for .../pull/N/commits/SHA, where `gh pr diff` would give the whole pull request.
-    gh_args=(api)
-    [[ ${HUB_URL_HOST,,} == "${gh_host,,}" ]] || gh_args+=(--hostname "$HUB_URL_HOST")
-    gh_args+=("repos/$HUB_URL_OWNER/$HUB_URL_REPO/commits/$HUB_URL_SHA" -H "Accept: application/vnd.github.v3.$media")
+    # Always name the host: gh's default is GH_HOST, or the only host it is logged in to.
+    gh_args=(api --hostname "$HUB_URL_HOST" "repos/$HUB_URL_OWNER/$HUB_URL_REPO/commits/$HUB_URL_SHA" -H "Accept: application/vnd.github.v3.$media")
     _hub_am_escapes api && gh_args+=(--allow-escape-sequences)
   fi
   if ((HUB_NOOP)); then

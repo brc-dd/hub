@@ -17,6 +17,12 @@
 # Otherwise (the default branch, a REPO argument, GH_REPO) tree is the front
 # page and commits the history of the default branch.
 #
+# A repository named REPO.wiki (a wiki clone, GH_REPO or a REPO argument) is
+# the wiki of REPO: hub opens OWNER/REPO/wiki, also for the SUBPAGEs tree and
+# wiki; commits opens the wiki's history (wiki/_history) and any other
+# SUBPAGE X opens wiki/_X, e.g. pages for wiki/_pages. The branch you are on
+# plays no part.
+#
 # The URL is built locally. GitHub is only asked for your login (bare REPO)
 # and, when refs/remotes/REMOTE/HEAD is missing, the default branch.
 #
@@ -32,6 +38,8 @@
 #   > open https://github.com/mislav/dotfiles/commits/feature
 #   $ hub browse -u cli/cli releases
 #   https://github.com/cli/cli/releases
+#   $ hub browse -- commits      # in a clone of mislav/dotfiles.wiki
+#   > open https://github.com/mislav/dotfiles/wiki/_history
 
 hub_cmd_browse() {
   local print=0 copy=0 arg repo subpage proj host branch url
@@ -61,7 +69,7 @@ hub_cmd_browse() {
   else
     proj=$(hub::main_project && printf '%s\n' "$HUB_PROJECT_HOST") || exit 1
     host=${proj##*$'\n'} proj=${proj%%$'\n'*}
-    if [[ -z $subpage || $subpage == tree || $subpage == commits ]] && [[ -z ${GH_REPO:-} ]] \
+    if [[ -z $subpage || $subpage == tree || $subpage == commits ]] && [[ -z ${GH_REPO:-} && $proj != */?*.wiki ]] \
       && branch=$(hub::current_branch) && [[ $branch != "$(hub::default_branch)" ]]; then
       _hub_browse_push_target "$branch"
       subpage=${subpage:-tree}/$(_hub_browse_escape "$branch")
@@ -69,6 +77,15 @@ hub_cmd_browse() {
   fi
   # A bare tree is the default branch, i.e. the front page (GitHub has no .../tree page).
   if [[ $subpage == tree ]]; then subpage=; fi
+  # OWNER/REPO.wiki is the wiki of OWNER/REPO, whose own pages are wiki/_NAME.
+  if [[ $proj == */?*.wiki ]]; then
+    proj=${proj%.wiki}
+    case $subpage in
+      '' | wiki) subpage=wiki ;;
+      commits | commits/*) subpage=wiki/_history ;;
+      *) subpage=wiki/_$subpage ;;
+    esac
+  fi
 
   url=https://$host/$proj${subpage:+/$subpage}
   if ((print)); then printf '%s\n' "$url"; fi

@@ -5,9 +5,55 @@ load ../test_helper
   make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
   set_remote_head origin main
   git checkout -q -b feature
+  git update-ref refs/remotes/origin/feature HEAD # pushed to origin, no upstream set
   run hub --noop compare
   assert_success
   assert_output_equals "open https://github.com/mislav/dotfiles/compare/feature"
+  assert_gh_not_called
+}
+
+@test "compare finds a branch pushed to its upstream or its push remote" {
+  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
+  set_remote_head origin main
+  git checkout -q -b feature
+  git update-ref refs/remotes/origin/feature HEAD
+  git branch -q --set-upstream-to=origin/feature # git push -u origin feature
+  run hub --noop compare
+  assert_success
+  assert_output_equals "open https://github.com/mislav/dotfiles/compare/feature"
+  # started from origin/main (its upstream), then pushed without -u
+  git checkout -q -b topic --track origin/main
+  git update-ref refs/remotes/origin/topic HEAD
+  run hub --noop compare
+  assert_success
+  assert_output_equals "open https://github.com/mislav/dotfiles/compare/topic"
+  assert_gh_not_called
+}
+
+@test "compare refuses a branch that is not pushed to a GitHub remote" {
+  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git backup=../backup.git
+  set_remote_head origin main
+  git checkout -q -b feature
+  run hub --noop compare
+  assert_failure
+  assert_output_equals "Aborted: the branch 'feature' is not pushed to any GitHub remote; push it first or name a range"
+  run hub --noop compare -b develop
+  assert_failure
+  assert_output_equals "Aborted: the branch 'feature' is not pushed to any GitHub remote; push it first or name a range"
+  # an upstream the branch was started from is not where it was pushed
+  git checkout -q -b topic --track origin/main
+  run hub --noop compare
+  assert_failure
+  assert_output_equals "Aborted: the branch 'topic' is not pushed to any GitHub remote; push it first or name a range"
+  # pushed, but to a remote that is not on GitHub
+  git config branch.topic.pushRemote backup
+  git update-ref refs/remotes/backup/topic HEAD
+  run hub --noop compare
+  assert_failure
+  assert_output_equals "Aborted: the branch 'topic' is not pushed to any GitHub remote; push it first or name a range"
+  run hub --noop compare main...topic
+  assert_success
+  assert_output_equals "open https://github.com/mislav/dotfiles/compare/main...topic"
   assert_gh_not_called
 }
 
@@ -43,6 +89,7 @@ load ../test_helper
   make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
   set_remote_head origin main
   git checkout -q -b feature
+  git update-ref refs/remotes/origin/feature HEAD
   run hub --noop compare -b develop
   assert_success
   assert_output_equals "open https://github.com/mislav/dotfiles/compare/develop...feature"
@@ -60,6 +107,39 @@ load ../test_helper
   assert_output_contains "use either -b BASE or a range"
 }
 
+@test "compare -b refuses a BASE that is the head" {
+  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
+  set_remote_head origin main
+  git checkout -q -b feature
+  git update-ref refs/remotes/origin/feature HEAD
+  run hub --noop compare -b feature
+  assert_failure
+  assert_output_equals "Aborted: 'feature' is both the base and the head; name a different BASE or HEAD"
+  run hub --noop compare --base topic topic
+  assert_failure
+  assert_output_equals "Aborted: 'topic' is both the base and the head; name a different BASE or HEAD"
+  git checkout -q main
+  run hub --noop compare --base=main
+  assert_failure
+  assert_output_equals "Aborted: 'main' is both the base and the head; name a different BASE or HEAD"
+}
+
+@test "compare refuses a range from a ref to itself" {
+  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
+  run hub --noop compare feature...feature
+  assert_failure
+  assert_output_equals "Aborted: 'feature' is both the base and the head; name a different BASE or HEAD"
+  run hub --noop compare v1..v1
+  assert_failure
+  assert_output_equals "Aborted: 'v1' is both the base and the head; name a different BASE or HEAD"
+  run hub --noop compare jingweno main...main
+  assert_failure
+  assert_output_equals "Aborted: 'main' is both the base and the head; name a different BASE or HEAD"
+  run hub --noop compare main...feature
+  assert_success
+  assert_output_equals "open https://github.com/mislav/dotfiles/compare/main...feature"
+}
+
 @test "compare OWNER RANGE uses OWNER's copy of the repository" {
   make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
   run hub --noop compare jingweno v1..v2
@@ -73,11 +153,33 @@ load ../test_helper
   git checkout -q -b feature
   git config branch.feature.remote mislav
   git config branch.feature.merge refs/heads/feature
+  git update-ref refs/remotes/mislav/feature HEAD
   run hub --noop compare
   assert_success
   assert_output_equals "open https://github.com/dotcom/dotfiles/compare/mislav:feature"
   run hub --noop compare -b develop
   assert_output_equals "open https://github.com/dotcom/dotfiles/compare/develop...mislav:feature"
+  run hub --noop compare -b feature # the same name in another repository is a different branch
+  assert_success
+  assert_output_equals "open https://github.com/dotcom/dotfiles/compare/feature...mislav:feature"
+  run hub --noop compare -b mislav:feature
+  assert_failure
+  assert_output_equals "Aborted: 'mislav:feature' is both the base and the head; name a different BASE or HEAD"
+}
+
+@test "compare follows remote.pushDefault to the fork a branch was pushed to" {
+  make_repo dotfiles origin=https://github.com/dotcom/dotfiles.git mislav=git@github.com:mislav/dotfiles.git
+  set_remote_head origin main
+  git config remote.pushDefault mislav
+  git checkout -q -b feature --track origin/main
+  run hub --noop compare
+  assert_failure
+  assert_output_equals "Aborted: the branch 'feature' is not pushed to any GitHub remote; push it first or name a range"
+  git update-ref refs/remotes/mislav/feature HEAD
+  run hub --noop compare
+  assert_success
+  assert_output_equals "open https://github.com/dotcom/dotfiles/compare/mislav:feature"
+  assert_gh_not_called
 }
 
 @test "compare keeps the plain branch name when it pushes to the same repository" {
@@ -86,6 +188,7 @@ load ../test_helper
   git checkout -q -b feature
   git config branch.feature.remote origin
   git config branch.feature.merge refs/heads/feature
+  git update-ref refs/remotes/origin/feature HEAD
   run hub --noop compare
   assert_success
   assert_output_equals "open https://github.com/mislav/dotfiles/compare/feature"
@@ -113,6 +216,21 @@ load ../test_helper
   run hub --noop compare main...topic
   assert_success
   assert_output_equals "open https://ghe.example.com/corp/app/compare/main...topic"
+}
+
+@test "compare in a REPO.wiki repository opens the wiki's compare page" {
+  make_repo dotfiles.wiki origin=git@github.com:mislav/dotfiles.wiki.git
+  set_remote_head origin main
+  run hub --noop compare 1a2b3c..4d5e6f
+  assert_success
+  assert_output_equals "open https://github.com/mislav/dotfiles/wiki/_compare/1a2b3c...4d5e6f"
+  git checkout -q -b feature
+  git update-ref refs/remotes/origin/feature HEAD
+  run hub --noop compare -b main
+  assert_output_equals "open https://github.com/mislav/dotfiles/wiki/_compare/main...feature"
+  GH_REPO=cli/cli.wiki run hub compare -u v1...v2
+  assert_output_equals "https://github.com/cli/cli/wiki/_compare/v1...v2"
+  assert_gh_not_called
 }
 
 @test "compare without a GitHub remote fails" {
