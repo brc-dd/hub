@@ -8,6 +8,8 @@ heading.
 
 ## Unreleased
 
+## v0.1.0 — 2026-10-29
+
 A bash 5 rewrite of hub that hands all GitHub work to the official GitHub CLI
 (`gh`): a git wrapper with GitHub-aware `clone`, `remote`, `fetch`, `push`,
 `checkout`, `merge`, `am`, `apply`, `cherry-pick` and `sync`, plus the
