@@ -39,11 +39,11 @@ install:         ## symlink hub into $(PREFIX)/bin, completions where their dire
 	    if { [ -e "$$2" ] || [ -L "$$2" ]; } && [ "$$(readlink "$$2")" != "$$1" ]; then \
 	      echo "make: $$2 already exists; remove it first" >&2; exit 1; \
 	    fi; \
-	    echo "ln -sf $$1 $$2"; ln -sf "$$1" "$$2"; \
+	    echo "ln -sf $$1 $$2"; ln -sf "$$1" "$$2" || exit 1; \
 	  fi; shift 2; \
 	done
 
 uninstall:       ## remove the links that install made
 	@set -- $(HUB_LINKS); while [ $$# -gt 0 ]; do \
-	  case "$$(readlink "$$2" 2>/dev/null)" in "$$1") echo "rm $$2"; rm -f "$$2" ;; esac; shift 2; \
+	  case "$$(readlink "$$2" 2>/dev/null)" in "$$1") echo "rm $$2"; rm -f "$$2" || exit 1 ;; esac; shift 2; \
 	done

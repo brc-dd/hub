@@ -15,11 +15,27 @@
 #                                   -m is still there as --milestone.
 #   hub issue create -F FILE        The same, read from FILE ("-" for stdin). gh's
 #                                   body-only -F is still there as --body-file.
-#   hub issue update NUMBER ...     gh issue edit NUMBER ...
-#   hub issue update NUMBER -s closed|open
-#                                   gh issue close|reopen NUMBER, which also gets
-#                                   -c COMMENT, -r REASON and --duplicate-of. Any
-#                                   other options go to gh issue edit first.
+#   hub issue update NUMBER... [OPTIONS]
+#                                   gh issue edit NUMBER... [OPTIONS].
+#   hub issue update NUMBER... -m MESSAGE | -F FILE
+#                                   --title and --body as for create, except that
+#                                   an empty body is left out, so the issue keeps
+#                                   its body (gh's --body '' clears it). gh's -m
+#                                   and -F are still there as --milestone and
+#                                   --body-file.
+#   hub issue update NUMBER... -s closed|open
+#                                   gh issue close|reopen NUMBER for each NUMBER
+#                                   in turn, with -c COMMENT. Closing also takes
+#                                   -r REASON and --duplicate-of; reopening
+#                                   doesn't, so -s open with them is an error.
+#                                   Any other options go to one gh issue edit
+#                                   first. hub checks everything before it runs
+#                                   gh, and stops at the first gh command that
+#                                   fails.
+#
+# hub 2.x's update -l LABELS and -a USERS replaced the whole set; gh issue edit
+# has no such options and refuses them. Use --add-label and --remove-label
+# (--add-assignee and --remove-assignee for users) instead.
 #
 # Everything else goes to gh unchanged: the other subcommands (list, transfer,
 # close, comment, develop, ...) and all other options, in order. See
@@ -28,8 +44,12 @@
 #   $ hub issue create -m "Crash on start" -m "Steps to reproduce: ..." -l bug
 #   > gh issue create --title "Crash on start" --body "Steps to reproduce: ..." -l bug
 #
-#   $ hub issue update 12 -s closed -c "Fixed in #13"
-#   > gh issue close 12 -c "Fixed in #13"
+#   $ hub issue update 12 -m "Crash on start" --add-label bug
+#   > gh issue edit 12 --title "Crash on start" --add-label bug
+#
+#   $ hub issue update 12 13 -s closed -c "Fixed in #14"
+#   > gh issue close 12 -c "Fixed in #14"
+#   > gh issue close 13 -c "Fixed in #14"
 
 hub_cmd_issue() {
   case ${1-} in -h | --help) hub::usage ;; esac
@@ -129,48 +149,78 @@ _hub_issue_message() {
   hub::split_message "$text"
 }
 
-# _hub_issue_update ARGS... : gh issue edit, unless -s/--state asks for gh issue
-# close or reopen; then the other options, if any, go to gh issue edit first.
+# _hub_issue_update ARGS... : gh issue edit NUMBER..., with hub's -m/--message and
+# -F/--file turned into --title/--body where the first of them appeared. With
+# -s/--state, the other options (if any) go to gh issue edit first, then gh issue
+# close or reopen runs once per NUMBER. Everything is checked before gh runs.
 _hub_issue_update() {
-  local -a args=("$@") edit=() state_args=() repo=()
-  local opt val n state='' number=''
+  local -a numbers=() edit=() state_args=() repo=() messages=() title=()
+  local opt val n state='' has_state=0 file='' at=-1 close_only=''
   while (($#)); do
     opt=$1 val='' n=1
     case $1 in
       --)
-        edit+=("$@")
+        shift
+        numbers+=("$@")
         break
         ;;
       --?*=*) opt=${1%%=*} val=${1#*=} ;;
       -[bcFmrRst]?*) opt=${1:0:2} val=${1:2} ;;
-      -[bcFmrRst] | --state | --comment | --reason | --duplicate-of | --repo | --title | --body | --body-file | \
-        --milestone | --type | --parent | --attach | --add-assignee | --remove-assignee | --add-label | --remove-label | \
-        --add-project | --remove-project | --add-blocked-by | --remove-blocked-by | --add-blocking | --remove-blocking | \
-        --add-sub-issue | --remove-sub-issue)
+      -[bcFmrRst] | --state | --message | --file | --comment | --reason | --duplicate-of | --repo | --title | --body | \
+        --body-file | --milestone | --type | --parent | --attach | --add-assignee | --remove-assignee | --add-label | \
+        --remove-label | --add-project | --remove-project | --add-blocked-by | --remove-blocked-by | --add-blocking | \
+        --remove-blocking | --add-sub-issue | --remove-sub-issue)
         (($# > 1)) || hub::die "Aborted: $1 needs a value."
         val=$2 n=2
         ;;
     esac
     case $opt in
       -h | --help) hub::usage ;;
-      -s | --state) state=$val ;;
-      -c | --comment | -r | --reason | --duplicate-of) state_args+=("${@:1:n}") ;;
+      -s | --state) state=$val has_state=1 ;;
+      -m | --message)
+        messages+=("$val")
+        ((at >= 0)) || at=${#edit[@]}
+        ;;
+      -F | --file)
+        file=$val
+        ((at >= 0)) || at=${#edit[@]}
+        ;;
+      -c | --comment) state_args+=("${@:1:n}") ;;
+      -r | --reason | --duplicate-of)
+        state_args+=("${@:1:n}")
+        close_only=$opt
+        ;;
       -R | --repo) repo+=("${@:1:n}") ;;
       -?*) edit+=("${@:1:n}") ;;
-      *) if [[ -z $number ]]; then number=$1; else edit+=("$1"); fi ;;
+      *) numbers+=("$1") ;;
     esac
     shift "$n"
   done
-  [[ -n $state ]] || hub::exec_gh issue edit "${args[@]}"
-  local sub
-  case ${state,,} in
-    closed) sub=close ;;
-    open) sub=reopen ;;
-    *) hub::die "Aborted: --state must be open or closed, not '$state'." ;;
-  esac
-  [[ -n $number ]] || hub::die "Usage: hub issue update NUMBER [-s open|closed] [gh issue edit options]"
-  if ((${#edit[@]})); then
-    hub::gh issue edit "$number" "${repo[@]}" "${edit[@]}" || exit
+  local sub=''
+  if ((has_state)); then
+    case ${state,,} in
+      closed) sub=close ;;
+      open) sub=reopen ;;
+      *) hub::die "Aborted: --state must be open or closed, not '$state'." ;;
+    esac
+    [[ $sub == close || -z $close_only ]] \
+      || hub::die "Aborted: $close_only only goes with -s closed; gh issue reopen has no such option."
   fi
-  hub::exec_gh issue "$sub" "$number" "${repo[@]}" "${state_args[@]}"
+  ((${#numbers[@]})) || hub::die "Usage: hub issue update NUMBER... [-s open|closed] [-m MESSAGE | -F FILE] [gh issue edit options]"
+  if ((at >= 0)); then
+    _hub_issue_message "$file" "${messages[@]}"
+    title=(--title "$HUB_MSG_TITLE")
+    [[ -z $HUB_MSG_BODY ]] || title+=(--body "$HUB_MSG_BODY") # an empty body would clear the issue's
+    edit=("${edit[@]:0:at}" "${title[@]}" "${edit[@]:at}")
+  fi
+  # Without -s, -c/-r/--duplicate-of are gh issue edit's to accept or refuse.
+  [[ -n $sub ]] || hub::exec_gh issue edit "${numbers[@]}" "${repo[@]}" "${edit[@]}" "${state_args[@]}"
+  if ((${#edit[@]})); then
+    hub::gh issue edit "${numbers[@]}" "${repo[@]}" "${edit[@]}" || exit
+  fi
+  local i last=$((${#numbers[@]} - 1))
+  for ((i = 0; i < last; i++)); do
+    hub::gh issue "$sub" "${numbers[i]}" "${repo[@]}" "${state_args[@]}" || exit
+  done
+  hub::exec_gh issue "$sub" "${numbers[last]}" "${repo[@]}" "${state_args[@]}"
 }

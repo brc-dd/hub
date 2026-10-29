@@ -68,7 +68,8 @@ while (($#)); do
       ;;
     -C)
       (($# >= 2)) || break
-      cd -- "$2" || exit 1 # like `git -C`: later paths are relative to it
+      # like `git -C`: later paths are relative to it; an empty path is a no-op for git too
+      if [[ -n $2 ]]; then cd -- "$2" || exit 1; fi
       shift 2
       ;;
     -c)
@@ -113,9 +114,11 @@ if [[ $hub_cmd =~ ^[a-z][a-z0-9-]*$ ]]; then
 fi
 if [[ -z $hub_kind ]]; then
   if ((HUB_NOOP)); then
-    printf 'git'
-    printf ' %s' "${HUB_GIT_OPTS[@]}" ${hub_cmd:+"$hub_cmd"} "$@"
-    printf '\n'
+    hub_out=git
+    for hub_arg in "${HUB_GIT_OPTS[@]}" ${hub_cmd:+"$hub_cmd"} "$@"; do
+      if [[ $hub_arg =~ ^[A-Za-z0-9_./:@%+=,^~-]+$ ]]; then hub_out+=" $hub_arg"; else hub_out+=" $(printf '%q' "$hub_arg")"; fi
+    done
+    printf '%s\n' "$hub_out"
     exit 0
   fi
   exec git "${HUB_GIT_OPTS[@]}" ${hub_cmd:+"$hub_cmd"} "$@"

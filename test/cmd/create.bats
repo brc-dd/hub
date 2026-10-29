@@ -46,11 +46,64 @@ load ../test_helper
   assert_output_equals "gh repo create --source=. --remote=github --private"
 }
 
+@test "create takes gh's -r and --remote as --remote-name, and the last one wins" {
+  make_repo dotfiles
+  run hub --noop create -r github
+  assert_success
+  assert_output_equals "gh repo create --source=. --remote=github --private"
+  run hub --noop create -rgithub
+  assert_output_equals "gh repo create --source=. --remote=github --private"
+  run hub --noop create --remote github
+  assert_output_equals "gh repo create --source=. --remote=github --private"
+  run hub --noop create --remote-name=unused --remote=github app
+  assert_output_equals "gh repo create app --source=. --remote=github --private"
+  run hub --noop create --remote=unused --remote-name github
+  assert_output_equals "gh repo create --source=. --remote=github --private"
+  run hub --noop create -r ''
+  assert_failure
+  assert_output_contains "--remote-name needs a value"
+}
+
+@test "create checks the remote that gh would add, whichever option named it" {
+  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
+  for args in "--remote-name=unused --remote=origin" "-r origin" "-rorigin" "-r=origin" "--remote origin" "--remote=x --remote-name origin"; do
+    # (unquoted on purpose: each entry is one or two words)
+    run hub --noop create $args test-repo
+    assert_failure
+    assert_output_equals "Aborted: a remote named 'origin' already exists; pick another name with --remote-name NAME."
+  done
+  assert_gh_not_called
+}
+
 @test "create passes other gh options through, and does not push by default" {
   make_repo dotfiles
-  run hub --noop create --push --license=mit
+  run hub --noop create --push --disable-wiki --team=devs
   assert_success
-  assert_output_equals "gh repo create --source=. --remote=origin --private --push --license=mit"
+  assert_output_equals "gh repo create --source=. --remote=origin --private --push --disable-wiki --team=devs"
+}
+
+@test "create refuses the gh options that do not work with --source" {
+  make_repo dotfiles
+  for opt in --clone --template=cli/template --include-all-branches --gitignore=Go -g --license=mit --add-readme; do
+    run hub --noop create "$opt" Go
+    assert_failure
+    assert_output_contains "can't be used with hub create"
+    assert_output_contains "${opt%%=*}"
+  done
+  run hub --noop create -lmit
+  assert_output_contains "Aborted: -l can't be used"
+  assert_gh_not_called
+}
+
+@test "create refuses --source: it always publishes the current work tree" {
+  make_repo dotfiles
+  for opt in --source=../other "--source ../other" "-s ../other" -s.; do
+    # (unquoted on purpose: each entry is one or two words)
+    run hub --noop create $opt
+    assert_failure
+    assert_output_contains "always makes the repository from the current work tree (--source=.)"
+  done
+  assert_gh_not_called
 }
 
 @test "create -o opens the new repository afterwards" {
@@ -69,6 +122,33 @@ load ../test_helper
   run hub --noop create -o
   assert_success
   assert_line_equals 1 "open https://github.com/mislav/my-dot-files"
+}
+
+@test "create -c copies the URL of the new repository, as old hub did" {
+  make_repo dotfiles
+  run hub --noop create -c
+  assert_success
+  assert_output_equals $'gh repo create --source=. --remote=origin --private\ncopy to clipboard: https://github.com/mislav/dotfiles'
+  run hub --noop create --copy myorg/app
+  assert_output_equals $'gh repo create myorg/app --source=. --remote=origin --private\ncopy to clipboard: https://github.com/myorg/app'
+  run hub --noop create -o -c
+  assert_output_equals $'gh repo create --source=. --remote=origin --private\ncopy to clipboard: https://github.com/mislav/dotfiles\nopen https://github.com/mislav/dotfiles'
+}
+
+@test "create -c copies only once gh has created the repository" {
+  make_repo dotfiles
+  mkdir "$HUB_TEST_TMP/clip"
+  printf '#!/usr/bin/env bash\ncat >"$HUB_TEST_TMP/clipboard"\n' >"$HUB_TEST_TMP/clip/pbcopy"
+  chmod +x "$HUB_TEST_TMP/clip/pbcopy"
+  stub_gh 'repo create *' '' 1
+  PATH=$HUB_TEST_TMP/clip:$PATH run hub create -c
+  assert_failure
+  [[ ! -e $HUB_TEST_TMP/clipboard ]]
+  stub_gh 'repo create *' ''
+  PATH=$HUB_TEST_TMP/clip:$PATH run hub create -c
+  assert_success
+  assert_gh_called 'repo create --source=. --remote=origin --private'
+  [[ $(cat "$HUB_TEST_TMP/clipboard") == https://github.com/mislav/dotfiles ]]
 }
 
 @test "create -o uses GH_HOST and your login there" {

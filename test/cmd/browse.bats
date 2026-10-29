@@ -59,6 +59,63 @@ load ../test_helper
   assert_output_equals "open https://github.com/mislav/dotfiles/tree/feature"
 }
 
+@test "browse -- commits and -- tree follow a branch other than the default" {
+  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
+  set_remote_head origin main
+  git checkout -q -b feat
+  run hub --noop browse -- commits
+  assert_success
+  assert_output_equals "open https://github.com/mislav/dotfiles/commits/feat"
+  run hub --noop browse -- tree
+  assert_success
+  assert_output_equals "open https://github.com/mislav/dotfiles/tree/feat"
+  git checkout -q -b 'fix#12'
+  run hub browse -u -- commits
+  assert_output_equals "https://github.com/mislav/dotfiles/commits/fix%2312"
+  assert_gh_not_called
+}
+
+@test "browse -- commits and -- tree on the default branch open the history and the front page" {
+  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
+  set_remote_head origin main
+  run hub --noop browse -- commits
+  assert_success
+  assert_output_equals "open https://github.com/mislav/dotfiles/commits"
+  run hub --noop browse -- tree
+  assert_success
+  assert_output_equals "open https://github.com/mislav/dotfiles"
+}
+
+@test "browse -- commits and -- tree open a branch that pushes to a fork in the fork" {
+  make_repo dotfiles origin=https://github.com/dotcom/dotfiles.git mislav=git@github.com:mislav/dotfiles.git
+  set_remote_head origin main
+  git checkout -q -b feature
+  git config branch.feature.remote mislav
+  git config branch.feature.merge refs/heads/feature
+  run hub --noop browse -- commits
+  assert_success
+  assert_output_equals "open https://github.com/mislav/dotfiles/commits/feature"
+  run hub --noop browse -- tree
+  assert_output_equals "open https://github.com/mislav/dotfiles/tree/feature"
+  run hub --noop browse -- issues
+  assert_output_equals "open https://github.com/dotcom/dotfiles/issues"
+}
+
+@test "browse REPO tree, and tree with GH_REPO, open the front page" {
+  run hub --noop browse cli/cli tree
+  assert_success
+  assert_output_equals "open https://github.com/cli/cli"
+  run hub --noop browse cli/cli commits
+  assert_output_equals "open https://github.com/cli/cli/commits"
+  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
+  git checkout -q -b feature
+  GH_REPO=cli/cli run hub --noop browse -- tree
+  assert_output_equals "open https://github.com/cli/cli"
+  GH_REPO=cli/cli run hub --noop browse -- commits
+  assert_output_equals "open https://github.com/cli/cli/commits"
+  assert_gh_not_called
+}
+
 @test "browse escapes branch names" {
   make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
   set_remote_head origin main

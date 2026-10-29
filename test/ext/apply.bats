@@ -73,6 +73,37 @@ git apply TMP/1.diff"
   assert_line_equals 1 "git apply --check -R TMP/1.diff local.diff"
 }
 
+@test "apply never takes the value of an option for a URL" {
+  use_tmpdir
+  run hub --noop apply --exclude "$PR" local.patch
+  assert_success
+  assert_output_equals "git apply --exclude $PR local.patch"
+  local opt
+  for opt in --include --directory --whitespace -p -C --build-fake-ancestor; do
+    run hub --noop apply "$opt" "$PR" local.patch
+    assert_success
+    assert_output_equals "git apply $opt $PR local.patch"
+  done
+  assert_gh_not_called
+  assert_tmp_cleaned
+}
+
+@test "apply still downloads a URL after an attached option value" {
+  use_tmpdir
+  run hub --noop apply --directory=x "$PR"
+  assert_success
+  untmp
+  assert_output_equals "gh pr diff $PR --color=never > TMP/1.diff
+git apply --directory=x TMP/1.diff"
+}
+
+@test "apply leaves the arguments after -- alone" {
+  run hub --noop apply -- "$PR"
+  assert_success
+  assert_output_equals "git apply -- $PR"
+  assert_gh_not_called
+}
+
 @test "apply without a GitHub pull request or commit URL is plain git apply" {
   run hub --noop apply --index fix.diff
   assert_success

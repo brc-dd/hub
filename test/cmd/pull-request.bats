@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# shellcheck disable=SC2030,SC2031  # each @test runs in a subshell, so its exports stay local on purpose
 load ../test_helper
 
 # feature_repo [REMOTE=URL ...] : a repo on branch "feature" (origin is mislav/dotfiles unless given).
@@ -118,9 +119,76 @@ stub_clipboard() {
   run hub --noop pull-request --fill -T template.md -R cli/cli --dry-run -w
   assert_success
   assert_output_equals "gh pr create --fill -T template.md -R cli/cli --dry-run -w"
-  run hub --noop pull-request -m Fix -B release --assignee @me --project=Roadmap
+  run hub --noop pull-request -m Fix --assignee @me --project=Roadmap
   assert_success
-  assert_output_equals "gh pr create --title Fix --body '' -B release --assignee @me --project=Roadmap"
+  assert_output_equals "gh pr create --title Fix --body '' --assignee @me --project=Roadmap"
+}
+
+@test "gh's -B and -H are hub's -b and -h" {
+  feature_repo
+  run hub --noop pull-request -B develop -H mislav:feature
+  assert_success
+  assert_output_equals "gh pr create --base develop --head mislav:feature"
+  run hub --noop pull-request -Bdevelop -Hfeature
+  assert_success
+  assert_output_equals "gh pr create --base develop --head feature"
+}
+
+@test "a gh option's value is never read as one of hub's options" {
+  feature_repo
+  run hub --noop pull-request --title -p --body example
+  assert_success
+  assert_output_equals "gh pr create --title -p --body example"
+  run hub --noop pull-request --title=-p --project Roadmap -T -i
+  assert_success
+  assert_output_equals "gh pr create --title=-p --project Roadmap -T -i"
+}
+
+@test "values of gh's options inside option clusters are left alone too" {
+  feature_repo
+  run hub --noop pull-request -dt -p -wl -f -wtTitle -p
+  assert_success
+  assert_output_equals $'git push --set-upstream origin HEAD\ngh pr create --draft -t -p -wl -f -wtTitle'
+}
+
+@test "-b OWNER:BRANCH and OWNER/REPO:BRANCH put the base in another repository" {
+  feature_repo
+  run hub --noop pull-request -m Fix -b alice:develop
+  assert_success
+  assert_output_equals "gh pr create --title Fix --body '' --repo alice/dotfiles --base develop"
+  run hub --noop pull-request -m Fix --base=alice/fork:develop
+  assert_success
+  assert_output_equals "gh pr create --title Fix --body '' --repo alice/fork --base develop"
+  run hub --noop pull-request -m Fix -b develop
+  assert_success
+  assert_output_equals "gh pr create --title Fix --body '' --base develop"
+}
+
+@test "-b OWNER:BRANCH on GitHub Enterprise names the host" {
+  git config --global --add hub.host ghe.example.com
+  feature_repo origin=https://ghe.example.com/mislav/dotfiles.git
+  run hub --noop pull-request -b alice:develop
+  assert_success
+  assert_output_equals "gh pr create --repo ghe.example.com/alice/dotfiles --base develop"
+}
+
+@test "-b OWNER:BRANCH together with -R, or a malformed base, aborts before anything runs" {
+  feature_repo
+  run hub --noop pull-request -b alice:develop -R cli/cli
+  assert_failure
+  assert_output_equals "Aborted: -b OWNER:BRANCH and -R/--repo both name the base repository; use one."
+  run hub --noop pull-request --repo=cli/cli -p -b alice:develop
+  assert_failure
+  assert_output_equals "Aborted: -b OWNER:BRANCH and -R/--repo both name the base repository; use one."
+  run hub --noop pull-request -wR cli/cli -b alice:develop
+  assert_failure
+  assert_output_equals "Aborted: -b OWNER:BRANCH and -R/--repo both name the base repository; use one."
+  run hub --noop pull-request -b alice:
+  assert_failure
+  assert_output_equals "Aborted: not a base: alice: (use BRANCH, OWNER:BRANCH or OWNER/REPO:BRANCH)"
+  run hub --noop pull-request -R cli/cli -b develop
+  assert_success
+  assert_output_equals "gh pr create --base develop -R cli/cli"
 }
 
 @test "-p pushes the current branch to origin before creating" {
@@ -159,6 +227,81 @@ stub_clipboard() {
   assert_output_equals "Aborted: not currently on any branch."
 }
 
+@test "-p with -h OWNER:BRANCH pushes HEAD to BRANCH on OWNER's remote" {
+  feature_repo origin=https://github.com/mislav/dotfiles.git alice=https://github.com/alice/dotfiles.git
+  run hub --noop pull-request -p -h alice:other -m title
+  assert_success
+  assert_output_equals $'git push alice HEAD:refs/heads/other\ngh pr create --title title --body \'\' --head alice:other'
+  run hub --noop pull-request -p -h Alice:other
+  assert_success
+  assert_output_equals $'git push alice HEAD:refs/heads/other\ngh pr create --head Alice:other'
+}
+
+@test "-p with -h OWNER:BRANCH prefers the push remote among OWNER's remotes" {
+  feature_repo origin=https://github.com/mislav/dotfiles.git backup=git@github.com:mislav/dotfiles.git
+  run hub --noop pull-request -p -h mislav:other
+  assert_success
+  assert_output_equals $'git push origin HEAD:refs/heads/other\ngh pr create --head mislav:other'
+}
+
+@test "-p with -h OWNER:BRANCH aborts before anything runs when OWNER has no remote here" {
+  git config --global --add hub.host ghe.example.com
+  feature_repo origin=https://github.com/mislav/dotfiles.git alice=https://ghe.example.com/alice/dotfiles.git
+  run hub --noop pull-request -p -h alice:other -m title
+  assert_failure
+  assert_output_equals "Aborted: no remote for alice/dotfiles to push other to; add one with git remote add, or push it yourself and drop -p."
+  run hub --noop pull-request -p -h alice/fork:other
+  assert_failure
+  assert_output_equals "Aborted: -p cannot push to alice/fork:other; give the head as BRANCH or OWNER:BRANCH."
+}
+
+@test "-p with -h BRANCH pushes HEAD to BRANCH on the push remote" {
+  feature_repo
+  run hub --noop pull-request -p -h other -m title
+  assert_success
+  assert_output_equals $'git push origin HEAD:refs/heads/other\ngh pr create --title title --body \'\' --head other'
+  git remote add mine https://github.com/mislav/dotfiles.git
+  git config branch.feature.pushRemote mine
+  run hub --noop pull-request -p -h other
+  assert_success
+  assert_output_equals $'git push mine HEAD:refs/heads/other\ngh pr create --head other'
+  git checkout -q --detach
+  run hub --noop pull-request -p -h other
+  assert_success
+  assert_output_equals $'git push origin HEAD:refs/heads/other\ngh pr create --head other'
+}
+
+@test "-p with -h BRANCH in a fork clone names the fork's owner in the head" {
+  feature_repo origin=https://github.com/mislav/dotfiles.git upstream=https://github.com/github/dotfiles.git
+  run hub --noop pull-request -p -h other
+  assert_success
+  assert_output_equals $'git push origin HEAD:refs/heads/other\ngh pr create --head mislav:other'
+  run hub --noop pull-request -p -h other -i 12 -b main
+  assert_success
+  assert_output_equals $'git push origin HEAD:refs/heads/other\ngh api repos/\\{owner\\}/\\{repo\\}/pulls -F issue=12 -F head=mislav:other -f base=main --jq .html_url'
+}
+
+@test "--dry-run with -p prints the push instead of pushing" {
+  feature_repo
+  git init -q --bare "$HUB_TEST_TMP/pushed.git"
+  git config remote.origin.pushurl "$HUB_TEST_TMP/pushed.git" # where a real push would land
+  stub_gh 'pr create *' 'Would have created a pull request'
+  export BROWSER='echo browse'
+  run hub pull-request -p --dry-run -m Fix
+  assert_success
+  assert_output_equals $'git push --set-upstream origin HEAD\nWould have created a pull request'
+  assert_gh_called 'pr create --title Fix --body  --dry-run'
+  [[ -z $(git --git-dir="$HUB_TEST_TMP/pushed.git" for-each-ref) ]]
+  run hub pull-request -o -p -h other --dry-run=true
+  assert_success
+  assert_output_equals $'git push origin HEAD:refs/heads/other\nWould have created a pull request'
+  [[ -z $(git --git-dir="$HUB_TEST_TMP/pushed.git" for-each-ref) ]]
+  # The same push, for real this time: the check above would have seen it.
+  run hub pull-request -p --dry-run=false -m Fix
+  assert_success
+  [[ -n $(git --git-dir="$HUB_TEST_TMP/pushed.git" for-each-ref refs/heads/feature) ]]
+}
+
 @test "-f names the pushed branch as the head, so gh neither pushes nor forks" {
   feature_repo
   run hub --noop pull-request -f -m Fix
@@ -171,6 +314,19 @@ stub_clipboard() {
   run hub --noop pull-request -f
   assert_success
   assert_output_equals "gh pr create --head mislav:feature"
+}
+
+@test "-f against a base in another repository names the head's owner" {
+  feature_repo
+  run hub --noop pull-request -f -b github:main
+  assert_success
+  assert_output_equals "gh pr create --repo github/dotfiles --base main --head mislav:feature"
+  run hub --noop pull-request -f -R github/dotfiles
+  assert_success
+  assert_output_equals "gh pr create --head mislav:feature -R github/dotfiles"
+  run hub --noop pull-request -f -R=github/dotfiles
+  assert_success
+  assert_output_equals "gh pr create --head mislav:feature -R=github/dotfiles"
 }
 
 @test "-f keeps an explicit -h, and -pf pushes first" {
@@ -247,6 +403,54 @@ stub_clipboard() {
   assert_output_equals "gh api repos/github/dotfiles/pulls -F issue=3 -F head=mislav:feature -f base=main --jq .html_url"
 }
 
+@test "an issue in another repository takes that repository's default branch" {
+  feature_repo
+  stub_gh 'repo view github/dotfiles --json defaultBranchRef -q .defaultBranchRef.name' 'trunk'
+  run hub --noop pull-request -i https://github.com/github/dotfiles/issues/3
+  assert_success
+  assert_output_equals "gh api repos/github/dotfiles/pulls -F issue=3 -F head=mislav:feature -f base=trunk --jq .html_url"
+  assert_gh_called 'repo view github/dotfiles --json defaultBranchRef -q .defaultBranchRef.name'
+}
+
+@test "an issue URL in the current repository takes the local default branch" {
+  feature_repo
+  set_remote_head origin develop
+  run hub --noop pull-request -i https://github.com/Mislav/Dotfiles/issues/12
+  assert_success
+  assert_output_equals "gh api repos/Mislav/Dotfiles/pulls -F issue=12 -F head=mislav:feature -f base=develop --jq .html_url"
+  assert_gh_not_called
+}
+
+@test "an issue in another repository aborts before anything runs if its default branch is unknown" {
+  feature_repo
+  stub_gh 'repo view *' '' 1
+  run hub --noop pull-request -p -i https://github.com/github/dotfiles/issues/3
+  assert_failure
+  assert_output_equals "Aborted: could not look up the default branch of github/dotfiles; give the base with -b BRANCH."
+}
+
+@test "an issue in another repository on GitHub Enterprise is looked up there" {
+  git config --global --add hub.host ghe.example.com
+  feature_repo origin=https://ghe.example.com/mislav/dotfiles.git
+  stub_gh 'repo view ghe.example.com/github/dotfiles --json defaultBranchRef -q .defaultBranchRef.name' 'trunk'
+  run hub --noop pull-request -i https://ghe.example.com/github/dotfiles/issues/3
+  assert_success
+  assert_output_equals "gh api --hostname ghe.example.com repos/github/dotfiles/pulls -F issue=3 -F head=mislav:feature -f base=trunk --jq .html_url"
+}
+
+@test "-i with -b OWNER:BRANCH converts an issue of that repository" {
+  feature_repo
+  run hub --noop pull-request -i 12 -b github:main
+  assert_success
+  assert_output_equals "gh api repos/github/dotfiles/pulls -F issue=12 -F head=mislav:feature -f base=main --jq .html_url"
+  run hub --noop pull-request -i https://github.com/github/dotfiles/issues/3 -b github:main
+  assert_success
+  assert_output_equals "gh api repos/github/dotfiles/pulls -F issue=3 -F head=mislav:feature -f base=main --jq .html_url"
+  run hub --noop pull-request -i https://github.com/github/dotfiles/issues/3 -b alice:main
+  assert_failure
+  assert_output_equals "Aborted: -b names alice/dotfiles, but the issue is in github/dotfiles."
+}
+
 @test "-i takes the head owner from the push remote, or -h as given" {
   feature_repo origin=https://github.com/mislav/dotfiles.git upstream=https://github.com/github/dotfiles.git
   run hub --noop pull-request -i 12 -b main
@@ -304,6 +508,9 @@ stub_clipboard() {
   run hub --noop pull-request -m Fix --body https://github.com/mislav/dotfiles/issues/12
   assert_success
   assert_output_equals "gh pr create --title Fix --body '' --body https://github.com/mislav/dotfiles/issues/12"
+  run hub --noop pull-request -m Fix -wb https://github.com/mislav/dotfiles/issues/12
+  assert_success
+  assert_output_equals "gh pr create --title Fix --body '' -wb https://github.com/mislav/dotfiles/issues/12"
 }
 
 @test "--help and a bare -h print the manual" {

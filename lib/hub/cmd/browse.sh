@@ -7,12 +7,15 @@
 # used: its upstream, github or origin remote (or GH_REPO). A bare REPO means
 # your own repository; HOST/OWNER/REPO names one on another host.
 #
-# SUBPAGE is appended as given: issues, pulls, wiki, commits, actions,
-# releases, settings, tree/BRANCH, blob/main/README.md, ...
+# SUBPAGE is appended as given: issues, pulls, wiki, actions, releases,
+# settings, tree/BRANCH, blob/main/README.md, ...
 #
-# With no SUBPAGE, on a branch other than the default branch, hub opens that
-# branch (tree/BRANCH) in the repository it pushes to: your fork, when the
-# branch tracks a fork remote.
+# For the current repository, no SUBPAGE and the SUBPAGEs tree and commits
+# follow the branch you are on: on a branch other than the default branch,
+# hub opens tree/BRANCH (commits/BRANCH for commits) in the repository the
+# branch pushes to, which is your fork when the branch tracks a fork remote.
+# Otherwise (the default branch, a REPO argument, GH_REPO) tree is the front
+# page and commits the history of the default branch.
 #
 # The URL is built locally. GitHub is only asked for your login (bare REPO)
 # and, when refs/remotes/REMOTE/HEAD is missing, the default branch.
@@ -25,6 +28,8 @@
 #   > open https://github.com/mislav/dotfiles
 #   $ hub browse -- issues
 #   > open https://github.com/mislav/dotfiles/issues
+#   $ hub browse -- commits      # on the branch feature
+#   > open https://github.com/mislav/dotfiles/commits/feature
 #   $ hub browse -u cli/cli releases
 #   https://github.com/cli/cli/releases
 
@@ -56,12 +61,14 @@ hub_cmd_browse() {
   else
     proj=$(hub::main_project && printf '%s\n' "$HUB_PROJECT_HOST") || exit 1
     host=${proj##*$'\n'} proj=${proj%%$'\n'*}
-    if [[ -z $subpage && -z ${GH_REPO:-} ]] && branch=$(hub::current_branch) \
-      && [[ $branch != "$(hub::default_branch)" ]]; then
+    if [[ -z $subpage || $subpage == tree || $subpage == commits ]] && [[ -z ${GH_REPO:-} ]] \
+      && branch=$(hub::current_branch) && [[ $branch != "$(hub::default_branch)" ]]; then
       _hub_browse_push_target "$branch"
-      subpage=tree/$(_hub_browse_escape "$branch")
+      subpage=${subpage:-tree}/$(_hub_browse_escape "$branch")
     fi
   fi
+  # A bare tree is the default branch, i.e. the front page (GitHub has no .../tree page).
+  if [[ $subpage == tree ]]; then subpage=; fi
 
   url=https://$host/$proj${subpage:+/$subpage}
   if ((print)); then printf '%s\n' "$url"; fi

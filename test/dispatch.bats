@@ -79,3 +79,15 @@ load test_helper
   assert_failure
   assert_output_contains "bash 5 or newer is required"
 }
+
+@test "-C with an empty path is a no-op, as in git" {
+  run hub -C '' --noop status
+  assert_success
+  assert_output_equals "git status"
+}
+
+@test "the fast path quotes --noop output like the modules do" {
+  run hub --noop status 'two words' '*'
+  assert_success
+  assert_output_equals "git status two\\ words \\*"
+}

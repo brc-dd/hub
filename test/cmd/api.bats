@@ -23,27 +23,53 @@ load ../test_helper
   assert_output_equals "gh api"
 }
 
-@test "api -t is dropped with a warning, since gh's -t means --template" {
+flat_error="hub api: -t/--flat is not supported: gh api has no flat KEY<TAB>VALUE output; use --jq or --template instead"
+
+@test "api -t and --flat are errors (exit 2), not JSON in place of hub 2.x's flat lines" {
   run hub --noop api -t users/octocat
-  assert_success
-  assert_line_equals 0 "hub: ignoring -t/--flat: gh api has no flat output; use --jq or --template instead"
-  assert_line_equals 1 "gh api users/octocat"
-  [[ ${#lines[@]} -eq 2 ]]
+  assert_output_equals "$flat_error"
+  [[ $status -eq 2 ]]
+  run hub --noop api users/octocat --flat -i
+  assert_output_equals "$flat_error"
+  [[ $status -eq 2 ]]
+  assert_gh_not_called
 }
 
-@test "api --flat is dropped with a warning too" {
-  run hub --noop api users/octocat --flat -i
-  assert_success
-  assert_output_equals $'hub: ignoring -t/--flat: gh api has no flat output; use --jq or --template instead\ngh api users/octocat -i'
+@test "api -t is an error bundled with -i or with a value too, as gh would read it as --template" {
+  local arg
+  for arg in -it -ti -iit '-t{{.login}}'; do
+    run hub --noop api "$arg" users/octocat
+    assert_output_equals "$flat_error"
+    [[ $status -eq 2 ]] || {
+      printf 'expected exit 2 for %s, got %s\n' "$arg" "$status"
+      return 1
+    }
+  done
+}
+
+@test "api -t fails without running gh" {
+  run hub api users/octocat -t
+  assert_output_equals "$flat_error"
+  [[ $status -eq 2 ]]
+  assert_gh_not_called
 }
 
 @test "api leaves -t alone as the value of another option or after --" {
   run hub --noop api users/octocat -H 'X-Note: -t' -f q=-t --jq -t
   assert_success
   assert_output_equals "gh api users/octocat -H X-Note:\\ -t -f q=-t --jq -t"
+  run hub --noop api users/octocat -iH 'X-Note: -t' -iq -t
+  assert_success
+  assert_output_equals "gh api users/octocat -iH X-Note:\\ -t -iq -t"
   run hub --noop api users/octocat -- -t
   assert_success
   assert_output_equals "gh api users/octocat -- -t"
+}
+
+@test "api passes gh's other short options through, alone or bundled" {
+  run hub --noop api -iXPOST 'repos/{owner}/{repo}/issues' -Ftitle=Bug -fbody=text -XGET -i
+  assert_success
+  assert_output_equals "gh api -iXPOST repos/\\{owner\\}/\\{repo\\}/issues -Ftitle=Bug -fbody=text -XGET -i"
 }
 
 @test "api --cache with a bare number of seconds gets gh's unit" {

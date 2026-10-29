@@ -17,8 +17,16 @@
 #   3  no status
 #
 # COMMIT is resolved locally when possible (a local branch means its local
-# tip); anything else is resolved by GitHub. The two lookups are read-only
-# `gh api` calls to repos/{owner}/{repo}/commits/SHA/status and .../check-runs.
+# tip); anything else is resolved by GitHub. The repository is the one hub
+# uses everywhere (its upstream, github or origin remote, or GH_REPO), named
+# explicitly to gh along with its host, so `gh repo set-default` and gh's
+# default host don't come into it. The two lookups are read-only `gh api`
+# calls to repos/OWNER/REPO/commits/SHA/status and .../check-runs.
+#
+# When GitHub refuses the check runs with HTTP 403, 404 or 422 (a token that
+# may not read checks, an older GitHub Enterprise Server), only the commit
+# statuses count, as in old hub; any other error, a rate limit included, is
+# an error.
 #
 #   -v, --verbose   Print one line per check instead, failures first:
 #                   STATE, NAME and URL, separated by tabs.
@@ -50,14 +58,15 @@ hub_cmd_ci_status() {
     esac
   done
   [[ -n ${GH_REPO:-} ]] || hub::require_repo
-  hub::main_project >/dev/null # sets HUB_PROJECT_HOST; dies without a GitHub remote
+  local proj host
+  proj=$(hub::main_project && printf '%s\n' "$HUB_PROJECT_HOST") || exit 1 # dies without a GitHub remote
+  host=${proj##*$'\n'} proj=${proj%%$'\n'*}
 
   local sha
   sha=$(hub::git_query rev-parse -q --verify "${ref:-HEAD}^{commit}") || sha=${ref:-HEAD}
 
-  local -a api=(api)
-  [[ ${HUB_PROJECT_HOST,,} == github.com ]] || api+=(--hostname "$HUB_PROJECT_HOST")
-  api+=(--paginate)
+  # Always name the host: gh's default is GH_HOST, or the only host it is logged in to.
+  local -a api=(api --hostname "$host" --paginate)
   local status_jq check_jq
   if ((verbose)); then
     status_jq='.statuses[] | [.state, .context, .target_url // ""] | @tsv'
@@ -67,8 +76,8 @@ hub_cmd_ci_status() {
     check_jq='.check_runs[] | if .status == "completed" then .conclusion else "pending" end'
   fi
   local statuses checks
-  statuses=$(hub::gh_query "${api[@]}" "repos/{owner}/{repo}/commits/$sha/status" --jq "$status_jq") || exit
-  checks=$(hub::gh_query "${api[@]}" "repos/{owner}/{repo}/commits/$sha/check-runs" --jq "$check_jq") || exit
+  statuses=$(hub::gh_query "${api[@]}" "repos/$proj/commits/$sha/status" --jq "$status_jq") || exit
+  checks=$(_hub_ci_status_check_runs "${api[@]}" "repos/$proj/commits/$sha/check-runs" --jq "$check_jq") || exit
 
   # Each line starts with a state (followed by a tab and more columns with -v).
   local -a lines=()
@@ -107,4 +116,33 @@ hub_cmd_ci_status() {
     'no status') return 3 ;;
     *) return 1 ;;
   esac
+}
+
+# _hub_ci_status_check_runs GH-ARGS... : print the output of the check-runs lookup `gh GH-ARGS`.
+# If gh fails in a way _hub_ci_status_tolerated accepts, print nothing and succeed.
+_hub_ci_status_check_runs() {
+  local err rc=0
+  # gh's stdout is held back until gh has succeeded (after an HTTP error it is the error
+  # document) and then printed to fd 4, our stdout; its stderr goes to fd 3, captured in err.
+  { err=$({ out=$(hub::gh_query "$@" 2>&3) && printf '%s\n' "$out" >&4; } 3>&1); } 4>&1 || rc=$?
+  if ((rc)) && _hub_ci_status_tolerated "$err"; then
+    # Go on with the commit statuses alone, as old hub did; say so only under HUB_VERBOSE.
+    if [[ -n ${HUB_VERBOSE:-} ]]; then printf '%s\n' "$err" >&2; fi
+    hub::debug "no check runs; counting the commit statuses only"
+    return 0
+  fi
+  [[ -z $err ]] || printf '%s\n' "$err" >&2
+  return "$rc"
+}
+
+# _hub_ci_status_tolerated GH-STDERR : true when gh's error output says GitHub refused the
+# check runs with HTTP 403, 404 or 422, as restricted tokens and older Enterprise servers do:
+# a line "gh: MESSAGE (HTTP 404)" or "gh: HTTP 404". A rate limit (also a 403) is not tolerated.
+_hub_ci_status_tolerated() {
+  local line re='^gh: (.* \()?HTTP (403|404|422)\)?$'
+  [[ ${1,,} != *"rate limit"* ]] || return 1
+  while IFS= read -r line; do
+    [[ $line =~ $re ]] && return 0
+  done <<<"$1"
+  return 1
 }

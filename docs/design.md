@@ -40,7 +40,7 @@ measured against plain git. The fast path sources nothing.
 - **git**, and **gh** logged in (`gh auth login`, plus `gh auth login -h HOST`
   for GitHub Enterprise). Commands that only build URLs or run git work
   without gh.
-- Optional: `open`, `xdg-open` or `$BROWSER` for the browser, and a clipboard
+- Optional: `open`, `xdg-open`, `$GH_BROWSER` or `$BROWSER` for the browser, and a clipboard
   tool (`pbcopy`, `wl-copy`, `xclip`) for `-c`.
 
 ## Layout
@@ -112,8 +112,11 @@ test/                   bats tests, the gh stub and the test helper
   `GH_REPO=[HOST/]OWNER/REPO` overrides it (`hub::main_project`).
 - **GitHub hosts** are github.com, `GH_HOST`, `GITHUB_HOST` and every
   `git config hub.host` entry. A remote whose host is an ssh_config alias is
-  resolved with `ssh -G`. Explicit `OWNER/REPO` arguments use `GH_HOST`,
-  then `GITHUB_HOST`, then github.com (`hub::host`).
+  resolved with `ssh -G`. Explicit `OWNER/REPO` arguments use the default
+  host (`hub::host`), which follows gh's own rule: `GH_HOST`, else the single
+  host gh is logged in to (read from gh's `hosts.yml`), else github.com. hub
+  2.x's `GITHUB_HOST` is accepted and exported to gh as `GH_HOST`, so both
+  tools always resolve the same host.
 - **Your login** comes from gh's cached `gh config get user -h HOST`, else
   `gh api user` (`hub::current_user`). A bare `REPO` argument means
   `LOGIN/REPO`.

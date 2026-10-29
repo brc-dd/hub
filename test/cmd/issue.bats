@@ -138,9 +138,64 @@ load ../test_helper
 }
 
 @test "issue update is gh issue edit, options unchanged" {
-  run hub --noop issue update 12 -t "New title" --add-label bug --remove-label wip -m v2
+  run hub --noop issue update 12 -t "New title" --add-label bug --remove-label wip --milestone v2
   assert_success
-  assert_output_equals "gh issue edit 12 -t New\\ title --add-label bug --remove-label wip -m v2"
+  assert_output_equals "gh issue edit 12 -t New\\ title --add-label bug --remove-label wip --milestone v2"
+  run hub --noop issue update 12 13 --add-assignee @me --remove-milestone
+  assert_success
+  assert_output_equals "gh issue edit 12 13 --add-assignee @me --remove-milestone"
+}
+
+@test "issue update -m sets the title and body, and leaves out an empty body" {
+  run hub --noop issue update 12 -m "New title"
+  assert_success
+  assert_output_equals "gh issue edit 12 --title New\\ title"
+  run hub --noop issue update 12 -m $'Crash\non start\n\nSteps:\n1. run it'
+  assert_success
+  assert_output_equals "gh issue edit 12 --title Crash\\ on\\ start --body \$'Steps:\\n1. run it'"
+  run hub --noop issue update 12 13 -m Crash -m "It crashes." -m Always.
+  assert_success
+  assert_output_equals "gh issue edit 12 13 --title Crash --body \$'It crashes.\\n\\nAlways.'"
+}
+
+@test "issue update puts --title/--body where -m was; gh's -m is --milestone" {
+  run hub --noop issue update 12 --add-label bug --message=Crash --milestone v2 -mDetails --remove-label wip
+  assert_success
+  assert_output_equals "gh issue edit 12 --add-label bug --title Crash --body Details --milestone v2 --remove-label wip"
+}
+
+@test "issue update -F reads the title and body from a file or standard input" {
+  printf 'Crash on start\n\nSteps:\n1. run it\n' >msg.txt
+  run hub --noop issue update 12 -F msg.txt --add-label bug
+  assert_success
+  assert_output_equals "gh issue edit 12 --title Crash\\ on\\ start --body \$'Steps:\\n1. run it' --add-label bug"
+  printf 'Crash\n' >title.txt
+  run hub --noop issue update 12 --file=title.txt
+  assert_success
+  assert_output_equals "gh issue edit 12 --title Crash"
+  run hub --noop issue update 12 -F - <<<$'Crash\n\nIt crashes.'
+  assert_success
+  assert_output_equals "gh issue edit 12 --title Crash --body It\\ crashes."
+}
+
+@test "issue update aborts on -m with -F, a missing value or an unreadable file before running gh" {
+  printf 'Crash\n' >msg.txt
+  run hub issue update 12 -m Crash -F msg.txt -s closed
+  assert_failure
+  assert_output_equals "Aborted: -m and -F cannot be used together."
+  run hub issue update 12 -s closed -m
+  assert_failure
+  assert_output_equals "Aborted: -m needs a value."
+  run hub issue update 12 -t New -F missing.txt -s closed
+  assert_failure
+  assert_output_equals "Aborted: cannot read missing.txt"
+  assert_gh_not_called
+}
+
+@test "issue update without -s leaves -c, -r and --duplicate-of to gh issue edit" {
+  run hub --noop issue update 12 -c Done -r completed
+  assert_success
+  assert_output_equals "gh issue edit 12 -c Done -r completed"
 }
 
 @test "issue update -s closed closes the issue" {
@@ -176,13 +231,48 @@ load ../test_helper
   assert_output_equals $'gh issue edit 12 -R mislav/dotfiles -t New --add-label fixed\ngh issue close 12 -R mislav/dotfiles -c Done'
 }
 
-@test "issue update -s aborts on an unknown state or a missing number" {
-  run hub --noop issue update 12 -s merged
+@test "issue update -s with -m edits the title first, then closes" {
+  run hub --noop issue update 12 -m "New title" -s closed
+  assert_success
+  assert_output_equals $'gh issue edit 12 --title New\\ title\ngh issue close 12'
+}
+
+@test "issue update -s closes or reopens every NUMBER, after one edit of them all" {
+  run hub --noop issue update 12 13 -s closed --title T
+  assert_success
+  assert_output_equals $'gh issue edit 12 13 --title T\ngh issue close 12\ngh issue close 13'
+  run hub --noop issue update 12 13 --state=open -c Again -R mislav/dotfiles
+  assert_success
+  assert_output_equals $'gh issue reopen 12 -R mislav/dotfiles -c Again\ngh issue reopen 13 -R mislav/dotfiles -c Again'
+  run hub --noop issue update -s closed -r "not planned" -- 12 https://github.com/mislav/dotfiles/issues/13
+  assert_success
+  assert_output_equals $'gh issue close 12 -r not\\ planned\ngh issue close https://github.com/mislav/dotfiles/issues/13 -r not\\ planned'
+}
+
+@test "issue update -s open refuses gh issue close's own options before running gh" {
+  run hub issue update 12 -t New -s open -r completed
+  assert_failure
+  assert_output_equals "Aborted: -r only goes with -s closed; gh issue reopen has no such option."
+  run hub issue update 12 13 --reason="not planned" --state open
+  assert_failure
+  assert_output_equals "Aborted: --reason only goes with -s closed; gh issue reopen has no such option."
+  run hub issue update 12 -s open -c Again --duplicate-of 7
+  assert_failure
+  assert_output_equals "Aborted: --duplicate-of only goes with -s closed; gh issue reopen has no such option."
+  assert_gh_not_called
+}
+
+@test "issue update -s aborts on an unknown state or a missing number before running gh" {
+  run hub issue update 12 -t New -s merged
   assert_failure
   assert_output_equals "Aborted: --state must be open or closed, not 'merged'."
-  run hub --noop issue update -s closed
+  run hub issue update 12 13 --add-label x --state=
+  assert_failure
+  assert_output_equals "Aborted: --state must be open or closed, not ''."
+  run hub issue update -s closed -c Done
   assert_failure
   assert_output_contains "Usage: hub issue update NUMBER"
+  assert_gh_not_called
 }
 
 @test "issue update -s does not close when the edit fails" {
@@ -202,6 +292,26 @@ load ../test_helper
   assert_success
   assert_output_equals "Closed issue #12"
   [[ $(gh_calls) == $'gh issue edit 12 -t New\ngh issue close 12' ]]
+}
+
+@test "issue update -s closes the issues one at a time" {
+  stub_gh 'issue close 12' 'Closed issue #12'
+  stub_gh 'issue close 13' 'Closed issue #13'
+  run hub issue update 12 13 -s closed
+  assert_success
+  assert_output_equals $'Closed issue #12\nClosed issue #13'
+  [[ $(gh_calls) == $'gh issue close 12\ngh issue close 13' ]]
+}
+
+@test "issue update -s stops at the first gh command that fails" {
+  stub_gh 'issue edit 12 13 14 *' ''
+  stub_gh 'issue close 12' 'Closed issue #12'
+  stub_gh 'issue close 13' 'could not close #13' 1
+  stub_gh 'issue close 14' 'Closed issue #14'
+  run hub issue update 12 13 14 -s closed --add-label fixed
+  assert_failure
+  assert_output_equals $'Closed issue #12\ncould not close #13'
+  [[ $(gh_calls) == $'gh issue edit 12 13 14 --add-label fixed\ngh issue close 12\ngh issue close 13' ]]
 }
 
 @test "issue runs gh with the mapped arguments" {
@@ -225,6 +335,7 @@ load ../test_helper
   run hub --noop issue update 12 -h
   assert_success
   assert_output_contains "hub issue update NUMBER"
+  assert_output_contains "--add-label"
   run hub help issue
   assert_success
   assert_output_contains "Usage: hub issue"

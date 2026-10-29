@@ -112,14 +112,14 @@ Two rules decide what the flags mean:
 | hub 2.x | Status | This hub | Notes |
 |---|---|---|---|
 | `hub clone [-p] [OWNER/]REPO [DIR]` | **Yes** | `git clone owner/repo`, `git clone repo` (your own), `repo.wiki`, `HOST/OWNER/REPO`; every git clone flag is kept in place | No API lookup. No `upstream` remote for forks (use `gh repo clone` for that). |
-| `hub remote add [-p] [NAME] USER[/REPO]`, `hub remote set-url …` | **Yes** | A bare `USER` means `USER/<current repo>` | The "origin means my fork" special case is gone. |
+| `hub remote add [-p] [NAME] USER[/REPO]`, `hub remote set-url …` | **Yes** | A bare `USER` means `USER/<current repo>`; `remote add origin` alone means your own fork, as in hub 2.x | No existence check. |
 | `hub fetch USER[,USER2…]` | **Yes** | Adds missing remotes, then `git fetch --multiple` | No existence check: git reports a missing fork. |
-| `hub push REMOTE1,REMOTE2 [REF]` | **Yes** | One `git push` per remote, stops at the first failure; options are kept | |
+| `hub push REMOTE1,REMOTE2 [ARGS…]` | **Yes** | `git push REMOTE ARGS…` once per remote, arguments exactly as given; the current branch is pushed only when nothing follows the remotes; stops at the first failure | |
 | `hub checkout PR-URL [BRANCH]` | **Yes** | `gh pr checkout URL [-b BRANCH]` | `-f` is refused: gh's `--force` resets the local branch. |
 | `hub merge PR-URL` | **Yes** | Fetches `refs/pull/N/head` and merges **locally** with the merge-button message | Never `gh pr merge`, which merges on GitHub. |
 | `hub am URL`, `hub apply URL` | **Yes** | PR URLs through `gh pr diff --patch`, commit URLs through the API's patch/diff; local files and options untouched | Gist URLs are not supported. |
 | `hub cherry-pick COMMIT-URL`, `USER@SHA` | **Yes** | Fetches the commit (or `refs/pull/N/head`) and cherry-picks it | |
-| `hub sync [REMOTE]` | **Yes** | Pure git: fetch `--prune`, fast-forward branches that are behind, delete merged branches whose upstream is gone, warn about the rest | `--color` dropped. |
+| `hub sync [REMOTE]` | **Yes** | Pure git: fetch `--prune`, fast-forward branches that are behind, delete merged branches whose upstream is gone, warn about the rest; exits non-zero if a branch could not be updated or deleted | `--color` dropped. |
 | `hub init -g` | No | `git init && gh repo create --source=. --private` | |
 | `hub submodule add OWNER/REPO DIR` | No | `git submodule add "$(gh repo view OWNER/REPO --json url -q .url).git" DIR` | |
 
@@ -127,17 +127,17 @@ Two rules decide what the flags mean:
 
 | hub 2.x | Status | This hub | Notes |
 |---|---|---|---|
-| `hub pull-request` | **Yes**, hub flags | `gh pr create`; `-m` (repeatable) and `-F FILE` split title and body, `-e`, `-b BASE`, `-h HEAD`, `-p` pushes first, `-f`, `-d`, `-r`, `-a`, `-M`, `-l`, `--no-maintainer-edits`, `-o` opens, `-c` copies, `-i ISSUE` or an issue URL converts the issue; other flags go to gh | Milestones by number and auto-created labels are not supported. |
+| `hub pull-request` | **Yes**, hub flags | `gh pr create`; `-m` (repeatable) and `-F FILE` split title and body, `-e`, `-b BASE` or `-b OWNER[/REPO]:BRANCH` (becomes `--repo` plus `--base`), `-h HEAD`, `-p` pushes first to the remote the head names, `-f`, `-d`, `-r`, `-a`, `-M`, `-l`, `--no-maintainer-edits`, `-o` opens, `-c` copies, `-i ISSUE` or an issue URL converts the issue (in that issue's repository); gh's `-B`/`-H` are accepted, other flags go to gh | gh's `-b`, `-F`, `-m` and `-p` must be spelled `--body`, `--body-file`, `--milestone`, `--project`. `--dry-run` never pushes. Milestones by number and auto-created labels are not supported. |
 | `hub pr list \| checkout \| show \| merge` | **Yes**, gh flags | `show` → `gh pr view` (`-u` prints the URL), `checkout N BRANCH` → `-b BRANCH`, everything else → `gh pr …` | `merge` merges on GitHub, as gh does. |
-| `hub issue …` | **Yes**, gh flags | bare → `list`; `show` → `view`; `update` → `edit`, with `-s closed\|open` → `close`/`reopen`; `labels` → `gh label list`; `create -m`/`-F` split title and body | `--include-pulls`, sorting flags and `-f` formats are gone; use gh's `--search`, `--json`, `--jq`. |
-| `hub release …` | **Yes**, gh flags | bare → `list`; `show` → `view`; `create -a FILE[#label]` become asset arguments, `-m`/`-F` split title and notes, `-t REF` → `--target`; `edit -a` → `gh release upload --clobber`; `download -i GLOB` → `-p GLOB` | `-e`, `-o`, `-c` and `-f` formats are gone. |
-| `hub browse [-u] [-c] [[OWNER/]REPO] [SUBPAGE]` | **Yes** | URL built locally, no API call; a checked-out non-default branch opens `tree/BRANCH` | |
+| `hub issue …` | **Yes**, gh flags | bare → `list`; `show` → `view`; `update` → `edit`, with `-s closed\|open` → `close`/`reopen` for every number given; `labels` → `gh label list`; `create -m`/`-F` and `update -m`/`-F` split title and body (gh's own are `--milestone`, `--body-file`) | `--include-pulls`, sorting flags and `-f` formats are gone; use gh's `--search`, `--json`, `--jq`. |
+| `hub release …` | **Yes**, gh flags | bare → `list`; `show` → `view`; `create -a FILE[#label]` become asset arguments, `-m`/`-F` split title and notes, `-t REF` → `--target`; `edit -a` → `gh release upload` (add `--clobber` yourself to replace an asset); every `-a` file is checked before anything runs; `download -i GLOB` → `-p GLOB` | `-e`, `-o`, `-c` and `-f` formats are gone. |
+| `hub browse [-u] [-c] [[OWNER/]REPO] [SUBPAGE]` | **Yes** | URL built locally, no API call; on a non-default branch the root, `tree` and `commits` pages open at that branch (on your fork when the branch pushes there) | |
 | `hub compare [-u] [-c] [-b BASE] [OWNER] [RANGE]` | **Yes** | `A..B` becomes `A...B` | |
-| `hub create [-p] [-d DESC] [-h URL] [[ORG/]NAME]` | **Yes**, hub flags | `gh repo create --source=.`; **private by default**, `--public` to publish, `--internal` for organisations, `--remote-name`, `-o` | hub 2.x created public repositories by default. |
+| `hub create [-p] [-d DESC] [-h URL] [[ORG/]NAME]` | **Yes**, hub flags | `gh repo create --source=.`; **private by default**, `--public` to publish, `--internal` for organisations, `--remote-name` (or `-r`/`--remote`), `-o` opens, `-c` copies the URL; options gh rejects together with `--source` are refused before anything is created | hub 2.x created public repositories by default. |
 | `hub fork [--no-remote] [--remote-name NAME] [--org ORG]` | **Yes** | `gh repo fork --remote --remote-name <your login>` then fetches it | The remote is named after you, as in hub 2.x; plain `gh repo fork` would rename `origin` to `upstream`. |
 | `hub delete [-y] [OWNER/]NAME` | **Yes** | `gh repo delete [--yes]` | Needs the `delete_repo` scope: `gh auth refresh -s delete_repo`. |
-| `hub ci-status [-v] [COMMIT]` | **Yes** | Combines commit statuses and check runs through `gh api`; prints one word; exit 0 success, 1 failure, 2 pending, 3 no status | `-f FORMAT` and `--color` are gone. `gh pr checks` is the richer view for a PR. |
-| `hub api …` | **Yes**, gh flags | `gh api`; `-t/--flat` is dropped with a warning (gh's `-t` is `--template`), `--cache N` gains the missing unit | Use `--jq` or `--template` for shell-friendly output. |
+| `hub ci-status [-v] [COMMIT]` | **Yes** | Combines commit statuses and check runs through `gh api`; prints one word; exit 0 success, 1 failure, 2 pending, 3 no status; a 403, 404 or 422 from the check-runs API falls back to the statuses, as in hub 2.x | `-f FORMAT` and `--color` are gone. `gh pr checks` is the richer view for a PR. |
+| `hub api …` | **Yes**, gh flags | `gh api`; `-t/--flat` is an error (gh's `-t` means `--template`), `--cache N` gains the missing unit | Use `--jq` or `--template` for shell-friendly output. |
 | `hub gist create \| show` | **Yes**, gh flags | `--public` → `-p`, `-o` → `-w`; `show ID [FILE]` → `gh gist view --raw` | `-c` is gone. |
 | `hub alias [-s] [SHELL]` | **Yes** | bash, zsh, sh, ksh, dash, fish, csh, tcsh | |
 | `hub help [COMMAND]`, `hub version`, `hub --noop` | **Yes** | Each module's header is its manual | |
@@ -149,9 +149,10 @@ Two rules decide what the flags mean:
 
 | Setting | Effect |
 |---|---|
-| `git config --global hub.protocol ssh` | Clone and remote URLs use `git@host:` instead of HTTPS. Without it, gh's `git_protocol` setting is used. |
+| `HUB_PROTOCOL=ssh`, `git config --global hub.protocol ssh` | Clone and remote URLs use `git@host:` instead of HTTPS; the variable wins over the config key. Without either, gh's `git_protocol` setting for the host is used. On `*.ghe.com` hosts the SSH user is the tenant, as in gh. |
 | `git config --global --add hub.host my.ghe.example` | Treat an Enterprise host's remotes and URLs as GitHub. gh must be logged in to that host. |
-| `GH_HOST`, `GITHUB_HOST` | The default host for shorthands such as `owner/repo`. |
+| `GH_HOST`, `GITHUB_HOST` | The default host for shorthands such as `owner/repo`. `GITHUB_HOST` is passed on to gh as `GH_HOST`, so both tools agree. Without either, the host gh is logged in to is used when there is exactly one, else github.com. |
+| `GH_BROWSER`, `BROWSER` | The browser for `browse`, `compare` and `-o`, in that order of preference. |
 | `GH_REPO=[HOST/]OWNER/REPO` | Act on another repository than the one the remotes point at. |
 | `HUB_VERBOSE=1` | Log every git and gh command on stderr. |
 | `hub --noop …` | Print the commands that would run instead of running them. |

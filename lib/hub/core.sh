@@ -27,6 +27,13 @@ fi
 declare -p HUB_GIT_OPTS >/dev/null 2>&1 || HUB_GIT_OPTS=()
 HUB_GIT=${HUB_GIT:-}
 
+# hub 2.x configured Enterprise hosts with GITHUB_HOST; gh reads GH_HOST. Make
+# gh see the same default host, or hub would build URLs for one host while gh
+# creates, deletes and queries on another.
+if [[ -z ${GH_HOST:-} && -n ${GITHUB_HOST:-} ]]; then
+  export GH_HOST=$GITHUB_HOST
+fi
+
 # ---------------------------------------------------------------------------
 # Output
 # ---------------------------------------------------------------------------
@@ -174,8 +181,27 @@ hub::git_dir() { hub::git_query rev-parse --git-dir; }
 # ---------------------------------------------------------------------------
 # Hosts and URLs
 # ---------------------------------------------------------------------------
-# hub::host : the default GitHub host (GH_HOST, GITHUB_HOST, github.com).
-hub::host() { printf '%s\n' "${GH_HOST:-${GITHUB_HOST:-github.com}}"; }
+# hub::host : the default GitHub host, following gh's rule: GH_HOST (or hub 2.x's GITHUB_HOST),
+# else the only host gh is logged in to, else github.com. Cached per process in HUB_DEFAULT_HOST.
+hub::host() {
+  if [[ -n ${GH_HOST:-${GITHUB_HOST:-}} ]]; then
+    printf '%s\n' "${GH_HOST:-$GITHUB_HOST}"
+    return 0
+  fi
+  if [[ -z ${HUB_DEFAULT_HOST:-} ]]; then
+    HUB_DEFAULT_HOST=github.com
+    local file=${GH_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/gh}/hosts.yml line host='' count=0
+    if [[ -r $file ]]; then
+      while IFS= read -r line; do
+        [[ $line =~ ^([A-Za-z0-9.-]+):[[:space:]]*$ ]] || continue
+        host=${BASH_REMATCH[1]}
+        ((count++))
+      done <"$file"
+      ((count == 1)) && HUB_DEFAULT_HOST=$host
+    fi
+  fi
+  printf '%s\n' "$HUB_DEFAULT_HOST"
+}
 
 # hub::known_hosts : github.com plus GH_HOST/GITHUB_HOST and `git config hub.host` entries.
 hub::known_hosts() {
@@ -296,11 +322,13 @@ hub::default_branch() {
     printf '%s\n' "${ref#"$remote"/}"
     return 0
   fi
-  if proj=$(hub::remote_project "$remote") \
-    && ref=$(hub::gh_query repo view "$proj" --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null) \
-    && [[ -n $ref ]]; then
-    printf '%s\n' "$ref"
-    return 0
+  if hub::remote_project "$remote" >/dev/null; then
+    proj=$HUB_URL_OWNER/$HUB_URL_REPO
+    [[ ${HUB_PROJECT_HOST,,} == github.com ]] || proj=$HUB_PROJECT_HOST/$proj
+    if ref=$(hub::gh_query repo view "$proj" --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null) && [[ -n $ref ]]; then
+      printf '%s\n' "$ref"
+      return 0
+    fi
   fi
   printf 'main\n'
 }
@@ -362,21 +390,29 @@ hub::current_user() {
   hub::die "Aborted: could not determine your GitHub login for $host; run 'gh auth login'"
 }
 
-# hub::protocol [HOST] : "https" or "ssh" — git config hub.protocol, else gh's git_protocol for HOST, else https.
+# hub::protocol [HOST] : "https" or "ssh" — HUB_PROTOCOL, else git config hub.protocol, else gh's git_protocol for HOST, else https.
 hub::protocol() {
   local host=${1:-} p
   [[ -n $host ]] || host=$(hub::host)
-  p=$(hub::git_query config --get hub.protocol) && [[ -n $p ]] || p=$(hub::gh_query config get git_protocol -h "$host" 2>/dev/null) || p=
-  case $p in ssh | git) printf 'ssh\n' ;; *) printf 'https\n' ;; esac
+  p=${HUB_PROTOCOL:-}
+  [[ -n $p ]] || p=$(hub::git_query config --get hub.protocol) || p=''
+  [[ -n $p ]] || p=$(hub::gh_query config get git_protocol -h "$host" 2>/dev/null) || p=''
+  case $p in
+    ssh | git) printf 'ssh\n' ;;
+    *) printf 'https\n' ;;
+  esac
 }
 
-# hub::git_url OWNER/REPO [HOST] [PROTOCOL] : clone URL for a project.
+# hub::git_url OWNER/REPO [HOST] [PROTOCOL] : clone URL for a project. On *.ghe.com hosts the SSH user is the tenant, as in gh.
 hub::git_url() {
-  local proj=$1 host=${2:-} proto=${3:-}
+  local proj=$1 host=${2:-} proto=${3:-} user=git
   [[ -n $host ]] || host=$(hub::host)
   [[ -n $proto ]] || proto=$(hub::protocol "$host")
   case $proto in
-    ssh | git) printf 'git@%s:%s.git\n' "$host" "$proj" ;;
+    ssh | git)
+      [[ ${host,,} == *.ghe.com ]] && user=${host%%.*}
+      printf '%s@%s:%s.git\n' "$user" "$host" "$proj"
+      ;;
     *) printf 'https://%s/%s.git\n' "$host" "$proj" ;;
   esac
 }
@@ -423,14 +459,16 @@ hub::split_message() {
   HUB_MSG_BODY=$body
 }
 
-# hub::open_url URL : open in the browser ($BROWSER, else open/xdg-open). Printed under --noop.
+# hub::open_url URL : open in the browser (GH_BROWSER, BROWSER, else open/xdg-open). Printed under --noop.
 hub::open_url() {
   local url=$1
   if ((HUB_NOOP)); then
     hub::quote open "$url"
     return 0
   fi
-  if [[ -n ${BROWSER:-} ]]; then
+  if [[ -n ${GH_BROWSER:-} ]]; then
+    eval "$GH_BROWSER \"\$url\""
+  elif [[ -n ${BROWSER:-} ]]; then
     eval "$BROWSER \"\$url\""
   elif command -v open >/dev/null 2>&1; then
     open "$url"

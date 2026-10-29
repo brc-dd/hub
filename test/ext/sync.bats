@@ -22,19 +22,19 @@ make_sync_fixture() {
   git push -q origin --all
 
   git clone -q "$HUB_TEST_TMP/upstream.git" "$HUB_TEST_TMP/work"
-  cd "$HUB_TEST_TMP/work"
+  cd "$HUB_TEST_TMP/work" || return 1
   for b in ahead behind diverged merged unmerged uptodate; do git branch -q --track "$b" "origin/$b"; done
   git branch -q --no-track same-name origin/same-name
   git branch -q local-only
   commit_on ahead "local work"
   commit_on diverged "local work"
 
-  cd "$HUB_TEST_TMP/seed"
+  cd "$HUB_TEST_TMP/seed" || return 1
   for b in main behind diverged same-name; do commit_on "$b" "upstream work"; done
   git merge -q --no-ff -m "Merge branch 'merged'" merged
   git push -q origin main behind diverged same-name
   git push -q origin --delete merged unmerged
-  cd "$HUB_TEST_TMP/work"
+  cd "$HUB_TEST_TMP/work" || return 1
 }
 
 # tip BRANCH : the commit BRANCH points at.
@@ -64,7 +64,7 @@ warning: 'unmerged' was deleted on origin, but appears not merged into 'main'"
   [[ $(tip local-only) == "$local_only" ]]
   [[ $(git symbolic-ref --short HEAD) == main && -z $(git status --porcelain) ]]
   # Tracking configuration is left as it was.
-  [[ $(git rev-parse --abbrev-ref behind@{upstream}) == origin/behind ]]
+  [[ $(git rev-parse --abbrev-ref 'behind@{upstream}') == origin/behind ]]
   [[ -z $(git config branch.same-name.merge) ]]
   assert_gh_not_called
 }
@@ -79,6 +79,41 @@ warning: 'unmerged' was deleted on origin, but appears not merged into 'main'"
   [[ $(git symbolic-ref --short HEAD) == main ]]
   [[ $(tip main) == $(git rev-parse refs/remotes/origin/main) ]]
   [[ -z $(tip merged) ]]
+}
+
+@test "sync goes on past branches git cannot update or delete, and then fails" {
+  make_sync_fixture
+  git worktree add -q "$HUB_TEST_TMP/wt-behind" behind
+  git worktree add -q "$HUB_TEST_TMP/wt-merged" merged
+  local behind merged
+  behind=$(tip behind) merged=$(tip merged)
+  run hub sync origin
+  assert_failure
+  assert_output_contains "error: could not fast-forward 'behind' to origin/behind"
+  assert_output_contains "error: could not delete 'merged'"
+  # The other branches are still dealt with.
+  assert_output_contains "warning: 'ahead' seems to contain unpushed commits"
+  assert_output_contains "Updated branch main (was "
+  assert_output_contains "Updated branch same-name (was "
+  assert_output_contains "warning: 'unmerged' was deleted on origin, but appears not merged into 'main'"
+  local b
+  for b in main same-name; do
+    [[ $(tip "$b") == $(git rev-parse "refs/remotes/origin/$b") ]]
+  done
+  [[ $(tip behind) == "$behind" && $(tip merged) == "$merged" ]]
+}
+
+@test "sync fails when it cannot check out the default branch to delete the current one" {
+  make_sync_fixture
+  git checkout -q merged
+  git worktree add -q "$HUB_TEST_TMP/wt-main" main
+  run hub sync origin
+  assert_failure
+  assert_output_contains "error: could not fast-forward 'main' to origin/main"
+  assert_output_contains "error: could not check out 'main' to delete 'merged'"
+  assert_output_contains "Updated branch behind (was "
+  [[ $(tip behind) == $(git rev-parse refs/remotes/origin/behind) ]]
+  [[ $(git symbolic-ref --short HEAD) == merged && -n $(tip merged) ]]
 }
 
 @test "sync --noop prints the commands that would change branches and changes nothing" {

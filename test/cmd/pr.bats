@@ -38,7 +38,25 @@ load ../test_helper
   assert_output_equals "gh pr view --json url --jq .url"
   run hub --noop pr show --url 12 -R cli/cli
   assert_success
-  assert_output_equals "gh pr view 12 -R cli/cli --json url --jq .url"
+  assert_output_equals "gh pr view --json url --jq .url 12 -R cli/cli"
+}
+
+@test "pr show -u puts gh's flags ahead of --" {
+  run hub --noop pr show -u -- 123
+  assert_success
+  assert_output_equals "gh pr view --json url --jq .url -- 123"
+  run hub --noop pr show -- -u
+  assert_success
+  assert_output_equals "gh pr view -- -u"
+}
+
+@test "pr show leaves the values of gh's options alone" {
+  run hub --noop pr show 1 --json title --template -u
+  assert_success
+  assert_output_equals "gh pr view 1 --json title --template -u"
+  run hub --noop pr show 1 -q -u -t --url -R -u
+  assert_success
+  assert_output_equals "gh pr view 1 -q -u -t --url -R -u"
 }
 
 @test "pr show keeps gh's own options, such as -c for comments" {
@@ -124,9 +142,9 @@ load ../test_helper
 
 @test "pr without --noop hands over to gh" {
   make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
-  stub_gh 'pr view 12 --json url --jq .url' 'https://github.com/mislav/dotfiles/pull/12'
+  stub_gh 'pr view --json url --jq .url 12' 'https://github.com/mislav/dotfiles/pull/12'
   run hub pr show -u 12
   assert_success
   assert_output_equals "https://github.com/mislav/dotfiles/pull/12"
-  assert_gh_called 'pr view 12 --json url --jq .url'
+  assert_gh_called 'pr view --json url --jq .url 12'
 }

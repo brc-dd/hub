@@ -9,6 +9,9 @@
 # all of its commits; a commit URL gives just that commit. Other arguments go
 # to git am unchanged, and without any URL this is plain `git am`.
 #
+# A URL that is the value of an option (as in --exclude URL) or that comes
+# after `--` is left as it is.
+#
 #   $ hub am -3 https://github.com/jingweno/gh/pull/55
 #   > gh pr diff https://github.com/jingweno/gh/pull/55 --patch --color=never > $TMPDIR/hub-am.XXXXXX/1.patch
 #   > git am -3 $TMPDIR/hub-am.XXXXXX/1.patch
@@ -23,14 +26,22 @@ hub_ext_am() {
 
 # _hub_am_run GIT-COMMAND patch|diff ARGS... : run `git GIT-COMMAND ARGS...` with each GitHub pull
 # request or commit URL in ARGS replaced by a file holding its patch (or diff), downloaded with gh
-# into a temporary directory that is removed on exit. Under --noop the downloads are printed too.
-# Shared with apply.sh.
+# into a temporary directory that is removed on exit. Option values and the arguments after `--`
+# are left alone. Under --noop the downloads are printed too. Shared with apply.sh.
 _hub_am_run() {
-  local cmd=$1 media=$2 i n=0 tmp base
+  local cmd=$1 media=$2 i n=0 tmp base value=0
   shift 2
   local -a args=("$@") urls=()
   for i in "${!args[@]}"; do
+    if ((value)); then
+      value=0
+      continue
+    fi
     case ${args[i]} in
+      --) break ;; # file names follow, whatever they look like
+      # git am and git apply options whose value is the next argument. Attached values (-p1,
+      # --exclude=PATH) need no skipping, and -S/--gpg-sign only ever take an attached one.
+      --exclude | --include | --directory | --whitespace | -p | -C | --build-fake-ancestor | --patch-format | --quoted-cr | --empty | --resolvemsg) value=1 ;;
       http://* | https://*) _hub_am_parse "${args[i]}" && urls+=("$i") ;;
     esac
   done

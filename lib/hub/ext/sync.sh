@@ -14,7 +14,10 @@
 #   ahead or diverged         left alone, with a warning
 #   deleted but not merged    left alone, with a warning
 #
-# Local commits are never discarded. This is plain git; gh is not used.
+# Local commits are never discarded. When git cannot update, check out or
+# delete a branch (one checked out in another worktree, say), sync says which,
+# carries on with the other branches and exits non-zero at the end. This is
+# plain git; gh is not used.
 
 hub_ext_sync() {
   [[ ${1-} == --help ]] && hub::usage
@@ -33,16 +36,23 @@ hub_ext_sync() {
   current=$(hub::git_query symbolic-ref -q HEAD)
   current=${current#refs/heads/}
 
-  local branch upremote upstream track tip short up_tip
+  local branch upremote upstream track tip short up_tip failed=0
   while IFS=$'\x1f' read -r -u 3 branch upremote upstream track tip short; do
     if [[ $upremote == "$remote" && $track == gone && $branch != "$default" ]]; then
       # The upstream branch was deleted: drop the local one if REMOTE's default branch has all of it.
       if [[ -n $default ]] && hub::git_query merge-base --is-ancestor "$tip" "refs/remotes/$remote/$default"; then
         if [[ $branch == "$current" ]]; then
-          hub::git checkout --quiet "$default" || continue
+          if ! hub::git checkout --quiet "$default"; then
+            hub::warn "error: could not check out '$default' to delete '$branch'"
+            failed=1
+            continue
+          fi
           current=$default
         fi
-        hub::git branch -D "$branch"
+        hub::git branch -D "$branch" || {
+          hub::warn "error: could not delete '$branch'"
+          failed=1
+        }
       else
         hub::warn "warning: '$branch' was deleted on $remote, but appears not merged into '${default:-$remote/HEAD}'"
       fi
@@ -58,7 +68,11 @@ hub_ext_sync() {
         hub::git merge --ff-only --quiet "$upstream"
       else
         hub::git branch --force --no-track "$branch" "$upstream"
-      fi || continue
+      fi || {
+        hub::warn "error: could not fast-forward '$branch' to ${upstream#refs/remotes/}"
+        failed=1
+        continue
+      }
       ((HUB_NOOP)) || printf 'Updated branch %s (was %s).\n' "$branch" "$short"
     else
       hub::warn "warning: '$branch' seems to contain unpushed commits"
@@ -66,6 +80,7 @@ hub_ext_sync() {
   done 3< <(hub::git_query for-each-ref \
     --format='%(refname:lstrip=2)%1f%(upstream:remotename)%1f%(upstream)%1f%(upstream:track,nobracket)%1f%(objectname)%1f%(objectname:short)' \
     refs/heads)
+  ((failed == 0)) || exit 1
 }
 
 # _hub_sync_default_branch REMOTE : REMOTE's default branch, from REMOTE/HEAD, else main or master if REMOTE has one.

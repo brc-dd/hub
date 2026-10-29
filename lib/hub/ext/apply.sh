@@ -7,7 +7,8 @@
 # as a diff into a temporary file, and `git apply` gets that file in its
 # place. A pull request gives its combined diff, as on its "Files changed" tab.
 # Other arguments go to git apply unchanged, and without any URL this is plain
-# `git apply`. To make commits instead, see `hub am`.
+# `git apply`. A URL that is the value of an option (as in --exclude URL) or
+# that comes after `--` is left as it is. To make commits instead, see `hub am`.
 #
 #   $ hub apply https://github.com/jingweno/gh/pull/55
 #   > gh pr diff https://github.com/jingweno/gh/pull/55 --color=never > $TMPDIR/hub-apply.XXXXXX/1.diff

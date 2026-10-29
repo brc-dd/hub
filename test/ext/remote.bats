@@ -26,6 +26,62 @@ load ../test_helper
   assert_output_equals "git remote add work https://github.com/alice/dotfiles.git"
 }
 
+@test "remote add origin, alone, adds your own copy of the current repository" {
+  make_repo dotfiles upstream=https://github.com/mislav/dotfiles.git
+  stub_gh 'config get user -h github.com' 'alice'
+  run hub --noop remote add origin
+  assert_success
+  assert_output_equals "git remote add origin https://github.com/alice/dotfiles.git"
+  assert_gh_called 'config get user -h github.com'
+  run hub --noop remote add -p -f -t main origin
+  assert_success
+  assert_output_equals "git remote add -f -t main origin git@github.com:alice/dotfiles.git"
+}
+
+@test "remote add origin in a new repository uses the directory name, and adds the remote" {
+  make_repo "my project"
+  stub_gh 'config get user -h github.com' 'alice'
+  run hub --noop remote add origin
+  assert_success
+  assert_output_equals "git remote add origin https://github.com/alice/my-project.git"
+  run hub remote add origin
+  assert_success
+  [[ $(git config remote.origin.url) == https://github.com/alice/my-project.git ]]
+}
+
+@test "remote add origin OWNER[/REPO] keeps its explicit meaning" {
+  make_repo dotfiles upstream=https://github.com/mislav/dotfiles.git
+  stub_gh 'config get user -h github.com' 'alice'
+  run hub --noop remote add origin bob
+  assert_success
+  assert_output_equals "git remote add origin https://github.com/bob/dotfiles.git"
+  run hub --noop remote add origin someone/repo
+  assert_success
+  assert_output_equals "git remote add origin https://github.com/someone/repo.git"
+  run hub --noop remote add origin/dots
+  assert_success
+  assert_output_equals "git remote add origin https://github.com/origin/dots.git"
+  [[ $(gh_calls) != *"config get user"* ]]
+}
+
+@test "remote add origin uses your login on the project's host" {
+  git config --global hub.host ghe.example.com
+  make_repo tool upstream=git@ghe.example.com:tools/tool.git
+  stub_gh 'config get user -h ghe.example.com' 'alice-ghe'
+  run hub --noop remote add origin
+  assert_success
+  assert_output_equals "git remote add origin https://ghe.example.com/alice-ghe/tool.git"
+}
+
+@test "remote add origin aborts when gh does not know your login" {
+  make_repo dotfiles upstream=https://github.com/mislav/dotfiles.git
+  stub_gh 'config get user -h github.com' '' 1
+  stub_gh 'api --hostname github.com user -q .login' '' 1
+  run hub --noop remote add origin
+  assert_failure
+  assert_output_equals "Aborted: could not determine your GitHub login for github.com; run 'gh auth login'"
+}
+
 @test "a .git suffix is not doubled" {
   make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
   run hub --noop remote add alice/dots.git
@@ -170,7 +226,7 @@ load ../test_helper
   mkdir backup
   local url
   for url in https://github.com/alice/dotfiles.git git@github.com:alice/dotfiles.git \
-             ssh://git@example.com/alice/dotfiles host:alice/dotfiles ../other.git /srv/repo.git backup; do
+    ssh://git@example.com/alice/dotfiles host:alice/dotfiles ../other.git /srv/repo.git backup; do
     run hub --noop remote add other "$url"
     assert_success
     assert_output_equals "git remote add other $url"

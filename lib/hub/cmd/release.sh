@@ -13,9 +13,17 @@
 # and, for create and edit, hub's options:
 #
 #   -a, --attach FILE[#LABEL]       Upload FILE as an asset; repeat for more.
-#                                   create passes them to gh as asset arguments;
-#                                   edit uploads them afterwards with
-#                                   gh release upload TAG FILE... --clobber.
+#                                   create passes them to gh as asset arguments.
+#                                   edit makes its other changes first, then runs
+#                                   gh release upload TAG FILE..., which refuses
+#                                   to replace an existing asset of the same name
+#                                   unless you pass --clobber. Before running gh,
+#                                   hub checks that every FILE can be read.
+#                                   Without a #LABEL, FILE may be a quoted glob
+#                                   pattern, which gh expands.
+#   --clobber                       For edit -a: replace assets of the same name.
+#                                   gh deletes the old asset before uploading the
+#                                   new one, so a failed upload loses it.
 #   -m, --message MESSAGE           The first paragraph is the title and the rest
 #                                   the notes (gh --title/--notes). Repeat -m to
 #                                   add paragraphs. create sends empty notes when
@@ -35,7 +43,7 @@
 #   $ hub release create -d -m "v1.2.0" -a dist/app.tgz -a "dist/app.zip#Archive" v1.2.0
 #   > gh release create -d --title v1.2.0 --notes "" v1.2.0 dist/app.tgz "dist/app.zip#Archive"
 #
-#   $ hub release edit v1.2.0 -m "Version 1.2" -a dist/app.tgz
+#   $ hub release edit v1.2.0 -m "Version 1.2" -a dist/app.tgz --clobber
 #   > gh release edit v1.2.0 --title "Version 1.2"
 #   > gh release upload v1.2.0 dist/app.tgz --clobber
 
@@ -118,6 +126,7 @@ _hub_release_create() {
   if ((${#assets[@]} && ! positionals)); then # gh would take the first file for the tag
     hub::die "Usage: hub release create TAG [-a FILE]... [gh release create options]"
   fi
+  _hub_release_check_assets "${assets[@]}"
   if ((at >= 0)); then
     _hub_release_message "$file" "${messages[@]}"
     title=(--title "$HUB_MSG_TITLE")
@@ -128,9 +137,10 @@ _hub_release_create() {
 }
 
 # _hub_release_edit ARGS... : gh release edit with hub's -m, -F, -t, -d and -p; then
-# gh release upload --clobber for the -a files (alone, when nothing else is edited).
+# gh release upload for the -a files (alone, when nothing else is edited), with
+# --clobber only if it was given. The files are checked before anything runs.
 _hub_release_edit() {
-  local -a args=() assets=() messages=() title=() repo=()
+  local -a args=() assets=() messages=() title=() repo=() clobber=()
   local opt val n file='' at=-1 tag='' new_tag='' edits=0
   while (($#)); do
     opt=$1 val='' n=1
@@ -151,6 +161,7 @@ _hub_release_edit() {
     case $opt in
       -h | --help) hub::usage ;;
       -a | --attach) assets+=("$val") ;;
+      --clobber) clobber=("$1") ;;
       -m | --message)
         messages+=("$val")
         ((at >= 0)) || at=${#args[@]}
@@ -191,6 +202,12 @@ _hub_release_edit() {
     esac
     shift "$n"
   done
+  if ((${#assets[@]})); then
+    [[ -n $tag ]] || hub::die "Usage: hub release edit TAG [-a FILE]... [--clobber] [gh release edit options]"
+    _hub_release_check_assets "${assets[@]}"
+  elif ((${#clobber[@]})); then
+    hub::die "Aborted: --clobber only goes with -a FILE."
+  fi
   if ((at >= 0)); then
     _hub_release_message "$file" "${messages[@]}"
     [[ -z $HUB_MSG_TITLE ]] || title+=(--title "$HUB_MSG_TITLE")
@@ -199,11 +216,38 @@ _hub_release_edit() {
     args=("${args[@]:0:at}" "${title[@]}" "${args[@]:at}")
   fi
   ((${#assets[@]})) || hub::exec_gh release edit "${args[@]}"
-  [[ -n $tag ]] || hub::die "Usage: hub release edit TAG [-a FILE]... [gh release edit options]"
   if ((edits)); then
     hub::gh release edit "${args[@]}" || exit
   fi
-  hub::exec_gh release upload "${new_tag:-$tag}" "${assets[@]}" --clobber "${repo[@]}"
+  hub::exec_gh release upload "${new_tag:-$tag}" "${assets[@]}" "${clobber[@]}" "${repo[@]}"
+}
+
+# _hub_release_check_assets ASSET... : die, naming them, unless all the files the -a
+# ASSETs refer to can be read. As gh does, FILE#LABEL splits at the first '#' (not a
+# leading one) and FILE is taken literally; an ASSET without '#' is a glob pattern,
+# which must match (dotfiles too, as gh's matching includes them).
+_hub_release_check_assets() {
+  local asset file list=''
+  local -a files=()
+  for asset; do
+    if [[ $asset == *'#'* ]]; then
+      file=${asset%%#*}
+      files=("${file:-$asset}")
+    else
+      # The pattern's matches, one per line (none if nothing matches). With IFS
+      # empty, the unquoted $asset is only glob-expanded, never split.
+      # shellcheck disable=SC2086
+      mapfile -t files < <(shopt -s nullglob dotglob && IFS='' && set -- $asset && (($#)) && printf '%s\n' "$@")
+      if ((${#files[@]} == 0)); then # gh fails on a pattern that matches nothing
+        list+="${list:+, }$(hub::quote "$asset")"
+        continue
+      fi
+    fi
+    for file in "${files[@]}"; do
+      [[ -f $file && -r $file ]] || list+="${list:+, }$(hub::quote "$file")"
+    done
+  done
+  [[ -z $list ]] || hub::die "Aborted: cannot read $list"
 }
 
 # _hub_release_download ARGS... : gh release download, with hub's -i/--include GLOB as -p GLOB.

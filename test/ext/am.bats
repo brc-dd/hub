@@ -87,6 +87,49 @@ gh api repos/mislav/dotfiles/commits/$SHA $ACCEPT > TMP/2.patch
 git am --signoff local.patch TMP/1.patch -3 TMP/2.patch"
 }
 
+@test "am never takes the value of an option for a URL" {
+  use_tmpdir
+  run hub --noop am --exclude "$PR" local.patch
+  assert_success
+  assert_output_equals "git am --exclude $PR local.patch"
+  local opt
+  for opt in --include --directory --whitespace -p -C --patch-format --quoted-cr --empty --resolvemsg; do
+    run hub --noop am "$opt" "$PR" local.patch
+    assert_success
+    assert_output_equals "git am $opt $PR local.patch"
+  done
+  run hub --noop am --exclude "$PR" "https://github.com/mislav/dotfiles/commit/$SHA"
+  assert_success
+  untmp
+  assert_output_equals "gh api repos/mislav/dotfiles/commits/$SHA $ACCEPT > TMP/1.patch
+git am --exclude $PR TMP/1.patch"
+  assert_tmp_cleaned
+}
+
+@test "am still downloads a URL after an attached option value or -S" {
+  use_tmpdir
+  run hub --noop am --directory=x -p1 "$PR"
+  assert_success
+  untmp
+  assert_output_equals "gh pr diff $PR --patch --color=never > TMP/1.patch
+git am --directory=x -p1 TMP/1.patch"
+  run hub --noop am -S "$PR"
+  assert_success
+  untmp
+  assert_line_equals 1 "git am -S TMP/1.patch"
+  run hub --noop am --gpg-sign "$PR"
+  assert_success
+  untmp
+  assert_line_equals 1 "git am --gpg-sign TMP/1.patch"
+}
+
+@test "am leaves the arguments after -- alone" {
+  run hub --noop am -3 -- "$PR"
+  assert_success
+  assert_output_equals "git am -3 -- $PR"
+  assert_gh_not_called
+}
+
 @test "am without a GitHub pull request or commit URL is plain git am" {
   run hub --noop am file.patch
   assert_success

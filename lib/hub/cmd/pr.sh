@@ -46,6 +46,14 @@ _hub_pr_show() {
     shift
     case $arg in
       -u | --url) url=1 ;;
+      --json | -q | --jq | -t | --template | -R | --repo)
+        # gh's options that take a value: the value is gh's, even if it reads -u.
+        args+=("$arg")
+        if (($#)); then
+          args+=("$1")
+          shift
+        fi
+        ;;
       --)
         args+=(-- "$@")
         break
@@ -53,7 +61,8 @@ _hub_pr_show() {
       *) args+=("$arg") ;;
     esac
   done
-  ((url)) && args+=(--json url --jq .url)
+  # hub's flags go right after the subcommand, ahead of any "--".
+  ((url)) && args=(--json url --jq .url "${args[@]}")
   hub::exec_gh pr view "${args[@]}"
 }
 

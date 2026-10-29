@@ -3,8 +3,10 @@
 # Usage: hub delete [-y] [OWNER/]NAME
 #
 # Deletes the GitHub repository OWNER/NAME with `gh repo delete`; a bare NAME
-# means your own repository. gh asks you to type the repository name to
-# confirm unless -y is given. Local clones and remotes are not touched.
+# means your own repository, and HOST/OWNER/NAME names the host (otherwise it
+# is gh's default host: GH_HOST, which hub sets from old hub's GITHUB_HOST).
+# gh asks you to type the repository name to confirm unless -y is given.
+# Local clones and remotes are not touched.
 #
 # Deleting needs the delete_repo scope, which `gh auth login` does not ask
 # for. Grant it once with:

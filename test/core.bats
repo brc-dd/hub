@@ -6,7 +6,7 @@ setup() {
   export HUB_ROOT=$HUB_TEST_ROOT
   HUB_TEST_TMP=$(mktemp -d "${BATS_TEST_TMPDIR:-${TMPDIR:-/tmp}}/hub-test.XXXXXX"); export HUB_TEST_TMP
   export HOME=$HUB_TEST_TMP/home; mkdir -p "$HOME"
-  export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=$HUB_TEST_TMP/gitconfig
+  export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=$HUB_TEST_TMP/gitconfig GH_CONFIG_DIR=$HUB_TEST_TMP/gh
   export PATH=$HUB_TEST_ROOT/test/stubs:$PATH
   export HUB_TEST_LOG=$HUB_TEST_TMP/gh.log HUB_TEST_GH_STUBS=$HUB_TEST_TMP/gh.stubs
   : >"$HUB_TEST_LOG"; : >"$HUB_TEST_GH_STUBS"
@@ -160,4 +160,52 @@ setup() {
   HUB_NOOP=0
   hub::git tag v1 >/dev/null
   [[ $(git tag) == v1 ]]
+}
+
+@test "HUB_PROTOCOL wins over hub.protocol and gh's setting" {
+  make_repo r
+  git config --global hub.protocol https
+  [[ $(HUB_PROTOCOL=ssh hub::git_url mislav/hub) == git@github.com:mislav/hub.git ]]
+  [[ $(HUB_PROTOCOL=https hub::git_url mislav/hub) == https://github.com/mislav/hub.git ]]
+  [[ $(HUB_PROTOCOL=git hub::git_url mislav/hub) == git@github.com:mislav/hub.git ]]
+}
+
+@test "GitHub Enterprise Cloud SSH URLs use the tenant as the user" {
+  [[ $(hub::git_url org/repo tenant.ghe.com ssh) == tenant@tenant.ghe.com:org/repo.git ]]
+  [[ $(hub::git_url org/repo ghe.example.com ssh) == git@ghe.example.com:org/repo.git ]]
+  [[ $(hub::git_url org/repo tenant.ghe.com https) == https://tenant.ghe.com/org/repo.git ]]
+}
+
+@test "GITHUB_HOST is passed on to gh as GH_HOST" {
+  run env -u GH_HOST GITHUB_HOST=ghe.example.com bash -c 'source "$HUB_TEST_ROOT/lib/hub/core.sh"; printf "%s\n" "$GH_HOST"'
+  [[ $output == ghe.example.com ]]
+  run env GH_HOST=other.example.com GITHUB_HOST=ghe.example.com bash -c 'source "$HUB_TEST_ROOT/lib/hub/core.sh"; printf "%s\n" "$GH_HOST"'
+  [[ $output == other.example.com ]]
+}
+
+@test "default_branch asks gh about the remote's own host" {
+  make_repo r origin=https://ghe.example.com/org/r.git
+  git config --global --add hub.host ghe.example.com
+  stub_gh 'repo view ghe.example.com/org/r --json defaultBranchRef *' 'develop'
+  [[ $(hub::default_branch) == develop ]]
+  hub::default_branch >/dev/null
+  [[ $HUB_PROJECT_HOST == ghe.example.com ]]
+}
+
+@test "open_url prefers GH_BROWSER over BROWSER" {
+  [[ $(GH_BROWSER='echo gh-browser' BROWSER='echo browser' hub::open_url https://example.test) == "gh-browser https://example.test" ]]
+  [[ $(BROWSER='echo browser' hub::open_url https://example.test) == "browser https://example.test" ]]
+}
+
+@test "host follows gh's default: the only logged-in host, else github.com" {
+  [[ $(hub::host) == github.com ]]
+  mkdir -p "$GH_CONFIG_DIR"
+  printf 'ghe.example.com:\n    user: me\n    git_protocol: ssh\n' >"$GH_CONFIG_DIR/hosts.yml"
+  unset HUB_DEFAULT_HOST
+  [[ $(hub::host) == ghe.example.com ]]
+  [[ $(hub::git_url org/repo) == https://ghe.example.com/org/repo.git ]]
+  printf 'github.com:\n    user: me\n' >>"$GH_CONFIG_DIR/hosts.yml"
+  unset HUB_DEFAULT_HOST
+  [[ $(hub::host) == github.com ]]
+  [[ $(GH_HOST=other.example.com hub::host) == other.example.com ]]
 }

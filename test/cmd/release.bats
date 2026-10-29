@@ -33,6 +33,7 @@ load ../test_helper
 }
 
 @test "release keeps -R given before the subcommand" {
+  touch a.tgz
   run hub --noop release -R mislav/dotfiles delete v1.0
   assert_success
   assert_output_equals "gh release delete -R mislav/dotfiles v1.0"
@@ -42,12 +43,14 @@ load ../test_helper
 }
 
 @test "release create turns -a files into asset arguments, keeping #labels" {
+  touch a.tgz b.zip
   run hub --noop release create v1.0 -a a.tgz -a 'b.zip#Label'
   assert_success
   assert_output_equals "gh release create v1.0 a.tgz b.zip#Label"
 }
 
 @test "release create accepts --attach, --attach= and -aFILE, before or after the tag" {
+  touch a.tgz b.zip c.txt
   run hub --noop release create --attach a.tgz --attach=b.zip -ac.txt v1.0 d.txt
   assert_success
   assert_output_equals "gh release create v1.0 d.txt a.tgz b.zip c.txt"
@@ -113,6 +116,7 @@ load ../test_helper
 }
 
 @test "release create puts --title/--notes where -m was" {
+  mkdir dist && touch dist/app.tgz dist/app.zip
   run hub --noop release create -d -m v1.2.0 -a dist/app.tgz -a 'dist/app.zip#Archive' v1.2.0
   assert_success
   assert_output_equals "gh release create -d --title v1.2.0 --notes '' v1.2.0 dist/app.tgz dist/app.zip#Archive"
@@ -143,25 +147,45 @@ load ../test_helper
   assert_output_equals "Aborted: -a needs a value."
 }
 
-@test "release edit -a uploads the files with gh release upload --clobber" {
+@test "release edit -a uploads the files with gh release upload, which won't replace assets" {
+  touch a.tgz b.zip
   run hub --noop release edit v1.0 -a a.tgz -a 'b.zip#Label'
   assert_success
-  assert_output_equals "gh release upload v1.0 a.tgz b.zip#Label --clobber"
+  assert_output_equals "gh release upload v1.0 a.tgz b.zip#Label"
+}
+
+@test "release edit -a replaces assets of the same name only with --clobber" {
+  touch a.tgz
+  run hub --noop release edit v1.0 -a a.tgz --clobber
+  assert_success
+  assert_output_equals "gh release upload v1.0 a.tgz --clobber"
+  run hub --noop release edit v1.0 --clobber=false -a a.tgz
+  assert_success
+  assert_output_equals "gh release upload v1.0 a.tgz --clobber=false"
+}
+
+@test "release edit --clobber without -a aborts" {
+  run hub release edit v1.0 -m "New title" --clobber
+  assert_failure
+  assert_output_equals "Aborted: --clobber only goes with -a FILE."
+  assert_gh_not_called
 }
 
 @test "release edit -a with other options edits first, with hub's -m and -t translated" {
+  touch a.tgz
   run hub --noop release edit v1.0 -m "New title" -t main -a a.tgz
   assert_success
-  assert_output_equals $'gh release edit v1.0 --title New\\ title --target main\ngh release upload v1.0 a.tgz --clobber'
+  assert_output_equals $'gh release edit v1.0 --title New\\ title --target main\ngh release upload v1.0 a.tgz'
 }
 
 @test "release edit -m leaves out an empty title or empty notes" {
   run hub --noop release edit v1.0 -m "New title"
   assert_success
   assert_output_equals "gh release edit v1.0 --title New\\ title"
+  touch a.tgz
   run hub --noop release edit v1.0 -m "" -a a.tgz
   assert_success
-  assert_output_equals "gh release upload v1.0 a.tgz --clobber"
+  assert_output_equals "gh release upload v1.0 a.tgz"
 }
 
 @test "release edit -F reads the title and notes from a file" {
@@ -187,12 +211,13 @@ load ../test_helper
 }
 
 @test "release edit gives -R to both edit and upload, and uploads to a --tag rename" {
-  run hub --noop release edit v1.0 -R mislav/dotfiles -m T -a a.tgz
+  touch a.tgz
+  run hub --noop release edit v1.0 -R mislav/dotfiles -m T -a a.tgz --clobber
   assert_success
   assert_output_equals $'gh release edit v1.0 -R mislav/dotfiles --title T\ngh release upload v1.0 a.tgz --clobber -R mislav/dotfiles'
   run hub --noop release edit v1.0 --tag v1.0.1 -a a.tgz
   assert_success
-  assert_output_equals $'gh release edit v1.0 --tag v1.0.1\ngh release upload v1.0.1 a.tgz --clobber'
+  assert_output_equals $'gh release edit v1.0 --tag v1.0.1\ngh release upload v1.0.1 a.tgz'
 }
 
 @test "release edit -a without a tag aborts" {
@@ -202,6 +227,7 @@ load ../test_helper
 }
 
 @test "release edit does not upload when the edit fails" {
+  touch a.tgz
   stub_gh 'release edit v1.0 --draft' 'release not found' 1
   stub_gh 'release upload *' ''
   run hub release edit v1.0 -d -a a.tgz
@@ -212,12 +238,66 @@ load ../test_helper
 }
 
 @test "release edit runs gh release edit, then gh release upload" {
+  touch a.tgz
   stub_gh 'release edit v1.0 *' 'https://github.com/mislav/dotfiles/releases/tag/v1.0'
-  stub_gh 'release upload v1.0 a.tgz --clobber' ''
+  stub_gh 'release upload v1.0 a.tgz' ''
   run hub release edit v1.0 -d -a a.tgz
   assert_success
   assert_output_equals "https://github.com/mislav/dotfiles/releases/tag/v1.0"
-  [[ $(gh_calls) == $'gh release edit v1.0 --draft\ngh release upload v1.0 a.tgz --clobber' ]]
+  [[ $(gh_calls) == $'gh release edit v1.0 --draft\ngh release upload v1.0 a.tgz' ]]
+}
+
+@test "release edit checks every -a file before running gh" {
+  touch a.tgz
+  mkdir adir
+  run hub --noop release edit v1.0 --title Changed -a /nonexistent
+  assert_failure
+  assert_output_equals "Aborted: cannot read /nonexistent"
+  run hub release edit v1.0 --title Changed -a a.tgz -a 'missing.zip#Label' -a adir -a 'two words.tgz'
+  assert_failure
+  assert_output_equals "Aborted: cannot read missing.zip, adir, two\\ words.tgz"
+  assert_gh_not_called
+}
+
+@test "release edit -a refuses an unreadable file" {
+  [[ $(id -u) != 0 ]] || skip "root can read any file"
+  touch secret.tgz
+  chmod 000 secret.tgz
+  run hub release edit v1.0 -d -a secret.tgz
+  assert_failure
+  assert_output_equals "Aborted: cannot read secret.tgz"
+  assert_gh_not_called
+}
+
+@test "release create checks every -a file before running gh" {
+  touch a.tgz
+  run hub --noop release create v1.0 -d -a missing.tgz
+  assert_failure
+  assert_output_equals "Aborted: cannot read missing.tgz"
+  run hub release create v1.0 -a a.tgz -a 'missing.zip#Label' -a /nonexistent/b.tgz
+  assert_failure
+  assert_output_equals "Aborted: cannot read missing.zip, /nonexistent/b.tgz"
+  assert_gh_not_called
+}
+
+@test "release -a splits FILE#LABEL at the first '#' unless it starts the name, as gh does" {
+  touch a.tgz '#odd.tgz'
+  run hub --noop release create v1.0 -a 'a.tgz#Label #1' -a 'a.tgz#' -a '#odd.tgz'
+  assert_success
+  assert_output_equals "gh release create v1.0 a.tgz#Label\\ #1 a.tgz# \\#odd.tgz"
+  run hub --noop release edit v1.0 -a '#odd.tgz#Label' # gh takes it all as the file name
+  assert_failure
+  assert_output_equals "Aborted: cannot read \\#odd.tgz#Label"
+}
+
+@test "release -a without a #LABEL may be a glob pattern for gh, which must match" {
+  mkdir dist && touch dist/a.tgz dist/b.tgz
+  run hub --noop release create v1.0 -a 'dist/*.tgz'
+  assert_success
+  assert_output_equals "gh release create v1.0 dist/\\*.tgz"
+  run hub --noop release edit v1.0 --title T -a 'dist/*.zip'
+  assert_failure
+  assert_output_equals "Aborted: cannot read dist/\\*.zip"
 }
 
 @test "release download -i becomes -p" {
@@ -250,6 +330,7 @@ load ../test_helper
   run hub --noop release create v1.0 -h
   assert_success
   assert_output_contains "-a, --attach FILE[#LABEL]"
+  assert_output_contains "--clobber"
   run hub --noop release edit v1.0 --help
   assert_success
   assert_output_contains "Usage: hub release"

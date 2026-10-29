@@ -1,6 +1,7 @@
 # shellcheck shell=bash
 # Summary: Add or change a remote using a GitHub OWNER[/REPO] name.
 # Usage: hub remote add [-p] [<git-remote-add options>] [NAME] OWNER[/REPO]
+#        hub remote add [-p] [<git-remote-add options>] origin
 #        hub remote set-url [-p] [--push | --add] NAME OWNER[/REPO] [OLDURL]
 #
 # Expands OWNER[/REPO] to a clone URL for `git remote add` or `git remote
@@ -9,15 +10,22 @@
 # github or origin remote), else to the name of the work tree's directory. NAME
 # defaults to OWNER.
 #
+# `hub remote add origin`, with origin as the only name, adds your own copy of
+# the current repository as origin: OWNER is your login on the project's host,
+# as gh knows it. With an OWNER[/REPO] after it, origin is just the NAME.
+#
 # The URL is on the current project's host (else GH_HOST, else github.com) and
-# uses SSH or HTTPS as `hub clone` does. Nothing is looked up on GitHub. URLs,
-# paths and the other `git remote` subcommands go to git untouched.
+# uses SSH or HTTPS as `hub clone` does. Nothing else is looked up on GitHub.
+# URLs, paths and the other `git remote` subcommands go to git untouched.
 #
 # Options:
 #   -p   Use SSH for the URL, whatever the configured protocol.
 #
 #   $ hub remote add jingweno
 #   > git remote add jingweno https://github.com/jingweno/REPO.git
+#
+#   $ hub remote add origin
+#   > git remote add origin https://github.com/YOUR-LOGIN/REPO.git
 #
 #   $ hub remote add -f upstream github/hub
 #   > git remote add -f upstream https://github.com/github/hub.git
@@ -62,11 +70,12 @@ hub_ext_remote() {
     fi
     args+=("$arg")
   done
-  local name spec url
+  local name spec url mine=0
   case $sub:${#pos[@]}:$delete in
     add:1:*)
       spec=${pos[0]}
       name=${spec%%/*}
+      [[ $spec == origin ]] && mine=1 # as in hub 2.x: your own copy, not a user named "origin"
       ;;
     add:2:* | set-url:[23]:0)
       name=${pos[0]}
@@ -75,7 +84,7 @@ hub_ext_remote() {
     *) hub::exec_git remote "$sub" "${args[@]}" ;;
   esac
   hub::is_shorthand "$spec" || hub::exec_git remote "$sub" "${args[@]}"
-  url=$(_hub_remote_url "$spec" "$proto") || exit 1
+  url=$(_hub_remote_url "$spec" "$proto" "$mine") || exit 1
   hub::exec_git remote "$sub" "${flags[@]}" "${sep[@]}" "$name" "$url" "${pos[@]:2}"
 }
 
@@ -91,11 +100,15 @@ _hub_remote_takes_value() {
   [[ $head != "$opts" ]] && ((${#head} + 1 == ${#opts}))
 }
 
-# _hub_remote_url OWNER[/REPO] [PROTOCOL] : clone URL on the current project's host;
-# a bare OWNER gets the current project's repository name.
+# _hub_remote_url OWNER[/REPO] [PROTOCOL] [MINE] : clone URL on the current project's host;
+# a bare OWNER gets the current project's repository name. MINE=1 means your own copy of the
+# current repository instead: your login on that host (dies if unknown) and its repository name.
 _hub_remote_url() {
   local spec=$1 host repo
   read -r host repo <<<"$(_hub_remote_project)"
+  if [[ ${3-} == 1 ]]; then
+    spec=$(hub::current_user "$host") || return 1
+  fi
   [[ $spec == */* ]] || spec=$spec/$repo
   [[ ${spec##*/} == ?*.git ]] && spec=${spec%.git}
   # GH_HOST makes hub::protocol read gh's git_protocol for this host.
