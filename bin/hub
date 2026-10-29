@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+# hub — git + GitHub, powered by gh.
+#
+# hub is a thin wrapper around git. It handles a small set of GitHub-aware
+# commands itself (delegating all API work to `gh`) and passes everything else
+# to the real git untouched, so it is safe to alias as git:
+#
+#     eval "$(hub alias -s)"
+#
+# Dispatch:
+#   hub <name> ...  with lib/hub/cmd/<name>.sh  -> gh-backed hub command
+#   hub <name> ...  with lib/hub/ext/<name>.sh  -> git command hub extends (module execs git)
+#   anything else                                -> exec git "$@"  (fast path: nothing is sourced)
+#
+# Global options understood before the command word:
+#   --noop            print the git/gh commands that would run instead of running them
+#   -C <path>, -c <key>=<value> and git's other global options are honoured and forwarded.
+
+if ((BASH_VERSINFO[0] < 5)); then
+  printf 'hub: bash 5 or newer is required, but this is bash %s.\n' "$BASH_VERSION" >&2
+  printf 'hub: on macOS, install it with Homebrew (brew install bash) and put it first in PATH.\n' >&2
+  exit 1
+fi
+
+set -o pipefail
+
+# Locate the installation, following symlinks (e.g. /opt/homebrew/bin/hub -> ../Cellar/...).
+hub_self=${BASH_SOURCE[0]}
+while [[ -L $hub_self ]]; do
+  hub_link=$(readlink "$hub_self")
+  if [[ $hub_link != /* ]]; then
+    hub_dir=${hub_self%/*}
+    [[ $hub_dir == "$hub_self" ]] && hub_dir=.
+    hub_link=$hub_dir/$hub_link
+  fi
+  hub_self=$hub_link
+done
+# dirname and "make absolute" without subshells: this code runs on every git invocation.
+hub_dir=${hub_self%/*}
+[[ $hub_dir == "$hub_self" ]] && hub_dir=.
+[[ $hub_dir == /* ]] || hub_dir=$PWD/$hub_dir
+hub_dir=${hub_dir//\/.\//\/}
+hub_dir=${hub_dir%/.}
+HUB_ROOT=${hub_dir%/*} # strip the trailing /bin
+HUB_LIB=${HUB_LIB:-$HUB_ROOT/lib/hub}
+export HUB_ROOT HUB_LIB
+
+HUB_NOOP=${HUB_NOOP:-0}
+HUB_GIT_OPTS=() # git global options to forward on every git invocation
+hub_cmd=
+
+# Separate git's global options from the command word.
+while (($#)); do
+  case $1 in
+    --noop)
+      HUB_NOOP=1
+      shift
+      ;;
+    --version | -v)
+      hub_cmd=version
+      shift
+      break
+      ;;
+    --help | -h)
+      hub_cmd=help
+      shift
+      break
+      ;;
+    -C)
+      (($# >= 2)) || break
+      cd -- "$2" || exit 1 # like `git -C`: later paths are relative to it
+      shift 2
+      ;;
+    -c)
+      (($# >= 2)) || break
+      hub_key=${2%%=*}
+      hub_val=${2#*=}
+      [[ $2 == *=* ]] || hub_val=true
+      export "GIT_CONFIG_KEY_${GIT_CONFIG_COUNT:-0}=$hub_key" "GIT_CONFIG_VALUE_${GIT_CONFIG_COUNT:-0}=$hub_val"
+      export GIT_CONFIG_COUNT=$((${GIT_CONFIG_COUNT:-0} + 1))
+      shift 2
+      ;;
+    --config-env | --git-dir | --work-tree | --namespace | --attr-source)
+      (($# >= 2)) || break
+      HUB_GIT_OPTS+=("$1" "$2")
+      shift 2
+      ;;
+    --config-env=* | --exec-path=* | --git-dir=* | --work-tree=* | --namespace=* | --attr-source=* | --list-cmds=*)
+      HUB_GIT_OPTS+=("$1")
+      shift
+      ;;
+    -p | --paginate | -P | --no-pager | --no-replace-objects | --no-lazy-fetch | --no-optional-locks | --no-advice | --bare | --literal-pathspecs | --glob-pathspecs | --noglob-pathspecs | --icase-pathspecs)
+      HUB_GIT_OPTS+=("$1")
+      shift
+      ;;
+    -*) break ;; # an option we don't know: let git deal with everything
+    *)
+      hub_cmd=$1
+      shift
+      break
+      ;;
+  esac
+done
+
+# No command word, or one we never intercept: hand off to git immediately.
+hub_kind=
+if [[ $hub_cmd =~ ^[a-z][a-z0-9-]*$ ]]; then
+  if [[ -f $HUB_LIB/cmd/$hub_cmd.sh ]]; then
+    hub_kind=cmd
+  elif [[ -f $HUB_LIB/ext/$hub_cmd.sh ]]; then
+    hub_kind=ext
+  fi
+fi
+if [[ -z $hub_kind ]]; then
+  if ((HUB_NOOP)); then
+    printf 'git'
+    printf ' %s' "${HUB_GIT_OPTS[@]}" ${hub_cmd:+"$hub_cmd"} "$@"
+    printf '\n'
+    exit 0
+  fi
+  exec git "${HUB_GIT_OPTS[@]}" ${hub_cmd:+"$hub_cmd"} "$@"
+fi
+
+# shellcheck source=lib/hub/core.sh
+source "$HUB_LIB/core.sh"
+hub::find_git
+# shellcheck source=/dev/null
+source "$HUB_LIB/$hub_kind/$hub_cmd.sh"
+hub_fn="hub_${hub_kind}_${hub_cmd//-/_}"
+declare -F "$hub_fn" >/dev/null || hub::die "hub: $HUB_LIB/$hub_kind/$hub_cmd.sh does not define $hub_fn()"
+"$hub_fn" "$@"

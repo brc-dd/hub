@@ -1,0 +1,5 @@
+# shellcheck configuration for hub (run `make lint`)
+shell=bash
+external-sources=true
+source-path=SCRIPTDIR
+source-path=lib/hub

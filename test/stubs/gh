@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# gh stand-in for hub's tests: records the call, then replays the most recently
+# registered matching response (see stub_gh in test/test_helper.bash).
+printf 'gh %s\n' "$*" >>"${HUB_TEST_LOG:?HUB_TEST_LOG not set}"
+args=$*
+mapfile -t stubs <"${HUB_TEST_GH_STUBS:?HUB_TEST_GH_STUBS not set}"
+for ((i = ${#stubs[@]} - 1; i >= 0; i--)); do
+  IFS=$'\x1f' read -r pattern stdout status <<<"${stubs[i]}"
+  # shellcheck disable=SC2053
+  if [[ $args == $pattern ]]; then
+    [[ -n $stdout ]] && printf '%b\n' "$stdout"
+    exit "${status:-0}"
+  fi
+done
+printf 'gh stub: unexpected call: gh %s\n' "$args" >&2
+exit 97

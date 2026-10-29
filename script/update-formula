@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# Usage: script/update-formula [--sha256 HEX] [--dry-run] vX.Y.Z
+#
+# Points Formula/hub.rb at the source tarball of tag vX.Y.Z: downloads
+# https://github.com/OWNER/REPO/archive/refs/tags/vX.Y.Z.tar.gz, computes its
+# SHA-256 and rewrites the formula's url and sha256 lines in place. Nothing else
+# in the file changes.
+#
+# OWNER/REPO comes from the origin remote when that is a GitHub URL, else from
+# $HUB_GITHUB_REPO, else it is brc-dd/hub. It has to match REPO in the formula.
+#
+# Options:
+#       --sha256 HEX   use this checksum instead of downloading the tarball
+#   -n, --dry-run      print the new url and sha256 lines instead of writing them
+#   -h, --help         show this help
+
+set -euo pipefail
+
+if ((BASH_VERSINFO[0] < 5)); then
+  printf 'script/update-formula: bash 5 or newer is required, but this is bash %s\n' "$BASH_VERSION" >&2
+  exit 1
+fi
+
+me=script/update-formula
+default_repo=brc-dd/hub # assumed GitHub slug of this project (REPO in Formula/hub.rb)
+formula=Formula/hub.rb
+semver_re='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$'
+
+usage() { awk 'NR > 1 { if (!/^#/) exit; sub(/^# ?/, ""); print }' "${BASH_SOURCE[0]}"; }
+die() {
+  printf '%s: %s\n' "$me" "$*" >&2
+  exit 1
+}
+usage_error() {
+  printf '%s: %s\nUsage: %s [--sha256 HEX] [--dry-run] vX.Y.Z (see --help)\n' "$me" "$1" "$me" >&2
+  exit 2
+}
+
+# github_slug URL : print OWNER/REPO for a github.com remote URL; fail for anything else
+github_slug() {
+  local url=${1%/}
+  local web='^(https?|ssh|git|git\+ssh)://([^/@]+@)?(www\.|ssh\.)?github\.com(:[0-9]+)?/([^/]+)/([^/]+)$'
+  local scp='^([^/@:]+@)?github\.com:/?([^/]+)/([^/]+)$'
+  if [[ $url =~ $web ]]; then
+    printf '%s/%s\n' "${BASH_REMATCH[5]}" "${BASH_REMATCH[6]%.git}"
+  elif [[ $url =~ $scp ]]; then
+    printf '%s/%s\n' "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]%.git}"
+  else
+    return 1
+  fi
+}
+
+# sha256_of FILE : print the file's SHA-256
+sha256_of() {
+  local sum
+  if command -v sha256sum >/dev/null 2>&1; then
+    sum=$(sha256sum "$1")
+  elif command -v shasum >/dev/null 2>&1; then
+    sum=$(shasum -a 256 "$1")
+  else
+    die "neither sha256sum nor shasum is installed"
+  fi
+  printf '%s\n' "${sum%% *}"
+}
+
+dry_run=0 sha256='' tag=''
+while (($#)); do
+  case $1 in
+    --sha256)
+      (($# >= 2)) || usage_error "--sha256 needs a value"
+      sha256=$2
+      shift
+      ;;
+    --sha256=*) sha256=${1#*=} ;;
+    -n | --dry-run) dry_run=1 ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    -*) usage_error "unknown option: $1" ;;
+    *)
+      [[ -z $tag ]] || usage_error "unexpected argument: $1"
+      tag=$1
+      ;;
+  esac
+  shift
+done
+[[ -n $tag ]] || usage_error "missing the tag (vX.Y.Z)"
+[[ ${tag#v} =~ $semver_re ]] || die "not a release tag (vX.Y.Z or vX.Y.Z-PRE): $tag"
+tag=v${tag#v}
+if [[ -n $sha256 ]]; then
+  sha256=${sha256,,}
+  [[ $sha256 =~ ^[0-9a-f]{64}$ ]] || die "not a SHA-256 (64 hex digits): $sha256"
+fi
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+[[ -f $formula ]] || die "$formula not found"
+
+if origin=$(git remote get-url origin 2>/dev/null) && repo=$(github_slug "$origin"); then
+  :
+elif [[ -n ${HUB_GITHUB_REPO:-} ]]; then
+  repo=$HUB_GITHUB_REPO
+else
+  repo=$default_repo
+fi
+[[ $repo =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "not a GitHub OWNER/REPO: $repo"
+
+# The formula spells its slug once, as REPO = "OWNER/REPO", and builds its URLs from it.
+formula_repo=$(awk -F'"' '/^[ \t]*REPO[ \t]*=/ { print $2; exit }' "$formula")
+if [[ -n $formula_repo ]]; then
+  [[ ${formula_repo,,} == "${repo,,}" ]] \
+    || die "$formula has REPO = \"$formula_repo\", but the release would come from $repo; fix REPO in $formula (or the origin remote / HUB_GITHUB_REPO)"
+  url="https://github.com/#{REPO}/archive/refs/tags/$tag.tar.gz"
+else
+  url="https://github.com/$repo/archive/refs/tags/$tag.tar.gz"
+fi
+
+tmp_root=${TMPDIR:-/tmp}
+tmpdir=$(mktemp -d "${tmp_root%/}/hub-update-formula.XXXXXX")
+trap 'rm -rf "$tmpdir"' EXIT
+
+if [[ -z $sha256 ]]; then
+  tarball_url="https://github.com/$repo/archive/refs/tags/$tag.tar.gz"
+  printf 'Downloading %s\n' "$tarball_url" >&2
+  curl -fsSL --retry 3 -o "$tmpdir/source.tar.gz" "$tarball_url" \
+    || die "could not download $tarball_url (has $tag been pushed to $repo?)"
+  sha256=$(sha256_of "$tmpdir/source.tar.gz")
+fi
+
+# Replace the quoted value on the first url line and on the first sha256 line (the
+# stable spec; head has no sha256) and keep everything else, indentation included.
+# With only_changed=1, print just those two lines. Exit status 3: a line is missing.
+rewrite() {
+  awk -v url="$url" -v sha256="$sha256" -v only_changed="$1" '
+    { changed = 0 }
+    !done_url && /^[ \t]*url[ \t]+"/ { sub(/"[^"]*"/, "\"" url "\""); done_url = changed = 1 }
+    !done_sha && /^[ \t]*sha256[ \t]+"/ { sub(/"[^"]*"/, "\"" sha256 "\""); done_sha = changed = 1 }
+    !only_changed || changed { print }
+    END { if (!done_url || !done_sha) exit 3 }
+  ' "$formula"
+}
+
+if ((dry_run)); then
+  rewrite 1 || die "$formula has no url or no sha256 line to update"
+  exit 0
+fi
+rewrite 0 >"$tmpdir/hub.rb" || die "$formula has no url or no sha256 line to update"
+if cmp -s "$tmpdir/hub.rb" "$formula"; then
+  printf '%s already points at %s\n' "$formula" "$tag"
+else
+  cat "$tmpdir/hub.rb" >"$formula"
+  printf 'Updated %s to %s (sha256 %s)\n' "$formula" "$tag" "$sha256"
+fi

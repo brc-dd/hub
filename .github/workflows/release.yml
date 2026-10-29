@@ -1,0 +1,95 @@
+name: Release
+
+# For every pushed vX.Y.Z tag: run the checks, publish the GitHub release (unless it exists)
+# and point Formula/hub.rb on main at the tag. script/release does the same locally; both
+# skip work that is already done, so whichever runs second has nothing left to do.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  check:
+    name: make check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env: # the same tool versions as ci.yml
+      BATS_VERSION: 1.14.0
+      SHELLCHECK_VERSION: 0.11.0
+      SHFMT_VERSION: 3.14.1
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: bats-core/bats-action@3.0.0
+        with:
+          bats-version: ${{ env.BATS_VERSION }}
+          support-install: false
+          assert-install: false
+          detik-install: false
+          file-install: false
+
+      - name: Install shellcheck ${{ env.SHELLCHECK_VERSION }} and shfmt ${{ env.SHFMT_VERSION }} (make check runs both)
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/v$SHELLCHECK_VERSION/shellcheck-v$SHELLCHECK_VERSION.linux.x86_64.tar.xz" |
+            tar -xJf - -C "$RUNNER_TEMP"
+          install "$RUNNER_TEMP/shellcheck-v$SHELLCHECK_VERSION/shellcheck" "$RUNNER_TEMP/bin/"
+          curl -fsSL -o "$RUNNER_TEMP/shfmt" "https://github.com/mvdan/sh/releases/download/v$SHFMT_VERSION/shfmt_v${SHFMT_VERSION}_linux_amd64"
+          install "$RUNNER_TEMP/shfmt" "$RUNNER_TEMP/bin/shfmt"
+          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+
+      - run: make check
+
+  release:
+    name: GitHub release and Homebrew formula
+    needs: check
+    # Not in forks: Formula/hub.rb points at the upstream repository.
+    if: ${{ !github.event.repository.fork }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # create the release; push the formula commit to main
+    # One at a time: runs for different tags would race to push Formula/hub.rb.
+    concurrency:
+      group: release-formula
+      cancel-in-progress: false
+    env:
+      TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Create the GitHub release
+        run: |
+          flags=()
+          if [[ $TAG == *-* ]]; then flags+=(--prerelease); fi
+          gh release view "$TAG" >/dev/null 2>&1 ||
+            gh release create "$TAG" --verify-tag --generate-notes --title "hub ${TAG#v}" "${flags[@]}"
+
+      - name: Point Formula/hub.rb on main at the tag
+        if: ${{ !contains(github.ref_name, '-') }} # pre-releases leave the formula alone
+        run: |
+          git checkout main
+          script/update-formula "$TAG"
+          if git diff --quiet -- Formula/hub.rb; then
+            echo "Formula/hub.rb already points at $TAG"
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m "Formula: hub $TAG" -- Formula/hub.rb
+          # Pushed with GITHUB_TOKEN, so this commit starts no further workflow runs.
+          git push origin main

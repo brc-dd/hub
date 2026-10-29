@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: make check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      BATS_VERSION: 1.14.0
+      SHELLCHECK_VERSION: 0.11.0
+      SHFMT_VERSION: 3.14.1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install bash 5 (macOS ships bash 3.2)
+        if: runner.os == 'macOS'
+        run: |
+          brew install bash
+          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+
+      - name: Install bats-core ${{ env.BATS_VERSION }} and shellcheck ${{ env.SHELLCHECK_VERSION }}
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          git clone --quiet --depth 1 --branch "v$BATS_VERSION" https://github.com/bats-core/bats-core.git "$RUNNER_TEMP/bats"
+          "$RUNNER_TEMP/bats/install.sh" "$HOME/.local"
+          case "$RUNNER_OS-$RUNNER_ARCH" in
+            Linux-X64) target=linux.x86_64 ;;
+            Linux-ARM64) target=linux.aarch64 ;;
+            macOS-X64) target=darwin.x86_64 ;;
+            macOS-ARM64) target=darwin.aarch64 ;;
+            *) echo "no shellcheck build for $RUNNER_OS-$RUNNER_ARCH" >&2; exit 1 ;;
+          esac
+          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/v$SHELLCHECK_VERSION/shellcheck-v$SHELLCHECK_VERSION.$target.tar.xz" |
+            tar -xJf - -C "$RUNNER_TEMP"
+          install "$RUNNER_TEMP/shellcheck-v$SHELLCHECK_VERSION/shellcheck" "$HOME/.local/bin/"
+
+      - name: Install shfmt ${{ env.SHFMT_VERSION }}
+        run: |
+          case "$RUNNER_OS-$RUNNER_ARCH" in
+            Linux-X64) target=linux_amd64 ;;
+            Linux-ARM64) target=linux_arm64 ;;
+            macOS-X64) target=darwin_amd64 ;;
+            macOS-ARM64) target=darwin_arm64 ;;
+            *) echo "no shfmt build for $RUNNER_OS-$RUNNER_ARCH" >&2; exit 1 ;;
+          esac
+          curl -fsSL -o "$RUNNER_TEMP/shfmt" "https://github.com/mvdan/sh/releases/download/v$SHFMT_VERSION/shfmt_v${SHFMT_VERSION}_$target"
+          install "$RUNNER_TEMP/shfmt" "$HOME/.local/bin/shfmt"
+
+      - name: Versions
+        run: |
+          bash --version | head -n 1
+          bats --version
+          shellcheck --version | sed -n 2p
+          shfmt --version
+          git --version
+
+      - run: make check
