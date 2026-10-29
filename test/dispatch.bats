@@ -91,3 +91,25 @@ load test_helper
   assert_success
   assert_output_equals "git status two\\ words \\*"
 }
+
+@test "-c and --config-env keep git's left-to-right precedence" {
+  make_repo r1
+  run env HUB_X=other "$HUB_BIN" --config-env=foo.bar=HUB_X -c foo.bar=command config foo.bar
+  assert_success
+  assert_output_equals "command"
+  run env HUB_X=other "$HUB_BIN" -c foo.bar=command --config-env foo.bar=HUB_X config foo.bar
+  assert_success
+  assert_output_equals "other"
+  run env HUB_X=other "$HUB_BIN" --config-env=foo.bar=HUB_X config foo.bar
+  assert_output_equals "other"
+}
+
+@test "--config-env with a missing variable fails like git" {
+  make_repo r1
+  run env -u HUB_MISSING "$HUB_BIN" --config-env=foo.bar=HUB_MISSING config foo.bar
+  assert_failure
+  assert_output_contains "missing environment variable HUB_MISSING"
+  run hub --config-env=nonsense config foo.bar
+  assert_failure
+  assert_output_contains "invalid config format"
+}

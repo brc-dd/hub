@@ -1,8 +1,9 @@
 name: Release
 
 # For every pushed vX.Y.Z tag: run the checks, publish the GitHub release (unless it exists)
-# and point Formula/hub.rb on main at the tag. script/release does the same locally; both
-# skip work that is already done, so whichever runs second has nothing left to do.
+# and point Formula/hub.rb on main at the tag. script/release, run locally, is the primary
+# publisher and usually gets there first; this workflow is the second one. Both skip work
+# that is already done, and whichever pushes a formula commit second rebases onto the other's.
 
 on:
   push:
@@ -10,6 +11,9 @@ on:
 
 permissions:
   contents: read
+
+# One run per tag at a time: a re-run or a re-pushed tag waits for the run in progress.
+concurrency: release-${{ github.ref }}
 
 defaults:
   run:
@@ -82,14 +86,26 @@ jobs:
       - name: Point Formula/hub.rb on main at the tag
         if: ${{ !contains(github.ref_name, '-') }} # pre-releases leave the formula alone
         run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git checkout main
+          # script/release usually pushes its formula commit while the checks run: start from it.
+          git pull --rebase origin main
           script/update-formula "$TAG"
           if git diff --quiet -- Formula/hub.rb; then
             echo "Formula/hub.rb already points at $TAG"
             exit 0
           fi
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m "Formula: hub $TAG" -- Formula/hub.rb
           # Pushed with GITHUB_TOKEN, so this commit starts no further workflow runs.
+          if git push origin main; then
+            exit 0
+          fi
+          # Rejected: main moved on meanwhile (script/release pushing the same change, say).
+          # Rebase onto it, which drops this commit if main already has it, and push once more.
+          git pull --rebase origin main
+          if [[ $(git rev-parse HEAD) == "$(git rev-parse origin/main)" ]]; then
+            echo "main already points Formula/hub.rb at $TAG"
+            exit 0
+          fi
           git push origin main

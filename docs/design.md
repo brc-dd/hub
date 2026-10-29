@@ -212,8 +212,9 @@ Helpers that two or more modules currently define privately and that belong in
   duplicated in browse, compare and pull-request.
 - `hub::remote_for_project OWNER/REPO HOST` — the local remote pointing at a
   project; duplicated in merge and cherry-pick.
-- `hub::gh_hostname_args HOST` — `--hostname HOST` only when it is not gh's
-  default; inlined in am, cherry-pick, ci-status and pull-request.
+- `hub::gh_hostname_args HOST` — `--hostname HOST`; inlined in am, cherry-pick,
+  ci-status and pull-request (the last two now always pass it, since gh's
+  default host can differ from the project's).
 - `hub::message FILE|MSG…` — join repeated `-m` values or read `-F FILE`, then
   `hub::split_message`; duplicated in issue, release and pull-request.
 - `hub::url_escape STR` — percent-encode a path segment; duplicated in browse

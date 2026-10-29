@@ -26,12 +26,14 @@
 #   hub issue update NUMBER... -s closed|open
 #                                   gh issue close|reopen NUMBER for each NUMBER
 #                                   in turn, with -c COMMENT. Closing also takes
-#                                   -r REASON and --duplicate-of; reopening
-#                                   doesn't, so -s open with them is an error.
-#                                   Any other options go to one gh issue edit
-#                                   first. hub checks everything before it runs
-#                                   gh, and stops at the first gh command that
-#                                   fails.
+#                                   -r REASON (completed, "not planned" or
+#                                   duplicate) and --duplicate-of ISSUE (a number
+#                                   or URL, with no -r or -r duplicate);
+#                                   reopening doesn't, so -s open with them is an
+#                                   error. Any other options go to one gh issue
+#                                   edit first. hub checks everything before it
+#                                   runs gh, and stops at the first gh command
+#                                   that fails.
 #
 # hub 2.x's update -l LABELS and -a USERS replaced the whole set; gh issue edit
 # has no such options and refuses them. Use --add-label and --remove-label
@@ -154,8 +156,8 @@ _hub_issue_message() {
 # -s/--state, the other options (if any) go to gh issue edit first, then gh issue
 # close or reopen runs once per NUMBER. Everything is checked before gh runs.
 _hub_issue_update() {
-  local -a numbers=() edit=() state_args=() repo=() messages=() title=()
-  local opt val n state='' has_state=0 file='' at=-1 close_only=''
+  local -a numbers=() edit=() state_args=() repo=() messages=() title=() reasons=() duplicates=()
+  local opt val n state='' has_state=0 file='' at=-1 close_only='' reason duplicate
   while (($#)); do
     opt=$1 val='' n=1
     case $1 in
@@ -186,8 +188,14 @@ _hub_issue_update() {
         ((at >= 0)) || at=${#edit[@]}
         ;;
       -c | --comment) state_args+=("${@:1:n}") ;;
-      -r | --reason | --duplicate-of)
+      -r | --reason)
         state_args+=("${@:1:n}")
+        reasons+=("$val")
+        close_only=$opt
+        ;;
+      --duplicate-of)
+        state_args+=("${@:1:n}")
+        duplicates+=("$val")
         close_only=$opt
         ;;
       -R | --repo) repo+=("${@:1:n}") ;;
@@ -205,6 +213,23 @@ _hub_issue_update() {
     esac
     [[ $sub == close || -z $close_only ]] \
       || hub::die "Aborted: $close_only only goes with -s closed; gh issue reopen has no such option."
+  fi
+  # gh issue close checks these itself, but only once gh issue edit has already run.
+  if [[ $sub == close ]]; then
+    for reason in "${reasons[@]}"; do
+      case $reason in
+        completed | 'not planned' | duplicate) ;;
+        *) hub::die "Aborted: --reason must be 'completed', 'not planned' or 'duplicate', not '$reason'." ;;
+      esac
+    done
+    local number_re='^#?[0-9]+$' url_re='^https?://[^/?#]+/[^/?#]+/[^/?#]+/(issues|pull)/[0-9]+([/?#].*)?$'
+    for duplicate in "${duplicates[@]}"; do
+      [[ $duplicate =~ $number_re || $duplicate =~ $url_re ]] \
+        || hub::die "Aborted: --duplicate-of must be an issue number or URL, not '$duplicate'."
+    done
+    if ((${#duplicates[@]} && ${#reasons[@]})) && [[ ${reasons[-1]} != duplicate ]]; then
+      hub::die "Aborted: --duplicate-of only goes with --reason duplicate, not with --reason '${reasons[-1]}'."
+    fi
   fi
   ((${#numbers[@]})) || hub::die "Usage: hub issue update NUMBER... [-s open|closed] [-m MESSAGE | -F FILE] [gh issue edit options]"
   if ((at >= 0)); then

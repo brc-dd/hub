@@ -323,8 +323,7 @@ hub::default_branch() {
     return 0
   fi
   if hub::remote_project "$remote" >/dev/null; then
-    proj=$HUB_URL_OWNER/$HUB_URL_REPO
-    [[ ${HUB_PROJECT_HOST,,} == github.com ]] || proj=$HUB_PROJECT_HOST/$proj
+    proj=$HUB_PROJECT_HOST/$HUB_URL_OWNER/$HUB_URL_REPO # always with the host: gh's default host may differ
     if ref=$(hub::gh_query repo view "$proj" --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null) && [[ -n $ref ]]; then
       printf '%s\n' "$ref"
       return 0
@@ -376,13 +375,16 @@ hub::parse_github_url() {
 # ---------------------------------------------------------------------------
 # Identity, protocol, project shorthand
 # ---------------------------------------------------------------------------
-# hub::current_user [HOST] : your login on HOST (gh's cached login, else the API). Dies if unknown.
+# hub::current_user [HOST] : your login on HOST. Uses gh's cached login unless a token in the
+# environment overrides gh's stored credentials (then only the API knows whose token it is). Dies if unknown.
 hub::current_user() {
   local host=${1:-$(hub::host)} user
-  user=$(hub::gh_query config get user -h "$host" 2>/dev/null) && [[ -n $user ]] && {
-    printf '%s\n' "$user"
-    return 0
-  }
+  if [[ -z ${GH_TOKEN:-}${GITHUB_TOKEN:-}${GH_ENTERPRISE_TOKEN:-}${GITHUB_ENTERPRISE_TOKEN:-} ]]; then
+    user=$(hub::gh_query config get user -h "$host" 2>/dev/null) && [[ -n $user ]] && {
+      printf '%s\n' "$user"
+      return 0
+    }
+  fi
   user=$(hub::gh_query api --hostname "$host" user -q .login 2>/dev/null) && [[ -n $user ]] && {
     printf '%s\n' "$user"
     return 0

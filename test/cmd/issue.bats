@@ -196,6 +196,9 @@ load ../test_helper
   run hub --noop issue update 12 -c Done -r completed
   assert_success
   assert_output_equals "gh issue edit 12 -c Done -r completed"
+  run hub --noop issue update 12 -r nonsense --duplicate-of seven
+  assert_success
+  assert_output_equals "gh issue edit 12 -r nonsense --duplicate-of seven"
 }
 
 @test "issue update -s closed closes the issue" {
@@ -260,6 +263,46 @@ load ../test_helper
   assert_failure
   assert_output_equals "Aborted: --duplicate-of only goes with -s closed; gh issue reopen has no such option."
   assert_gh_not_called
+}
+
+@test "issue update -s closed checks -r and --duplicate-of before running gh" {
+  run hub --noop issue update 12 -s closed --title New --reason nonsense
+  assert_failure
+  assert_output_equals "Aborted: --reason must be 'completed', 'not planned' or 'duplicate', not 'nonsense'."
+  run hub issue update 12 13 -t New -s closed -r completed -r ''
+  assert_failure
+  assert_output_equals "Aborted: --reason must be 'completed', 'not planned' or 'duplicate', not ''."
+  run hub issue update 12 --add-label x -s closed -rNot\ planned
+  assert_failure
+  assert_output_equals "Aborted: --reason must be 'completed', 'not planned' or 'duplicate', not 'Not planned'."
+  run hub issue update 12 -t New -s closed --duplicate-of seven
+  assert_failure
+  assert_output_equals "Aborted: --duplicate-of must be an issue number or URL, not 'seven'."
+  run hub issue update 12 -t New -s closed --duplicate-of=https://github.com/mislav/dotfiles/wiki/7
+  assert_failure
+  assert_output_equals "Aborted: --duplicate-of must be an issue number or URL, not 'https://github.com/mislav/dotfiles/wiki/7'."
+  run hub issue update 12 -t New -s closed --duplicate-of 7 -r completed
+  assert_failure
+  assert_output_equals "Aborted: --duplicate-of only goes with --reason duplicate, not with --reason 'completed'."
+  run hub issue update 12 13 -s closed --reason=duplicate --duplicate-of https://github.com/mislav/dotfiles/issues/7 -r "not planned"
+  assert_failure
+  assert_output_equals "Aborted: --duplicate-of only goes with --reason duplicate, not with --reason 'not planned'."
+  assert_gh_not_called
+}
+
+@test "issue update -s closed takes gh issue close's reasons and forms of --duplicate-of" {
+  run hub --noop issue update 12 -t New -s closed -r completed
+  assert_success
+  assert_output_equals $'gh issue edit 12 -t New\ngh issue close 12 -r completed'
+  run hub --noop issue update 12 -s closed --duplicate-of '#7' -rduplicate
+  assert_success
+  assert_output_equals "gh issue close 12 --duplicate-of \\#7 -rduplicate"
+  run hub --noop issue update 12 -s closed -r completed --reason=duplicate --duplicate-of=https://ghe.example.com/corp/app/issues/7
+  assert_success
+  assert_output_equals "gh issue close 12 -r completed --reason=duplicate --duplicate-of=https://ghe.example.com/corp/app/issues/7"
+  run hub --noop issue update 12 -s closed --duplicate-of https://github.com/mislav/dotfiles/pull/7/files
+  assert_success
+  assert_output_equals "gh issue close 12 --duplicate-of https://github.com/mislav/dotfiles/pull/7/files"
 }
 
 @test "issue update -s aborts on an unknown state or a missing number before running gh" {

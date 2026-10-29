@@ -14,6 +14,13 @@
 #   ahead or diverged         left alone, with a warning
 #   deleted but not merged    left alone, with a warning
 #
+# git reports an upstream branch as gone whenever its remote-tracking branch
+# is missing, which it also is when remote.REMOTE.fetch leaves the branch out
+# (^refs/heads/NAME, say). So before deleting a branch, sync asks REMOTE with
+# `git ls-remote` (read-only, so --noop runs it too). A branch REMOTE still
+# has is skipped with a note; if REMOTE cannot be asked, the branch is left
+# alone and sync exits non-zero at the end.
+#
 # Local commits are never discarded. When git cannot update, check out or
 # delete a branch (one checked out in another worktree, say), sync says which,
 # carries on with the other branches and exits non-zero at the end. This is
@@ -36,11 +43,15 @@ hub_ext_sync() {
   current=$(hub::git_query symbolic-ref -q HEAD)
   current=${current#refs/heads/}
 
-  local branch upremote upstream track tip short up_tip failed=0
-  while IFS=$'\x1f' read -r -u 3 branch upremote upstream track tip short; do
+  local branch upremote upstream upref track tip short up_tip failed=0
+  while IFS=$'\x1f' read -r -u 3 branch upremote upstream upref track tip short; do
     if [[ $upremote == "$remote" && $track == gone && $branch != "$default" ]]; then
       # The upstream branch was deleted: drop the local one if REMOTE's default branch has all of it.
       if [[ -n $default ]] && hub::git_query merge-base --is-ancestor "$tip" "refs/remotes/$remote/$default"; then
+        _hub_sync_gone "$remote" "$branch" "$upstream" "${upref:-refs/heads/$branch}" || {
+          (($? == 2)) && failed=1
+          continue
+        }
         if [[ $branch == "$current" ]]; then
           if ! hub::git checkout --quiet "$default"; then
             hub::warn "error: could not check out '$default' to delete '$branch'"
@@ -78,9 +89,30 @@ hub_ext_sync() {
       hub::warn "warning: '$branch' seems to contain unpushed commits"
     fi
   done 3< <(hub::git_query for-each-ref \
-    --format='%(refname:lstrip=2)%1f%(upstream:remotename)%1f%(upstream)%1f%(upstream:track,nobracket)%1f%(objectname)%1f%(objectname:short)' \
+    --format='%(refname:lstrip=2)%1f%(upstream:remotename)%1f%(upstream)%1f%(upstream:remoteref)%1f%(upstream:track,nobracket)%1f%(objectname)%1f%(objectname:short)' \
     refs/heads)
   ((failed == 0)) || exit 1
+}
+
+# _hub_sync_gone REMOTE BRANCH UPSTREAM REF : true if REMOTE really has no REF (BRANCH's upstream
+# branch there, fetched as UPSTREAM) any more. Prints a note and returns 1 if REMOTE still has it,
+# or prints an error and returns 2 if REMOTE could not be asked.
+_hub_sync_gone() {
+  local remote=$1 branch=$2 upstream=${3#refs/remotes/} ref=$4 status=0
+  local -a heads=(--heads)
+  [[ $ref == refs/heads/* ]] || heads=() # an upstream outside refs/heads (refs/pull/N/head, say)
+  hub::git_query ls-remote --exit-code "${heads[@]}" "$remote" "$ref" >/dev/null || status=$?
+  case $status in
+    2) return 0 ;;
+    0)
+      hub::warn "skipping '$branch': $upstream exists on $remote but is not fetched (check remote.$remote.fetch)"
+      return 1
+      ;;
+    *)
+      hub::warn "error: could not check whether $upstream still exists on $remote; leaving '$branch' alone"
+      return 2
+      ;;
+  esac
 }
 
 # _hub_sync_default_branch REMOTE : REMOTE's default branch, from REMOTE/HEAD, else main or master if REMOTE has one.

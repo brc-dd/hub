@@ -10,9 +10,18 @@
 # `git apply`. A URL that is the value of an option (as in --exclude URL) or
 # that comes after `--` is left as it is. To make commits instead, see `hub am`.
 #
+# gh 2.103 and later refuse to write a download that contains terminal escape
+# bytes unless given --allow-escape-sequences, which would stop such a diff
+# before git sees it. So the gh commands below also get that flag whenever
+# `gh pr diff --help` (for a pull request) or `gh api --help` (for a commit)
+# lists it; an older gh has no such flag and gets none.
+#
 #   $ hub apply https://github.com/jingweno/gh/pull/55
 #   > gh pr diff https://github.com/jingweno/gh/pull/55 --color=never > $TMPDIR/hub-apply.XXXXXX/1.diff
 #   > git apply $TMPDIR/hub-apply.XXXXXX/1.diff
+#
+#   $ hub apply https://github.com/jingweno/gh/commit/fdb9921
+#   > gh api repos/jingweno/gh/commits/fdb9921 -H 'Accept: application/vnd.github.v3.diff' > ...
 
 # shellcheck source=lib/hub/ext/am.sh
 source "$HUB_LIB/ext/am.sh"

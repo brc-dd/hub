@@ -13,9 +13,13 @@
 #      (skipped for pre-releases, and when the formula is already up to date)
 #
 # Steps that are already done are skipped, so if something fails, fix it and
-# run script/release again (without VERSION). Pushing the tag also starts the
-# release workflow (.github/workflows/release.yml), which does steps 4 and 5 on
-# its own; whichever gets there first does the work, the other finds it done.
+# run script/release again (without VERSION).
+#
+# This script is the primary publisher, and the release workflow that the tag
+# push starts (.github/workflows/release.yml) is a second one that repeats
+# steps 4 and 5 and skips whatever is already done. When both push a formula
+# commit, the second push is rejected and that side fetches, drops its
+# duplicate commit (or rebases onto main) and pushes at most once more.
 #
 # The GitHub repository is the origin remote when that is a GitHub URL, else
 # $HUB_GITHUB_REPO, else brc-dd/hub (as in script/update-formula).
@@ -82,6 +86,42 @@ github_slug() {
 # only_formula_changed A B : nothing but Formula/hub.rb differs between commits A and B
 only_formula_changed() {
   [[ -z $(git diff --name-only "$1" "$2" -- . ':(exclude)Formula/hub.rb') ]]
+}
+
+# formula_pin REV : the url and sha256 lines of Formula/hub.rb at REV, the lines script/update-formula writes
+formula_pin() {
+  git show "$1:Formula/hub.rb" 2>/dev/null \
+    | awk '!url && /^[ \t]*url[ \t]+"/ { print; url = 1 } !sha && /^[ \t]*sha256[ \t]+"/ { print; sha = 1 }'
+}
+
+# push_formula [COMMIT] : push main, which ends with the formula COMMIT (empty if there was
+# nothing to commit). If origin rejects the push because main moved on (the release workflow
+# pushed its own formula commit first, say), fetch; drop COMMIT when it is the only local commit
+# and origin/main already pins the same url and sha256, else rebase onto origin/main and push once more.
+push_formula() {
+  local commit=$1 pin
+  if ((dry_run)); then
+    run git push origin main
+    return
+  fi
+  git push origin main && return 0
+  printf 'The push was rejected; fetching origin to see whether the release workflow pushed the formula first.\n'
+  git fetch --quiet origin
+  pin=$(formula_pin HEAD) || pin=''
+  if [[ -n $commit && $(git rev-parse HEAD) == "$commit" && -n $pin && $pin == "$(formula_pin refs/remotes/origin/main)" ]] \
+    && [[ -z $(git status --porcelain) && $(git rev-list --count refs/remotes/origin/main..HEAD) == 1 ]]; then
+    git reset --quiet --hard refs/remotes/origin/main
+    printf 'The release workflow published the same Formula/hub.rb change first; dropped the local duplicate commit.\n'
+    return 0
+  fi
+  printf 'Rebasing main onto origin/main and pushing once more.\n'
+  git pull --rebase --quiet origin main \
+    || die "could not rebase main onto origin/main; resolve it (or git rebase --abort), then push main yourself"
+  if [[ $(git rev-parse HEAD) == "$(git rev-parse refs/remotes/origin/main)" ]]; then
+    printf 'origin/main already has this Formula/hub.rb change; nothing left to push.\n'
+    return 0
+  fi
+  git push origin main
 }
 
 # released_at TAG : HEAD is TAG, or a descendant that only changed Formula/hub.rb since
@@ -204,14 +244,16 @@ if ((prerelease)); then
 else
   step "Pointing Formula/hub.rb at $tag"
   run script/update-formula "$tag"
+  formula_commit=''
   if ((dry_run)); then
     printf '[dry-run] git diff --quiet -- Formula/hub.rb || %s\n' "$(quote git commit -m "Formula: hub $tag" -- Formula/hub.rb)"
   elif git diff --quiet -- Formula/hub.rb; then
     printf 'Nothing to commit.\n'
   else
     git commit --quiet -m "Formula: hub $tag" -- Formula/hub.rb
+    formula_commit=$(git rev-parse HEAD)
   fi
-  run git push origin main
+  push_formula "$formula_commit"
 fi
 
 if ((dry_run)); then

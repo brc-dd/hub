@@ -12,6 +12,12 @@
 # A URL that is the value of an option (as in --exclude URL) or that comes
 # after `--` is left as it is.
 #
+# gh 2.103 and later refuse to write a download that contains terminal escape
+# bytes unless given --allow-escape-sequences, which would stop such a patch
+# before git sees it. So the gh commands below also get that flag whenever
+# `gh pr diff --help` (for a pull request) or `gh api --help` (for a commit)
+# lists it; an older gh has no such flag and gets none.
+#
 #   $ hub am -3 https://github.com/jingweno/gh/pull/55
 #   > gh pr diff https://github.com/jingweno/gh/pull/55 --patch --color=never > $TMPDIR/hub-am.XXXXXX/1.patch
 #   > git am -3 $TMPDIR/hub-am.XXXXXX/1.patch
@@ -75,15 +81,29 @@ _hub_am_download() {
     gh_args=(pr diff "$url")
     [[ $media == patch ]] && gh_args+=(--patch)
     gh_args+=(--color=never)
+    _hub_am_escapes pr diff && gh_args+=(--allow-escape-sequences)
   else
     # One commit, also for .../pull/N/commits/SHA, where `gh pr diff` would give the whole pull request.
     gh_args=(api)
     [[ ${HUB_URL_HOST,,} == "${gh_host,,}" ]] || gh_args+=(--hostname "$HUB_URL_HOST")
     gh_args+=("repos/$HUB_URL_OWNER/$HUB_URL_REPO/commits/$HUB_URL_SHA" -H "Accept: application/vnd.github.v3.$media")
+    _hub_am_escapes api && gh_args+=(--allow-escape-sequences)
   fi
   if ((HUB_NOOP)); then
     printf '%s > %s\n' "$(hub::quote gh "${gh_args[@]}")" "$(hub::quote "$file")"
     return 0
   fi
   hub::gh_query "${gh_args[@]}" >"$file" || hub::die "Aborted: could not download $url"
+}
+
+# _hub_am_escapes GH-COMMAND... : true if `gh GH-COMMAND --help` lists --allow-escape-sequences (gh 2.103
+# and later). gh is asked once per run and command, also under --noop; HUB_AM_ESCAPES keeps the answers.
+declare -gA HUB_AM_ESCAPES=()
+_hub_am_escapes() {
+  local key=$*
+  if [[ -z ${HUB_AM_ESCAPES[$key]-} ]]; then
+    HUB_AM_ESCAPES[$key]=no
+    [[ $(hub::gh_query "$@" --help 2>/dev/null) == *--allow-escape-sequences* ]] && HUB_AM_ESCAPES[$key]=yes
+  fi
+  [[ ${HUB_AM_ESCAPES[$key]} == yes ]]
 }

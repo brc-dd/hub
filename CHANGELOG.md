@@ -10,6 +10,26 @@ heading.
 
 ### Fixed
 
+- `pull-request --dry-run` pins the head so gh cannot push or fork during its
+  own dry run; issue conversion and `-b OWNER:BRANCH` always hand gh the
+  repository and host hub resolved; `-p -h OWNER:BRANCH` refuses a remote
+  whose push URL points elsewhere.
+- `sync` confirms with `git ls-remote` that a gone branch was really deleted
+  on the remote before deleting it locally (negative fetch refspecs no longer
+  cause deletions).
+- `fork` forks the repository hub resolved and adds the remote itself, so gh's
+  default-repository setting cannot divert it; an existing remote of that
+  name is checked before anything is forked.
+- `issue update -s closed` validates `--reason` and `--duplicate-of` before
+  running anything.
+- `am`/`apply` pass `--allow-escape-sequences` when gh supports it, so patches
+  containing escape bytes apply.
+- `fetch --multiple USER USER2` adds the missing remotes like the comma form.
+- `-c` and `--config-env` keep git's left-to-right precedence.
+- The login is looked up through the API when a token variable overrides gh's
+  stored credentials; the default-branch lookup always names the host.
+- `script/release` and the release workflow recover from each other publishing
+  first instead of failing on a duplicate release or push.
 - `push` to several remotes forwards the arguments exactly as given and appends
   the current branch only when nothing follows the remotes; `--delete`,
   `--tags`, `--all` and option values no longer gain an invented ref.

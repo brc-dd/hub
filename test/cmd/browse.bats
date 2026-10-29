@@ -40,12 +40,12 @@ load ../test_helper
 
 @test "browse asks gh for the default branch when the remote HEAD is unknown" {
   make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
-  stub_gh 'repo view mislav/dotfiles --json defaultBranchRef *' 'main'
+  stub_gh 'repo view github.com/mislav/dotfiles --json defaultBranchRef *' 'main'
   git checkout -q -b feature
   run hub --noop browse
   assert_success
   assert_output_equals "open https://github.com/mislav/dotfiles/tree/feature"
-  assert_gh_called 'repo view mislav/dotfiles --json defaultBranchRef *'
+  assert_gh_called 'repo view github.com/mislav/dotfiles --json defaultBranchRef *'
 }
 
 @test "browse opens a branch that pushes to a fork in the fork" {

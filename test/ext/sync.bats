@@ -40,6 +40,31 @@ make_sync_fixture() {
 # tip BRANCH : the commit BRANCH points at.
 tip() { git rev-parse --verify -q "refs/heads/$1"; }
 
+# make_unfetched_fixture : a bare upstream.git whose main has merged the branches deleted and feature, and
+# "work", a clone where deleted and feature (and mine, under another name) track them, but remote.origin.fetch
+# leaves them out with a negative refspec (^refs/heads/NAME) and their remote-tracking branches are missing,
+# so git calls all three upstream branches gone. Then deleted is really deleted; feature is still there.
+make_unfetched_fixture() {
+  local b
+  git init -q --bare "$HUB_TEST_TMP/upstream.git"
+  make_repo seed origin="$HUB_TEST_TMP/upstream.git"
+  for b in deleted feature; do
+    git branch "$b"
+    commit_on "$b" "$b work"
+    git merge -q --no-ff -m "Merge branch '$b'" "$b"
+  done
+  git push -q origin --all
+  git clone -q "$HUB_TEST_TMP/upstream.git" "$HUB_TEST_TMP/work"
+  cd "$HUB_TEST_TMP/work" || return 1
+  git branch -q --track mine origin/feature
+  for b in deleted feature; do
+    git branch -q --track "$b" "origin/$b"
+    git config --add remote.origin.fetch "^refs/heads/$b"
+    git branch -q -d -r "origin/$b"
+  done
+  git -C "$HUB_TEST_TMP/seed" push -q origin --delete deleted
+}
+
 @test "sync fast-forwards branches that are behind, deletes merged ones and warns about the rest" {
   make_sync_fixture
   local main behind merged same_name ahead diverged unmerged local_only
@@ -132,6 +157,43 @@ git branch -D merged
 git branch --force --no-track same-name refs/remotes/origin/same-name
 warning: 'unmerged' was deleted on origin, but appears not merged into 'main'"
   [[ $(git for-each-ref refs/heads) == "$before" ]]
+}
+
+@test "sync deletes a merged branch that the fetch refspec leaves out only once the remote has deleted it" {
+  make_unfetched_fixture
+  git checkout -q feature
+  [[ $(git for-each-ref --format='%(upstream:track)' refs/heads/deleted refs/heads/feature refs/heads/mine) == $'[gone]\n[gone]\n[gone]' ]]
+  local before deleted
+  before=$(git for-each-ref refs/heads) deleted=$(git rev-parse --short deleted)
+  run hub --noop sync origin
+  assert_success
+  assert_output_equals "git fetch --prune --quiet origin
+git branch -D deleted
+skipping 'feature': origin/feature exists on origin but is not fetched (check remote.origin.fetch)
+skipping 'mine': origin/feature exists on origin but is not fetched (check remote.origin.fetch)"
+  [[ $(git for-each-ref refs/heads) == "$before" ]]
+  run hub sync origin
+  assert_success
+  assert_output_equals "Deleted branch deleted (was $deleted).
+skipping 'feature': origin/feature exists on origin but is not fetched (check remote.origin.fetch)
+skipping 'mine': origin/feature exists on origin but is not fetched (check remote.origin.fetch)"
+  [[ -z $(tip deleted) && -n $(tip feature) && -n $(tip mine) ]]
+  # feature stays checked out, and the branches kept keep their tracking configuration.
+  [[ $(git symbolic-ref --short HEAD) == feature ]]
+  [[ $(git config branch.feature.remote) == origin && $(git config branch.feature.merge) == refs/heads/feature ]]
+  [[ $(git config branch.mine.remote) == origin && $(git config branch.mine.merge) == refs/heads/feature ]]
+  assert_gh_not_called
+}
+
+@test "sync keeps a gone branch, and then fails, when it cannot ask the remote whether the branch still exists" {
+  make_unfetched_fixture
+  git remote set-url origin "$HUB_TEST_TMP/nowhere.git"
+  run hub --noop sync origin
+  assert_failure
+  assert_output_equals "git fetch --prune --quiet origin
+error: could not check whether origin/deleted still exists on origin; leaving 'deleted' alone
+error: could not check whether origin/feature still exists on origin; leaving 'feature' alone
+error: could not check whether origin/feature still exists on origin; leaving 'mine' alone"
 }
 
 @test "sync finds the default branch when REMOTE/HEAD is missing or points at a deleted branch" {

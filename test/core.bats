@@ -95,8 +95,9 @@ setup() {
 
 @test "default_branch reads the remote HEAD, then asks gh, then falls back to main" {
   make_repo r origin=https://github.com/me/r.git
-  stub_gh 'repo view me/r --json defaultBranchRef *' 'trunk'
+  stub_gh 'repo view github.com/me/r --json defaultBranchRef *' 'trunk'
   [[ $(hub::default_branch) == trunk ]]
+  [[ $(GH_HOST=enterprise.example hub::default_branch) == trunk ]]
   set_remote_head origin develop
   [[ $(hub::default_branch) == develop ]]
   [[ $(hub::default_branch origin) == develop ]]
@@ -133,6 +134,14 @@ setup() {
   stub_gh 'config get user -h github.com' '' 1
   stub_gh 'api --hostname github.com user -q .login' 'apiuser'
   [[ $(hub::current_user) == apiuser ]]
+}
+
+@test "current_user ignores the cached login when a token overrides gh's credentials" {
+  stub_gh 'api --hostname github.com user -q .login' 'tokenuser'
+  [[ $(hub::current_user) == mislav ]]
+  [[ $(GH_TOKEN=x hub::current_user) == tokenuser ]]
+  [[ $(GITHUB_TOKEN=x hub::current_user) == tokenuser ]]
+  [[ $(GH_ENTERPRISE_TOKEN=x hub::current_user) == tokenuser ]]
 }
 
 @test "split_message takes the first paragraph as title and the rest as body" {
