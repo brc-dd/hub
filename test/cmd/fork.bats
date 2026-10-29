@@ -226,6 +226,63 @@ load ../test_helper
   git rev-parse --verify -q refs/remotes/mislav/main
 }
 
+@test "fork fetches a new fork again while GitHub has not finished creating it, then says what is left to do" {
+  make_repo dotfiles origin=https://github.com/dotcom/dotfiles.git
+  # The fork's URL leads to no repository, as it does until GitHub has finished creating the fork.
+  git config --global url."$HUB_TEST_TMP/missing.git".insteadOf https://github.com/mislav/dotfiles.git
+  stub_gh 'api --hostname github.com -X POST repos/dotcom/dotfiles/forks --jq .full_name' 'mislav/dotfiles'
+  export HUB_FORK_RETRY_DELAY=0 LC_ALL=C # no pauses; git's own messages in English
+  run hub fork
+  assert_failure
+  [[ $(grep -c 'does not appear to be a git repository' <<<"$output") == 5 ]]
+  [[ $(grep -c 'GitHub is still creating the fork' <<<"$output") == 4 ]]
+  assert_output_contains "GitHub is still creating the fork mislav/dotfiles; fetching it again in 0s (retry 1 of 4)."
+  assert_output_contains "(retry 4 of 4)."
+  assert_line_equals -1 "error: GitHub has not finished creating the fork mislav/dotfiles. The fork and the remote 'mislav' exist; run 'git fetch mislav' later."
+  [[ $(git config remote.mislav.url) == https://github.com/mislav/dotfiles.git ]]
+}
+
+@test "fork fetches the new fork as soon as GitHub has finished creating it" {
+  make_repo dotfiles origin=https://github.com/dotcom/dotfiles.git
+  git init -q --bare "$HUB_TEST_TMP/fork.git"
+  git push -q "$HUB_TEST_TMP/fork.git" main
+  # "GitHub over SSH" has no such repository for the first two fetches, then serves the bare one.
+  cat >"$HUB_TEST_TMP/ssh" <<'SSH'
+#!/usr/bin/env bash
+echo >>"$HUB_TEST_TMP/ssh.calls"
+if (($(wc -l <"$HUB_TEST_TMP/ssh.calls") <= 2)); then
+  echo 'ERROR: Repository not found.' >&2
+  exit 1
+fi
+exec git upload-pack "$HUB_TEST_TMP/fork.git"
+SSH
+  chmod +x "$HUB_TEST_TMP/ssh"
+  export GIT_SSH_COMMAND=$HUB_TEST_TMP/ssh GIT_SSH_VARIANT=simple HUB_FORK_RETRY_DELAY=0
+  stub_gh 'config get git_protocol -h github.com' 'ssh'
+  stub_gh 'api --hostname github.com -X POST repos/dotcom/dotfiles/forks --jq .full_name' 'mislav/dotfiles'
+  run hub fork
+  assert_success
+  [[ $(grep -c 'GitHub is still creating the fork mislav/dotfiles' <<<"$output") == 2 ]]
+  [[ $(git config remote.mislav.url) == git@github.com:mislav/dotfiles.git ]]
+  git rev-parse --verify -q refs/remotes/mislav/main
+}
+
+@test "fork does not fetch again when git fails for another reason than a missing repository" {
+  make_repo dotfiles origin=https://github.com/dotcom/dotfiles.git
+  printf '#!/usr/bin/env bash\necho >>"$HUB_TEST_TMP/ssh.calls"\necho "git@github.com: Permission denied (publickey)." >&2\nexit 255\n' >"$HUB_TEST_TMP/ssh"
+  chmod +x "$HUB_TEST_TMP/ssh"
+  export GIT_SSH_COMMAND=$HUB_TEST_TMP/ssh GIT_SSH_VARIANT=simple HUB_FORK_RETRY_DELAY=0
+  stub_gh 'config get git_protocol -h github.com' 'ssh'
+  stub_gh 'api --hostname github.com -X POST repos/dotcom/dotfiles/forks --jq .full_name' 'mislav/dotfiles'
+  run hub fork
+  assert_failure
+  assert_line_equals 0 "git@github.com: Permission denied (publickey)."
+  assert_line_equals -1 "error: could not fetch the fork mislav/dotfiles. The fork and the remote 'mislav' exist; run 'git fetch mislav' later."
+  [[ $output != *"GitHub is still creating"* ]]
+  [[ $(wc -l <"$HUB_TEST_TMP/ssh.calls") -eq 1 ]]
+  [[ $(git config remote.mislav.url) == git@github.com:mislav/dotfiles.git ]]
+}
+
 @test "fork leaves a remote of yours alone that points at another repository than the fork" {
   make_repo dotfiles origin=https://github.com/dotcom/dotfiles.git mislav=https://github.com/mislav/other.git
   stub_gh 'api --hostname github.com -X POST repos/dotcom/dotfiles/forks --jq .full_name' 'mislav/dotfiles'

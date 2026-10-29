@@ -194,6 +194,65 @@ load ../test_helper
   assert_output_equals "open https://github.com/mislav/dotfiles/compare/feature"
 }
 
+@test "compare names the head after the main remote when only the main remote has the branch" {
+  make_repo repo origin=https://github.com/alice/repo.git upstream=https://github.com/org/repo.git
+  set_remote_head upstream main
+  git checkout -q -b feature
+  git config branch.feature.pushRemote origin # pushed to alice's fork, but there is no origin/feature
+  git update-ref refs/remotes/upstream/feature HEAD
+  run hub compare -u
+  assert_success
+  assert_output_equals "https://github.com/org/repo/compare/feature"
+  assert_gh_not_called
+}
+
+@test "compare writes FORKOWNER:BRANCH when the fork it pushes to has the branch" {
+  make_repo repo origin=https://github.com/alice/repo.git upstream=https://github.com/org/repo.git
+  set_remote_head upstream main
+  git checkout -q -b feature
+  git config branch.feature.pushRemote origin
+  git update-ref refs/remotes/origin/feature HEAD
+  run hub compare -u
+  assert_success
+  assert_output_equals "https://github.com/org/repo/compare/alice:feature"
+  git update-ref refs/remotes/upstream/feature HEAD # the push target's ref comes first
+  run hub compare -u
+  assert_success
+  assert_output_equals "https://github.com/org/repo/compare/alice:feature"
+  assert_gh_not_called
+}
+
+@test "compare refuses a branch that neither its fork nor the main remote has" {
+  make_repo repo origin=https://github.com/alice/repo.git upstream=https://github.com/org/repo.git
+  set_remote_head upstream main
+  git checkout -q -b feature
+  git config branch.feature.pushRemote origin
+  git update-ref refs/remotes/origin/other HEAD
+  git update-ref refs/remotes/upstream/other HEAD
+  run hub compare -u
+  assert_failure
+  assert_output_equals "Aborted: the branch 'feature' is not pushed to any GitHub remote; push it first or name a range"
+}
+
+@test "compare with GH_REPO names the head after the main remote's copy that has the branch" {
+  make_repo repo origin=https://github.com/alice/repo.git
+  set_remote_head origin main
+  git checkout -q -b feature
+  git update-ref refs/remotes/origin/feature HEAD
+  GH_REPO=org/repo run hub compare -u
+  assert_success
+  assert_output_equals "https://github.com/org/repo/compare/alice:feature"
+  GH_REPO=github.com/Alice/repo run hub compare -u
+  assert_success
+  assert_output_equals "https://github.com/Alice/repo/compare/feature"
+  # hosts are compared without their ports
+  git config --global hub.host ghe.example.com
+  git remote set-url origin https://ghe.example.com/alice/repo.git
+  GH_REPO=ghe.example.com:8443/org/repo run hub compare -u
+  assert_success
+  assert_output_equals "https://ghe.example.com:8443/org/repo/compare/alice:feature"
+}
+
 @test "compare escapes characters that are special in URLs" {
   make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
   run hub compare -u 'my#b+x'

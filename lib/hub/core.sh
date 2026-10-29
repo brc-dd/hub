@@ -181,41 +181,52 @@ hub::git_dir() { hub::git_query rev-parse --git-dir; }
 # ---------------------------------------------------------------------------
 # Hosts and URLs
 # ---------------------------------------------------------------------------
+# hub::gh_hosts : the hosts gh is logged in to, one per line, read once from gh's hosts.yml.
+hub::gh_hosts() {
+  if [[ -z ${HUB_GH_HOSTS+x} ]]; then
+    HUB_GH_HOSTS=''
+    local file=${GH_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/gh}/hosts.yml line
+    if [[ -r $file ]]; then
+      while IFS= read -r line; do
+        [[ $line =~ ^([A-Za-z0-9.:-]+):[[:space:]]*$ ]] || continue
+        HUB_GH_HOSTS+="${BASH_REMATCH[1]}"$'\n'
+      done <"$file"
+    fi
+  fi
+  printf '%s' "$HUB_GH_HOSTS"
+}
+
 # hub::host : the default GitHub host, following gh's rule: GH_HOST (or hub 2.x's GITHUB_HOST),
-# else the only host gh is logged in to, else github.com. Cached per process in HUB_DEFAULT_HOST.
+# else the only host gh is logged in to, else github.com.
 hub::host() {
   if [[ -n ${GH_HOST:-${GITHUB_HOST:-}} ]]; then
     printf '%s\n' "${GH_HOST:-$GITHUB_HOST}"
     return 0
   fi
-  if [[ -z ${HUB_DEFAULT_HOST:-} ]]; then
-    HUB_DEFAULT_HOST=github.com
-    local file=${GH_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/gh}/hosts.yml line host='' count=0
-    if [[ -r $file ]]; then
-      while IFS= read -r line; do
-        [[ $line =~ ^([A-Za-z0-9.-]+):[[:space:]]*$ ]] || continue
-        host=${BASH_REMATCH[1]}
-        ((count++))
-      done <"$file"
-      ((count == 1)) && HUB_DEFAULT_HOST=$host
-    fi
-  fi
-  printf '%s\n' "$HUB_DEFAULT_HOST"
+  local hosts
+  hosts=$(hub::gh_hosts)
+  if [[ -n $hosts && $hosts != *$'\n'* ]]; then printf '%s\n' "$hosts"; else printf 'github.com\n'; fi
 }
 
-# hub::known_hosts : github.com plus GH_HOST/GITHUB_HOST and `git config hub.host` entries.
+# hub::known_hosts : the hosts hub treats as GitHub: github.com, GH_HOST/GITHUB_HOST, every host gh is
+# logged in to, and every `git config hub.host` entry. Ports are ignored when hosts are compared.
 hub::known_hosts() {
   {
     printf 'github.com\n'
     [[ -n ${GH_HOST:-} ]] && printf '%s\n' "$GH_HOST"
     [[ -n ${GITHUB_HOST:-} ]] && printf '%s\n' "$GITHUB_HOST"
+    hub::gh_hosts
     hub::git_query config --get-all hub.host
   } | awk 'NF && !seen[tolower($0)]++'
 }
 
 hub::is_known_host() {
   local h want=${1,,}
-  while IFS= read -r h; do [[ ${h,,} == "$want" ]] && return 0; done < <(hub::known_hosts)
+  want=${want%%:*}
+  while IFS= read -r h; do
+    h=${h,,}
+    [[ ${h%%:*} == "$want" ]] && return 0
+  done < <(hub::known_hosts)
   return 1
 }
 
@@ -416,6 +427,7 @@ hub::protocol() {
 }
 
 # hub::git_url OWNER/REPO [HOST] [PROTOCOL] : clone URL for a project. On *.ghe.com hosts the SSH user is the tenant, as in gh.
+# A HOST with a port keeps it for HTTPS; SSH URLs drop it (an HTTPS port says nothing about the SSH port).
 hub::git_url() {
   local proj=$1 host=${2:-} proto=${3:-} user=git
   [[ -n $host ]] || host=$(hub::host)
@@ -423,7 +435,12 @@ hub::git_url() {
   case $proto in
     ssh | git)
       [[ ${host,,} == *.ghe.com ]] && user=${host%%.*}
-      printf '%s@%s:%s.git\n' "$user" "$host" "$proj"
+      if [[ $host == *:* ]]; then
+        # the port in GH_HOST is the HTTPS port; SSH uses its own, so leave it to ssh_config
+        printf 'ssh://%s@%s/%s.git\n' "$user" "${host%%:*}" "$proj"
+      else
+        printf '%s@%s:%s.git\n' "$user" "$host" "$proj"
+      fi
       ;;
     *) printf 'https://%s/%s.git\n' "$host" "$proj" ;;
   esac

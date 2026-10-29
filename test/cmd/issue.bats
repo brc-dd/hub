@@ -219,6 +219,25 @@ load ../test_helper
   assert_output_equals "gh issue reopen 12"
 }
 
+@test "issue create and update read -X=VALUE as gh does, -m, -F, -s and -r included" {
+  printf 'Crash\n\nIt crashes.\n' >msg.txt
+  run hub --noop issue create -m=Crash -l=bug
+  assert_success
+  assert_output_equals "gh issue create --title Crash --body '' -l=bug"
+  run hub --noop issue create -F=msg.txt
+  assert_success
+  assert_output_equals "gh issue create --title Crash --body It\\ crashes."
+  run hub --noop issue update 12 -m=Crash -s=closed -r=completed -c=Done
+  assert_success
+  assert_output_equals $'gh issue edit 12 --title Crash\ngh issue close 12 -r=completed -c=Done'
+  run hub --noop issue update 12 -F=msg.txt -s=open
+  assert_success
+  assert_output_equals $'gh issue edit 12 --title Crash --body It\\ crashes.\ngh issue reopen 12'
+  run hub --noop issue update 12 -s=closed -r=nonsense
+  assert_failure
+  assert_output_equals "Aborted: --reason must be 'completed', 'not planned' or 'duplicate', not 'nonsense'."
+}
+
 @test "issue update -s gives gh issue close its own options" {
   run hub --noop issue update 12 -s closed -c "Fixed in #13" -r "not planned"
   assert_success
@@ -343,6 +362,27 @@ load ../test_helper
   run hub issue update 12 -s closed --duplicate-of https://ghe.example.com/corp/app/issues/12
   assert_failure
   assert_output_contains "issue 12 cannot be closed as a duplicate of itself"
+  assert_gh_not_called
+}
+
+@test "issue update reads -R=REPO, -RREPO, --repo=REPO and --repo REPO alike, as gh does" {
+  local dup=https://github.com/org/repo/issues/12
+  local refused="Aborted: issue 12 cannot be closed as a duplicate of itself (--duplicate-of $dup)."
+  run hub --noop issue update -R=org/repo 12 -s closed --title x --duplicate-of "$dup"
+  assert_failure
+  assert_output_equals "$refused"
+  run hub --noop issue update -Rorg/repo 12 -s closed --title x --duplicate-of "$dup"
+  assert_failure
+  assert_output_equals "$refused"
+  run hub --noop issue update --repo=org/repo 12 -s closed --title x --duplicate-of "$dup"
+  assert_failure
+  assert_output_equals "$refused"
+  run hub --noop issue update --repo org/repo 12 -s closed --title x --duplicate-of "$dup"
+  assert_failure
+  assert_output_equals "$refused"
+  run hub --noop issue -R=org/repo update 12 -s closed --duplicate-of "$dup"
+  assert_failure
+  assert_output_equals "$refused"
   assert_gh_not_called
 }
 

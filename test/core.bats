@@ -223,3 +223,25 @@ setup() {
   [[ $(hub::host) == github.com ]]
   [[ $(GH_HOST=other.example.com hub::host) == other.example.com ]]
 }
+
+@test "hosts gh is logged in to count as GitHub hosts" {
+  make_repo r origin=https://enterprise.example/org/canonical.git
+  ! hub::remote_project origin >/dev/null
+  mkdir -p "$GH_CONFIG_DIR"
+  printf 'enterprise.example:\n    user: me\n' >"$GH_CONFIG_DIR/hosts.yml"
+  unset HUB_GH_HOSTS
+  [[ $(hub::remote_project origin) == org/canonical ]]
+  [[ $(hub::main_project) == org/canonical ]]
+  [[ $(hub::host) == enterprise.example ]]
+}
+
+@test "hosts with a port are recognised and get sensible URLs" {
+  make_repo r origin=https://enterprise.example:8443/org/repo.git
+  GH_HOST=enterprise.example:8443
+  hub::is_known_host enterprise.example
+  hub::is_known_host enterprise.example:8443
+  [[ $(hub::remote_project origin) == org/repo ]]
+  [[ $(hub::git_url org/repo) == https://enterprise.example:8443/org/repo.git ]]
+  [[ $(HUB_PROTOCOL=ssh hub::git_url org/repo) == ssh://git@enterprise.example/org/repo.git ]]
+  unset GH_HOST
+}

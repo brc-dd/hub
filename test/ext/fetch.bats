@@ -38,7 +38,7 @@ git remote add bob https://github.com/bob/dotfiles.git
 git fetch --multiple alice origin bob alice --prune --depth 1"
   run hub --noop fetch -m alice
   assert_success
-  assert_output_equals $'git remote add alice https://github.com/alice/dotfiles.git\ngit fetch --multiple alice'
+  assert_output_equals $'git remote add alice https://github.com/alice/dotfiles.git\ngit fetch -m alice'
 }
 
 @test "fetch --multiple finds the names before, between and after the options, and keeps their order" {
@@ -60,6 +60,52 @@ git fetch --multiple alice origin bob alice --prune --depth 1"
   assert_output_equals "git fetch --multiple --prune"
   run hub --noop fetch --multiple
   assert_output_equals "git fetch --multiple"
+}
+
+@test "fetch --multiple counts anywhere among the options before the first name" {
+  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
+  local alice='git remote add alice https://github.com/alice/dotfiles.git' bob='git remote add bob https://github.com/bob/dotfiles.git'
+  run hub --noop fetch --prune --multiple alice bob
+  assert_success
+  assert_output_equals "$alice"$'\n'"$bob"$'\ngit fetch --prune --multiple alice bob'
+  run hub --noop fetch --depth 1 --multiple alice
+  assert_success
+  assert_output_equals "$alice"$'\ngit fetch --depth 1 --multiple alice'
+  run hub --noop fetch -q --upload-pack ./pack -m --prune alice bob
+  assert_success
+  assert_output_equals "$alice"$'\n'"$bob"$'\ngit fetch -q --upload-pack ./pack -m --prune alice bob'
+  # -m in a short option cluster, also before an option that takes the next argument (-mj 4)
+  run hub --noop fetch -pm alice bob
+  assert_success
+  assert_output_equals "$alice"$'\n'"$bob"$'\ngit fetch -pm alice bob'
+  run hub --noop fetch -mj 4 alice
+  assert_success
+  assert_output_equals "$alice"$'\ngit fetch -mj 4 alice'
+}
+
+@test "fetch --multiple after --, or as an option's value, is not the option" {
+  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
+  run hub --noop fetch -- --multiple alice bob
+  assert_success
+  assert_output_equals "git fetch -- --multiple alice bob"
+  run hub --noop fetch --prune -- --multiple alice
+  assert_success
+  assert_output_equals "git fetch --prune -- --multiple alice"
+  run hub --noop fetch --depth --multiple alice
+  assert_output_equals "git fetch --depth --multiple alice"
+  run hub --noop fetch -jm alice # -j's value is m
+  assert_output_equals "git fetch -jm alice"
+  assert_gh_not_called
+}
+
+@test "fetch adds the missing remotes even with git fetch's --dry-run" {
+  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
+  run hub --noop fetch alice --dry-run
+  assert_success
+  assert_output_equals $'git remote add alice https://github.com/alice/dotfiles.git\ngit fetch alice --dry-run'
+  run hub --noop fetch --dry-run --multiple alice
+  assert_success
+  assert_output_equals $'git remote add alice https://github.com/alice/dotfiles.git\ngit fetch --dry-run --multiple alice'
 }
 
 @test "fetch --multiple never takes an option's value for a name" {
@@ -271,6 +317,17 @@ git fetch --multiple --depth=1 carol -j4 alice --recurse-submodules bob --recurs
   [[ $(git config remote.bob.url) == https://github.com/bob/dotfiles.git ]]
   git rev-parse --verify -q refs/remotes/alice/main
   git rev-parse --verify -q refs/remotes/bob/main
+}
+
+@test "fetch --dry-run really adds the remotes, and only the fetch is a dry run" {
+  serve_github mislav/dotfiles alice/dotfiles bob/dotfiles
+  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
+  run hub fetch --dry-run --multiple alice bob
+  assert_success
+  [[ $(git config remote.alice.url) == https://github.com/alice/dotfiles.git ]]
+  [[ $(git config remote.bob.url) == https://github.com/bob/dotfiles.git ]]
+  run git rev-parse --verify -q refs/remotes/alice/main
+  assert_failure
 }
 
 @test "a fork that does not exist fails in git and its remote stays" {

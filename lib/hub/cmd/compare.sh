@@ -3,15 +3,16 @@
 # Usage: hub compare [-u] [-c] [-b BASE] [OWNER] [[BASE...]HEAD]
 #
 # Opens https://HOST/OWNER/REPO/compare/RANGE for the current repository.
-# Without a range, the current branch is compared with the default branch;
-# when the branch pushes to another GitHub repository (your fork), the head
-# is written OWNER:BRANCH so that GitHub compares across the fork. On the
-# default branch or a detached HEAD, name a range or use -b.
+# Without a range, the current branch is compared with the default branch.
+# On the default branch or a detached HEAD, name a range or use -b.
 #
-# The branch has to be pushed first: hub looks for its remote-tracking ref,
-# for the GitHub remote it pushes to (@{push}) or for the main remote
-# (REMOTE/BRANCH), and stops if there is none. Only local refs are read, so
-# fetch first if the branch was pushed from elsewhere.
+# The branch has to be pushed first: hub looks for its remote-tracking ref
+# for the GitHub remote it is set to push to (@{push}), else for the main
+# remote (REMOTE/BRANCH), and stops if there is none. The head is the branch
+# in the repository of the remote whose ref was found, written OWNER:BRANCH
+# when that is another owner's copy (your fork) so that GitHub compares
+# across the fork. Only local refs are read, so fetch first if the branch was
+# pushed from elsewhere.
 #
 # A two-dot range A..B becomes A...B, the form GitHub's compare view uses. A
 # range from a ref to itself, or a -b BASE equal to the head, is refused.
@@ -88,27 +89,38 @@ hub_cmd_compare() {
   if ((! print && ! copy)); then hub::open_url "$url"; fi
 }
 
-# _hub_compare_head BRANCH HOST OWNER : the compare head for BRANCH. When BRANCH pushes
-# to a GitHub remote on HOST owned by someone other than OWNER, that is FORKOWNER:BRANCH.
-# Fails if BRANCH is not pushed, as far as local refs tell: there is no remote-tracking ref
-# for its push target on a GitHub remote (@{push}; REMOTE/BRANCH when git names the push
-# remote but cannot map the branch, as in triangular workflows), nor MAINREMOTE/BRANCH.
+# _hub_compare_head BRANCH HOST OWNER : the compare head for BRANCH on the compare page of
+# OWNER's repository on HOST, from the GitHub remote whose remote-tracking ref shows that
+# BRANCH is pushed (see _hub_compare_head_in): the remote it is set to push to, by its
+# @{push} ref (REMOTE/BRANCH when git names the push remote but cannot map the branch, as
+# in triangular workflows), else the main remote, by MAINREMOTE/BRANCH. Fails if neither
+# has the ref, as far as local refs tell.
 _hub_compare_head() {
-  local branch=$1 remote ref out main pushed=0
-  if IFS=$'\t' read -r remote ref < <(hub::git_query for-each-ref --format='%(push:remotename)%09%(push)' "refs/heads/$branch") \
-    && [[ -n $remote ]] && out=$(hub::remote_project "$remote" && printf '%s\n' "$HUB_PROJECT_HOST"); then
-    hub::git_query show-ref --verify --quiet "${ref:-refs/remotes/$remote/$1}" && pushed=1
+  local branch=$1 remote ref main
+  if IFS=$'\t' read -r remote ref < <(hub::git_query for-each-ref --format='%(push:remotename)%09%(push)' "refs/heads/$1") \
+    && [[ -n $remote ]] && hub::git_query show-ref --verify --quiet "${ref:-refs/remotes/$remote/$1}"; then
     [[ $ref == "refs/remotes/$remote/"?* ]] && branch=${ref#"refs/remotes/$remote/"}
-    local fork_host=${out##*$'\n'} fork_owner=${out%%/*}
-    if [[ ${fork_host,,} == "${2,,}" && ${fork_owner,,} != "${3,,}" ]]; then
-      branch=$fork_owner:$branch
-    fi
+    _hub_compare_head_in "$remote" "$branch" "$2" "$3" && return 0
   fi
-  if ((! pushed)); then
-    main=$(hub::main_remote) || return 1
-    hub::git_query show-ref --verify --quiet "refs/remotes/$main/$1" || return 1
+  main=$(hub::main_remote) || return 1
+  hub::git_query show-ref --verify --quiet "refs/remotes/$main/$1" || return 1
+  _hub_compare_head_in "$main" "$1" "$2" "$3"
+}
+
+# _hub_compare_head_in REMOTE BRANCH HOST OWNER : BRANCH, a branch in the repository of the
+# GitHub remote REMOTE, as a head on the compare page of OWNER's repository on HOST:
+# FORKOWNER:BRANCH when REMOTE's repository is on HOST and belongs to someone else, else
+# BRANCH. Fails if REMOTE is not a GitHub remote. Hosts are compared without their ports.
+_hub_compare_head_in() {
+  local out host owner want=${3,,}
+  out=$(hub::remote_project "$1" && printf '%s\n' "$HUB_PROJECT_HOST") || return 1
+  host=${out##*$'\n'} owner=${out%%/*}
+  host=${host,,}
+  if [[ ${host%%:*} == "${want%%:*}" && ${owner,,} != "${4,,}" ]]; then
+    printf '%s:%s\n' "$owner" "$2"
+  else
+    printf '%s\n' "$2"
   fi
-  printf '%s\n' "$branch"
 }
 
 # _hub_compare_escape STR : percent-encode STR for use in a URL path (/ : @ and unreserved characters are kept).

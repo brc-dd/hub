@@ -131,3 +131,13 @@ load test_helper
   assert_success
   assert_output_equals "other"
 }
+
+@test "-c and --config-env also reach gh's own git subprocesses through the environment" {
+  make_repo r1 origin=https://github.com/mislav/r1.git
+  mkdir -p "$HUB_TEST_TMP/fakegh"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "${GIT_CONFIG_COUNT:-0} ${GIT_CONFIG_KEY_0:-}=${GIT_CONFIG_VALUE_0:-} ${GIT_CONFIG_KEY_1:-}=${GIT_CONFIG_VALUE_1:-}"\n' >"$HUB_TEST_TMP/fakegh/gh"
+  chmod +x "$HUB_TEST_TMP/fakegh/gh"
+  PATH=$HUB_TEST_TMP/fakegh:$PATH run env HUB_X=other "$HUB_BIN" -c foo.bar --config-env=baz.qux=HUB_X pr list
+  assert_success
+  assert_output_equals "2 foo.bar=true baz.qux=other"
+}

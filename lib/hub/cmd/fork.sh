@@ -12,6 +12,14 @@
 # after ORG with --org) and fetches it. Existing remotes, origin included, are
 # left as they are, so afterwards `git push <login> BRANCH` pushes to your fork.
 #
+# GitHub creates a new fork in the background, so right after the API call git
+# may find no repository at the fork's URL yet. While git says so (the
+# repository is not found, does not exist or is empty), hub fetches again a few
+# times, waiting a little longer before each. If the fork still cannot be
+# fetched, or the fetch fails otherwise (authentication or the network, say,
+# which hub does not retry), hub stops with an error: the fork and the remote
+# are in place, and `git fetch <remote>` fetches the fork later.
+#
 # A remote of that name that cannot be the fork (it is not GitHub's, or it is
 # another host's or account's) stops hub before anything is forked. Once GitHub
 # has named the fork, a remote of that name that points at it is kept as it is
@@ -133,5 +141,50 @@ hub_cmd_fork() {
     url=$(hub::git_url "$full" "$host") || exit 1
     hub::git remote add "$remote" "$url" || exit
   fi
-  hub::git fetch "$remote"
+  _hub_fork_fetch "$remote" "$full"
+}
+
+# _hub_fork_fetch REMOTE FORK : git fetch REMOTE, the remote for FORK (OWNER/REPO). GitHub creates a
+# fork in the background, so while git finds no repository at the fork's URL (_hub_fork_missing), wait
+# a little longer each time and fetch again. Other failures, such as authentication or network errors,
+# are not retried. Dies when no fetch worked. Under --noop, prints the one fetch.
+_hub_fork_fetch() {
+  local remote=$1 fork=$2 base log status pause retry=0
+  # The pauses before each new fetch, in seconds; their number is the number of retries.
+  # HUB_FORK_RETRY_DELAY=SECONDS replaces every pause. It is only for hub's tests, which set it to 0.
+  local -a pauses=(2 4 8 16) fetch=(fetch)
+  if ((HUB_NOOP)); then
+    hub::git fetch "$remote"
+    return
+  fi
+  # git's messages reach the terminal through tee, which also keeps them in $log to tell why a fetch
+  # failed. On a pipe, git shows its progress meter only when asked to.
+  [[ -t 2 ]] && fetch+=(--progress)
+  fetch+=("$remote")
+  base=${TMPDIR:-/tmp}
+  log=$(mktemp "${base%/}/hub-fork.XXXXXX") || hub::die "Aborted: could not create a temporary file"
+  # shellcheck disable=SC2064  # expand $log now: the trap fires after this function has returned
+  trap "rm -f -- $(printf '%q' "$log")" EXIT
+  while :; do
+    {
+      hub::git "${fetch[@]}" 2>&1 >&3 3>&- | tee "$log" >&2
+      status=${PIPESTATUS[0]}
+    } 3>&1
+    ((status)) || return 0
+    _hub_fork_missing "$log" \
+      || hub::die "error: could not fetch the fork $fork. The fork and the remote '$remote' exist; run 'git fetch $remote' later."
+    ((retry < ${#pauses[@]})) \
+      || hub::die "error: GitHub has not finished creating the fork $fork. The fork and the remote '$remote' exist; run 'git fetch $remote' later."
+    pause=${HUB_FORK_RETRY_DELAY:-${pauses[retry]}}
+    retry=$((retry + 1))
+    hub::warn "GitHub is still creating the fork $fork; fetching it again in ${pause}s (retry $retry of ${#pauses[@]})."
+    sleep "$pause"
+  done
+}
+
+# _hub_fork_missing LOG : git's messages in LOG say there is no repository at the URL (yet): GitHub's
+# "Repository not found", git's "repository '...' not found" and "'...' does not appear to be a git
+# repository", or a repository that "does not exist" or is an "empty repository".
+_hub_fork_missing() {
+  grep -Eqi -- "repository( '[^']*')? not found|does not appear to be a git repository|repository.* does not exist|empty repository" "$1"
 }

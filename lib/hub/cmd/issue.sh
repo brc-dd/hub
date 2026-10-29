@@ -99,7 +99,10 @@ _hub_issue_create() {
         break
         ;;
       --?*=*) opt=${1%%=*} val=${1#*=} ;;
-      -[abFlmptRT]?*) opt=${1:0:2} val=${1:2} ;;
+      -[abFlmptRT]?*)
+        opt=${1:0:2} val=${1:2}
+        [[ $val != =?* ]] || val=${val:1} # gh reads -X=VALUE as -X VALUE
+        ;;
       -[abFlmptRT] | --message | --file | --assignee | --attach | --blocked-by | --blocking | --body | --body-file | \
         --label | --milestone | --parent | --project | --recover | --template | --title | --type | --repo)
         (($# > 1)) || hub::die "Aborted: $1 needs a value."
@@ -168,7 +171,10 @@ _hub_issue_update() {
         break
         ;;
       --?*=*) opt=${1%%=*} val=${1#*=} ;;
-      -[bcFmrRst]?*) opt=${1:0:2} val=${1:2} ;;
+      -[bcFmrRst]?*)
+        opt=${1:0:2} val=${1:2}
+        [[ $val != =?* ]] || val=${val:1} # gh reads -X=VALUE as -X VALUE
+        ;;
       -[bcFmrRst] | --state | --message | --file | --comment | --reason | --duplicate-of | --repo | --title | --body | \
         --body-file | --milestone | --type | --parent | --attach | --add-assignee | --remove-assignee | --add-label | \
         --remove-label | --add-project | --remove-project | --add-blocked-by | --remove-blocked-by | --add-blocking | \

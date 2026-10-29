@@ -50,6 +50,21 @@ HUB_NOOP=${HUB_NOOP:-0}
 HUB_GIT_OPTS=() # git global options to forward on every git invocation
 hub_cmd=
 
+# gh runs git itself (pushes, fetches, config reads) without hub's -c flags, so every -c and
+# --config-env is also mirrored into the GIT_CONFIG_* environment that git reads in all processes.
+# The flags stay the source of truth for hub's own git calls and win over the mirror, as in git.
+hub_config_mirror() { # KEY[=VALUE]
+  local key=${1%%=*} value=${1#*=}
+  [[ $1 == *=* ]] || value=true
+  export "GIT_CONFIG_KEY_${GIT_CONFIG_COUNT:-0}=$key" "GIT_CONFIG_VALUE_${GIT_CONFIG_COUNT:-0}=$value"
+  export GIT_CONFIG_COUNT=$((${GIT_CONFIG_COUNT:-0} + 1))
+}
+hub_config_mirror_env() { # KEY=ENVVAR (skipped when ENVVAR is not a name bash can read; git still gets the flag)
+  local key=${1%%=*} var=${1#*=}
+  [[ $1 == *=* && $var =~ ^[A-Za-z_][A-Za-z0-9_]*$ && -n ${!var+x} ]] || return 0
+  hub_config_mirror "$key=${!var}"
+}
+
 # Separate git's global options from the command word.
 while (($#)); do
   case $1 in
@@ -78,9 +93,16 @@ while (($#)); do
       # precedence rules apply unchanged (including valueless -c foo.bar and any env name).
       (($# >= 2)) || break
       HUB_GIT_OPTS+=("$1" "$2")
+      [[ $1 == -c ]] && hub_config_mirror "$2"
+      [[ $1 == --config-env ]] && hub_config_mirror_env "$2"
       shift 2
       ;;
-    --config-env=* | --exec-path=* | --git-dir=* | --work-tree=* | --namespace=* | --attr-source=* | --list-cmds=*)
+    --config-env=*)
+      HUB_GIT_OPTS+=("$1")
+      hub_config_mirror_env "${1#--config-env=}"
+      shift
+      ;;
+    --exec-path=* | --git-dir=* | --work-tree=* | --namespace=* | --attr-source=* | --list-cmds=*)
       HUB_GIT_OPTS+=("$1")
       shift
       ;;

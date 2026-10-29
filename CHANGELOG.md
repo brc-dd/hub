@@ -10,6 +10,22 @@ heading.
 
 ### Fixed
 
+- `pull-request -p` applies one rule before any push: the push remote's
+  push URLs must name a single GitHub repository on the base's host that is
+  the base itself or a fork of it (checked with one API lookup), the head
+  owner must not be an organisation, and `-R`/`--repo` must be a well-formed
+  repository; `-p -h OWNER:BRANCH` resolves OWNER's fork of the actual base.
+- Hosts gh is logged in to are recognised as GitHub hosts without `hub.host`;
+  ports in `GH_HOST` no longer break host recognition, and SSH URLs for such
+  hosts use the `ssh://` form on the default port.
+- `-c` and `--config-env` also reach the git commands gh runs itself.
+- `fork` retries the first fetch while GitHub is still creating the fork.
+- `fetch` recognises `--multiple` anywhere among the leading options.
+- `compare` builds the head from the remote whose tracking ref proved the
+  branch exists.
+- `issue update` reads `-R=org/repo` and other `-X=VALUE` forms like gh does.
+- The release workflow publishes each tag in its own job so an overlapping
+  release cannot cancel another; only the formula update is serialised.
 - `pull-request` always passes the repository hub resolved to gh (`--repo`),
   unless `-R` is given; the head owner comes from the push remote's push URL,
   not its fetch URL, and all push URLs must agree; gh's `-H` inside an option
