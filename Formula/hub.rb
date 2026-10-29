@@ -13,7 +13,7 @@ class Hub < Formula
   # script/update-formula fills in url and sha256 for each vX.Y.Z tag. Until the first release
   # they are placeholders, so install the main branch instead: brew install --HEAD #{REPO}/hub
   url "https://github.com/#{REPO}/archive/refs/tags/v0.1.0.tar.gz"
-  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+  sha256 "69c9a25e7def204c94979af955b93bdeb94223540201c3ade49805283d1c9f19"
   # TODO(license): no license has been chosen yet. Add `license "<SPDX id>"` here once there is one.
   head "https://github.com/#{REPO}.git", branch: "main"
 
