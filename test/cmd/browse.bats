@@ -200,7 +200,7 @@ load ../test_helper
   assert_output_equals "open https://ghe.example.com/corp/app/issues"
 }
 
-@test "browse honours GH_REPO and does not guess a branch for it" {
+@test "browse honors GH_REPO and does not guess a branch for it" {
   make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
   git checkout -q -b feature
   GH_REPO=cli/cli run hub --noop browse

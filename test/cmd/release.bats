@@ -131,6 +131,20 @@ load ../test_helper
   assert_output_equals "gh release create v1.0 --title v1.0 --notes-file CHANGES.md"
 }
 
+@test "release create drops the '=' of -m=, -F=, -t= and -a= values, as gh's parser does" {
+  touch a.tgz
+  run hub --noop release create v1 -m=Title -t=main -a=a.tgz
+  assert_success
+  assert_output_equals "gh release create v1 --title Title --notes '' --target main a.tgz"
+  printf 'Version 1.0\n\nFirst release.\n' >notes.txt
+  run hub --noop release create v1 -F=notes.txt -t==main # only one '='
+  assert_success
+  assert_output_equals "gh release create v1 --title Version\\ 1.0 --notes First\\ release. --target =main"
+  run hub --noop release create v1 -m=Title -n=Notes -R=mislav/dotfiles # gh's own options go as typed
+  assert_success
+  assert_output_equals "gh release create v1 --title Title -n=Notes -R=mislav/dotfiles"
+}
+
 @test "release create does not take option values for hub's options" {
   run hub --noop release create v1.0 --notes -mnot-a-message --title -a
   assert_success
@@ -164,11 +178,10 @@ load ../test_helper
   assert_output_equals "gh release upload v1.0 a.tgz --clobber=false"
 }
 
-@test "release edit --clobber without -a aborts" {
-  run hub release edit v1.0 -m "New title" --clobber
-  assert_failure
-  assert_output_equals "Aborted: --clobber only goes with -a FILE."
-  assert_gh_not_called
+@test "release edit --clobber without -a is left to gh" {
+  run hub --noop release edit v1.0 -m "New title" --clobber
+  assert_success
+  assert_output_equals "gh release edit v1.0 --title New\\ title --clobber"
 }
 
 @test "release edit -a with other options edits first, with hub's -m and -t translated" {
@@ -193,6 +206,17 @@ load ../test_helper
   run hub --noop release edit v1.0 -F notes.txt --latest
   assert_success
   assert_output_equals "gh release edit v1.0 --title Version\\ 1.0 --notes First\\ release. --latest"
+}
+
+@test "release edit drops the '=' of -m=, -F=, -t= and -a= values, as gh's parser does" {
+  touch a.tgz
+  run hub --noop release edit v1.0 -m=Title -t=main -a=a.tgz -R=mislav/dotfiles
+  assert_success
+  assert_output_equals $'gh release edit v1.0 --title Title --target main -R=mislav/dotfiles\ngh release upload v1.0 a.tgz -R=mislav/dotfiles'
+  printf 'Version 1.0\n\nFirst release.\n' >notes.txt
+  run hub --noop release edit v1.0 -F=notes.txt
+  assert_success
+  assert_output_equals "gh release edit v1.0 --title Version\\ 1.0 --notes First\\ release."
 }
 
 @test "release edit spells out -d and -p, which gh's edit lacks" {
@@ -307,6 +331,12 @@ load ../test_helper
   run hub --noop release download v1.0 --include=*.deb -D dist
   assert_success
   assert_output_equals "gh release download v1.0 -p \\*.deb -D dist"
+}
+
+@test "release download drops the '=' of an -i= value, as gh's parser does" {
+  run hub --noop release download v1.0 '-i=*.tgz' -i==odd '-p=*.zip' -D=dist
+  assert_success
+  assert_output_equals "gh release download v1.0 -p \\*.tgz -p =odd -p=\\*.zip -D=dist"
 }
 
 @test "release download keeps gh's own options unchanged" {

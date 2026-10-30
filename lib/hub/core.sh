@@ -1,20 +1,12 @@
 # shellcheck shell=bash
 # shellcheck disable=SC2034  # HUB_* result variables are set here and read by modules
 # shellcheck disable=SC2153  # HUB_ROOT is exported by bin/hub
-# core.sh — shared helpers for hub modules. Sourced by bin/hub once it has
-# decided to intercept a command; every module may rely on everything here.
+# core.sh — helpers shared by all modules; sourced by bin/hub.
 #
-# Conventions
-#   - Functions are namespaced hub::<name>. A module lib/hub/{cmd,ext}/<name>.sh
-#     defines hub_cmd_<name> or hub_ext_<name> (dashes become underscores) as
-#     its entry point and may define private helpers prefixed _hub_<name>_.
-#   - Anything with side effects goes through hub::run / hub::git / hub::gh /
-#     hub::exec_git / hub::exec_gh so that `hub --noop` prints the command
-#     instead of running it.
-#   - Read-only lookups use hub::git_query / hub::gh_query, which always run.
-#   - Errors: hub::die "Aborted: ..." (exit 1).
-#   - Variables a helper "returns" by side effect are HUB_* globals and are
-#     documented on the helper.
+# A module lib/hub/{cmd,ext}/<name>.sh defines hub_cmd_<name> or hub_ext_<name>; its header
+# comment is its manual. Side effects go through hub::git / hub::gh / hub::exec_* so --noop can
+# print them; read-only lookups use hub::git_query / hub::gh_query. Results a helper returns by
+# side effect are HUB_* variables named on the helper.
 
 [[ -n ${HUB_CORE_LOADED:-} ]] && return 0
 HUB_CORE_LOADED=1
@@ -25,6 +17,7 @@ if [[ -z ${HUB_VERSION:-} ]]; then
 fi
 : "${HUB_NOOP:=0}"
 declare -p HUB_GIT_OPTS >/dev/null 2>&1 || HUB_GIT_OPTS=()
+declare -p HUB_GH_ENV >/dev/null 2>&1 || HUB_GH_ENV=() # environment for gh calls only (built by bin/hub)
 HUB_GIT=${HUB_GIT:-}
 
 # hub 2.x configured Enterprise hosts with GITHUB_HOST; gh reads GH_HOST. Make
@@ -115,17 +108,24 @@ hub::require_gh() {
   command -v gh >/dev/null 2>&1 || hub::die "hub: this command needs the GitHub CLI (gh): https://cli.github.com"
 }
 
+# gh calls run with HUB_GH_ENV in their environment: the -c/--config-env settings and the git
+# context (--git-dir, --work-tree, --namespace) given to hub, so gh's own git subprocesses see them.
 # hub::gh ARGS... : gh call with side effects (printed under --noop).
 hub::gh() {
   hub::require_gh
-  hub::run gh "$@"
+  if ((HUB_NOOP)); then
+    hub::quote gh "$@"
+    return 0
+  fi
+  hub::debug "\$ $(hub::quote gh "$@")"
+  env "${HUB_GH_ENV[@]}" gh "$@"
 }
 
 # hub::gh_query ARGS... : read-only gh call that always runs (used to work out what to do).
 hub::gh_query() {
   hub::require_gh
   hub::debug "\$ $(hub::quote gh "$@")"
-  gh "$@"
+  env "${HUB_GH_ENV[@]}" gh "$@"
 }
 
 # hub::exec_gh ARGS... : hand the process over to gh (printed under --noop, then exit 0).
@@ -136,7 +136,7 @@ hub::exec_gh() {
     exit 0
   fi
   hub::debug "\$ $(hub::quote gh "$@")"
-  exec gh "$@"
+  exec env "${HUB_GH_ENV[@]}" gh "$@"
 }
 
 # hub::realpath PATH : absolute path with symlinks resolved.
@@ -267,7 +267,7 @@ hub::parse_remote_url() {
   [[ -n $HUB_URL_HOST && -n $HUB_URL_OWNER && -n $HUB_URL_REPO ]]
 }
 
-# hub::remote_project NAME : print owner/repo for a GitHub remote and set HUB_PROJECT_HOST. Returns 1 if not GitHub.
+# hub::remote_project NAME : print owner/repo for a GitHub remote; also sets HUB_PROJECT and HUB_PROJECT_HOST. Returns 1 if not GitHub.
 hub::remote_project() {
   local url real
   url=$(hub::git_query remote get-url "$1") || return 1
@@ -278,7 +278,8 @@ hub::remote_project() {
     HUB_URL_HOST=$real
   fi
   HUB_PROJECT_HOST=$HUB_URL_HOST
-  printf '%s/%s\n' "$HUB_URL_OWNER" "$HUB_URL_REPO"
+  HUB_PROJECT=$HUB_URL_OWNER/$HUB_URL_REPO
+  printf '%s\n' "$HUB_PROJECT"
 }
 
 # hub::main_remote : the remote hub treats as "the" GitHub project: upstream, github, origin, then any other GitHub remote.
@@ -303,7 +304,7 @@ hub::main_remote() {
   return 1
 }
 
-# hub::main_project : owner/repo of the current project (GH_REPO=[HOST/]OWNER/REPO overrides); sets HUB_PROJECT_HOST. Dies if none.
+# hub::main_project : owner/repo of the current project (GH_REPO=[HOST/]OWNER/REPO overrides); also sets HUB_PROJECT and HUB_PROJECT_HOST. Dies if none.
 hub::main_project() {
   if [[ -n ${GH_REPO:-} ]]; then
     local p=${GH_REPO#*://}
@@ -314,12 +315,56 @@ hub::main_project() {
         ;;
       *) HUB_PROJECT_HOST=$(hub::host) ;;
     esac
-    printf '%s\n' "${p%.git}"
+    HUB_PROJECT=${p%.git}
+    printf '%s\n' "$HUB_PROJECT"
     return 0
   fi
   local remote
   remote=$(hub::main_remote) || hub::die "Aborted: could not find a GitHub remote in this repository (looked for upstream, github, origin)"
   hub::remote_project "$remote"
+}
+
+# hub::project_or_dir : print "HOST REPO" for the current project, else the default host and the
+# work tree's directory name (for commands that may run before a GitHub remote exists).
+hub::project_or_dir() {
+  local name
+  if [[ -n ${GH_REPO:-} ]] || hub::main_remote >/dev/null; then
+    hub::main_project >/dev/null
+    printf '%s %s\n' "$HUB_PROJECT_HOST" "${HUB_PROJECT#*/}"
+    return
+  fi
+  name=$(hub::git_query rev-parse --show-toplevel) || name=$PWD
+  name=${name##*/}
+  printf '%s %s\n' "$(hub::host)" "${name//[^A-Za-z0-9_.-]/-}"
+}
+
+# hub::same_host A B : the same host, ignoring case and port.
+hub::same_host() {
+  local a=${1,,} b=${2,,}
+  [[ ${a%%:*} == "${b%%:*}" ]]
+}
+
+# hub::remote_for_project OWNER/REPO HOST : print the name of a local remote pointing at that project.
+hub::remote_for_project() {
+  local remote
+  while IFS= read -r remote; do
+    hub::remote_project "$remote" >/dev/null || continue
+    { [[ ${HUB_PROJECT,,} == "${1,,}" ]] && hub::same_host "$HUB_PROJECT_HOST" "$2"; } || continue
+    printf '%s\n' "$remote"
+    return 0
+  done < <(hub::git_query remote)
+  return 1
+}
+
+# hub::push_target BRANCH : where BRANCH pushes. Sets HUB_PUSH_REMOTE and HUB_PUSH_BRANCH (the branch
+# name on that remote); returns 1 when git knows no push destination for it.
+hub::push_target() {
+  local ref
+  IFS=$'\t' read -r HUB_PUSH_REMOTE ref < <(hub::git_query for-each-ref --format='%(push:remotename)%09%(push)' "refs/heads/$1")
+  [[ -n ${HUB_PUSH_REMOTE:-} ]] || return 1
+  HUB_PUSH_BRANCH=$1
+  [[ $ref == "refs/remotes/$HUB_PUSH_REMOTE/"?* ]] && HUB_PUSH_BRANCH=${ref#"refs/remotes/$HUB_PUSH_REMOTE/"}
+  return 0
 }
 
 # hub::default_branch [REMOTE] : from refs/remotes/REMOTE/HEAD, else from gh, else "main".
@@ -375,9 +420,13 @@ hub::parse_github_url() {
       if [[ $tail == */commits/* ]]; then
         HUB_URL_SHA=${tail##*/commits/}
         HUB_URL_SHA=${HUB_URL_SHA%%/*}
+        [[ $HUB_URL_SHA =~ ^[0-9a-fA-F]{4,64}$ ]] || return 1 # only a hash is a commit, never a ref name
       fi
       ;;
-    commit) HUB_URL_SHA=${tail%%/*} ;;
+    commit)
+      HUB_URL_SHA=${tail%%/*}
+      [[ $HUB_URL_SHA =~ ^[0-9a-fA-F]{4,64}$ ]] || return 1
+      ;;
     *) HUB_URL_PATH=$tail ;;
   esac
   return 0
@@ -486,6 +535,41 @@ hub::split_message() {
   body=${body%"${body##*[![:space:]]}"}
   HUB_MSG_TITLE=$title
   HUB_MSG_BODY=$body
+}
+
+# hub::message FILE [MESSAGE...] : HUB_MSG_TITLE and HUB_MSG_BODY from -m MESSAGEs (joined as
+# paragraphs) or from FILE ("-" is standard input). Dies when both are given or FILE is unreadable.
+hub::message() {
+  local file=$1 text
+  shift
+  if [[ -n $file ]]; then
+    (($# == 0)) || hub::die "Aborted: -m and -F cannot be used together."
+    if [[ $file == - ]]; then
+      text=$(cat)
+    else
+      [[ -r $file && ! -d $file ]] || hub::die "Aborted: cannot read $file"
+      text=$(<"$file")
+    fi
+  else
+    text=$(printf '%s\n\n' "$@")
+  fi
+  hub::split_message "$text"
+}
+
+# hub::url_escape STR : percent-encode STR for a URL path; / : @ and unreserved characters stay.
+hub::url_escape() {
+  local LC_ALL=C s=$1 out='' c i
+  for ((i = 0; i < ${#s}; i++)); do
+    c=${s:i:1}
+    case $c in
+      [A-Za-z0-9._~/:@-]) out+=$c ;;
+      *)
+        printf -v c '%%%02X' "'$c"
+        out+=$c
+        ;;
+    esac
+  done
+  printf '%s\n' "$out"
 }
 
 # hub::open_url URL : open in the browser (GH_BROWSER, BROWSER, else open/xdg-open). Printed under --noop.

@@ -2,28 +2,14 @@
 # Summary: Apply the changes behind a GitHub pull request or commit URL.
 # Usage: hub apply [git-apply options] [URL | PATCH]...
 #
-# Every argument that is the URL of a GitHub pull request or commit
-# (.../pull/N, .../commit/SHA, .../pull/N/commits/SHA) is downloaded with gh
-# as a diff into a temporary file, and `git apply` gets that file in its
-# place. A pull request gives its combined diff, as on its "Files changed" tab.
-# Other arguments go to git apply unchanged, and without any URL this is plain
-# `git apply`. A URL that is the value of an option (as in --exclude URL) or
-# that comes after `--` is left as it is. Each diff comes from the URL's own
-# host, even when gh's default host (GH_HOST, or the only host gh is logged in
-# to) is another one. To make commits instead, see `hub am`.
-#
-# gh 2.103 and later refuse to write a download that contains terminal escape
-# bytes unless given --allow-escape-sequences, which would stop such a diff
-# before git sees it. So the gh commands below also get that flag whenever
-# `gh pr diff --help` (for a pull request) or `gh api --help` (for a commit)
-# lists it; an older gh has no such flag and gets none.
+# As `hub am`, but each URL is downloaded as a diff for git apply: a pull
+# request's combined diff, as on its "Files changed" tab, or one commit's diff.
+# To make commits instead, use `hub am`. Without any URL, this is plain git
+# apply.
 #
 #   $ hub apply https://github.com/jingweno/gh/pull/55
 #   > gh pr diff https://github.com/jingweno/gh/pull/55 --color=never > $TMPDIR/hub-apply.XXXXXX/1.diff
 #   > git apply $TMPDIR/hub-apply.XXXXXX/1.diff
-#
-#   $ hub apply https://github.com/jingweno/gh/commit/fdb9921
-#   > gh api --hostname github.com repos/jingweno/gh/commits/fdb9921 -H 'Accept: application/vnd.github.v3.diff' > ...
 
 # shellcheck source=lib/hub/ext/am.sh
 source "$HUB_LIB/ext/am.sh"

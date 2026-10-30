@@ -482,7 +482,7 @@ load ../test_helper
   run hub --noop issue update 12 -h
   assert_success
   assert_output_contains "hub issue update NUMBER"
-  assert_output_contains "--add-label"
+  assert_output_contains "--duplicate-of ISSUE"
   run hub help issue
   assert_success
   assert_output_contains "Usage: hub issue"

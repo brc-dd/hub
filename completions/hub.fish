@@ -1,14 +1,6 @@
-# fish completion for hub: hub completes like git, plus hub's own commands.
-# It covers `hub`, and `git` too when git is an alias for hub
-# (hub alias -s fish | source): fish's alias turns git into a function that
-# wraps hub, so git picks up these completions as well.
-#
-# Install: link or copy this file to ~/.config/fish/completions/hub.fish, or
-# into a vendor_completions.d directory (make install does that).
-#
-# The commands below are hub's commands that git does not have, as listed by
-# the "# Summary:" lines of lib/hub/{cmd,ext}/*.sh. The git commands hub
-# extends (clone, push, checkout, ...) are completed by fish's git completion.
+# fish completion for hub, and for git when it is an alias for hub (the alias
+# wraps hub): fish's git completion plus hub's commands. Install it into a
+# vendor_completions.d directory (make install does) or ~/.config/fish/completions.
 
 complete -c hub --wraps git
 
@@ -27,7 +19,6 @@ complete -c hub -f -n __fish_use_subcommand -a pull-request -d "Open a pull requ
 complete -c hub -f -n __fish_use_subcommand -a release -d 'List, view, create, edit and download releases (gh release)'
 complete -c hub -f -n __fish_use_subcommand -a sync -d 'Fetch a remote and fast-forward or delete local branches to match it'
 
-# Subcommands of the commands that have them.
 set -l __hub_gist list view show create edit delete clone rename
 set -l __hub_issue list status view show create update labels close reopen comment edit transfer delete develop lock unlock pin unpin
 set -l __hub_pr list status view show create checkout diff checks comment review merge edit close reopen ready lock unlock revert update-branch
@@ -37,6 +28,5 @@ complete -c hub -f -n "__fish_seen_subcommand_from issue; and not __fish_seen_su
 complete -c hub -f -n "__fish_seen_subcommand_from pr; and not __fish_seen_subcommand_from $__hub_pr" -a "$__hub_pr"
 complete -c hub -f -n "__fish_seen_subcommand_from release; and not __fish_seen_subcommand_from $__hub_release" -a "$__hub_release"
 
-# hub alias [-s] [SHELL]
 complete -c hub -f -n '__fish_seen_subcommand_from alias' -s s -d 'Print only the code to evaluate'
 complete -c hub -f -n '__fish_seen_subcommand_from alias' -a 'bash zsh sh ksh dash fish csh tcsh'

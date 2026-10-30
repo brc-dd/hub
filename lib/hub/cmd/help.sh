@@ -2,14 +2,13 @@
 # Summary: Show help for hub and the commands it adds to git.
 # Usage: hub help [COMMAND]
 #
-# Without arguments, prints git's usage followed by the list of hub commands.
-# With a COMMAND that hub provides or extends, prints that command's manual
-# (the comment block at the top of its module). Anything else goes to `git help`.
+# Without arguments, prints git's usage and the list of hub's commands. With a COMMAND that hub
+# provides or extends, prints its manual; with any other, runs `git help COMMAND`.
 
 hub_cmd_help() {
-  local topic=${1-} file
-  if [[ -n $topic ]]; then
-    for file in "$HUB_LIB/cmd/$topic.sh" "$HUB_LIB/ext/$topic.sh"; do
+  local file group name
+  if [[ -n ${1-} ]]; then
+    for file in "$HUB_LIB/cmd/$1.sh" "$HUB_LIB/ext/$1.sh"; do
       [[ -f $file ]] || continue
       hub::module_doc "$file"
       return 0
@@ -17,23 +16,12 @@ hub_cmd_help() {
     hub::exec_git help "$@"
   fi
   "$HUB_GIT" help 2>&1 || true
-  printf '\nGitHub commands provided or extended by hub (hub help <command> for details):\n\n'
-  hub::list_commands
-}
-
-# hub::list_commands : one line per module, from each module's "# Summary:" line.
-hub::list_commands() {
-  local file name summary group
+  printf '\nGitHub commands provided or extended by hub, https://github.com/brc-dd/hub (hub help <command> for details):\n\n'
   for group in ext cmd; do
-    case $group in
-      ext) printf '  Extended git commands:\n' ;;
-      cmd) printf '\n  New commands:\n' ;;
-    esac
+    if [[ $group == ext ]]; then printf '\n  Extended git commands:\n'; else printf '\n  New commands:\n'; fi
     for file in "$HUB_LIB/$group"/*.sh; do
-      [[ -f $file ]] || continue
-      name=$(basename "$file" .sh)
-      summary=$(sed -n 's/^# Summary: //p' "$file" | head -n 1)
-      printf '    %-14s %s\n' "$name" "$summary"
+      name=${file##*/}
+      printf '    %-14s %s\n' "${name%.sh}" "$(sed -n 's/^# Summary: //p' "$file" | head -n 1)"
     done
   done
 }

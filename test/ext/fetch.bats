@@ -2,19 +2,6 @@
 load ../test_helper
 
 # serve_github OWNER/REPO... : make https://github.com/OWNER/REPO.git resolve to a local bare repo
-# with one commit (git's url.insteadOf), and allow only local transports so nothing reaches the network.
-serve_github() {
-  local repo dir tree
-  git config --global url."$HUB_TEST_TMP/srv/".insteadOf https://github.com/
-  export GIT_ALLOW_PROTOCOL=file
-  for repo in "$@"; do
-    dir=$HUB_TEST_TMP/srv/$repo.git
-    git init -q --bare "$dir"
-    tree=$(git -C "$dir" hash-object -t tree -w --stdin </dev/null)
-    git -C "$dir" update-ref refs/heads/main "$(git -C "$dir" commit-tree -m "initial commit" "$tree")"
-  done
-}
-
 @test "fetch USER adds a remote for USER's fork and fetches it" {
   make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
   run hub --noop fetch alice
@@ -81,6 +68,38 @@ git fetch --multiple alice origin bob alice --prune --depth 1"
   run hub --noop fetch -mj 4 alice
   assert_success
   assert_output_equals "$alice"$'\ngit fetch -mj 4 alice'
+}
+
+@test "fetch takes the last of --multiple and --no-multiple before the first name, as git does" {
+  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
+  # git fetches origin's main here, so main is no remote to add
+  run hub --noop fetch --multiple --no-multiple origin main
+  assert_success
+  assert_output_equals "git fetch --multiple --no-multiple origin main"
+  run hub --noop fetch -pm --depth 1 --no-multiple alice main
+  assert_success
+  assert_output_equals "git fetch -pm --depth 1 --no-multiple alice main"
+  assert_gh_not_called
+  run hub --noop fetch --no-multiple --prune -m alice bob
+  assert_success
+  assert_output_equals "git remote add alice https://github.com/alice/dotfiles.git
+git remote add bob https://github.com/bob/dotfiles.git
+git fetch --no-multiple --prune -m alice bob"
+}
+
+@test "fetch reads --multiple only before the first name, else it is a fetch of one remote" {
+  serve_github mislav/dotfiles alice/dotfiles bob/dotfiles
+  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
+  run hub --noop fetch alice --multiple bob
+  assert_success
+  assert_output_equals $'git remote add alice https://github.com/alice/dotfiles.git\ngit fetch alice --multiple bob'
+  # git reads the --multiple and stops at bob, which hub did not add
+  run hub fetch alice --multiple bob
+  assert_failure
+  assert_output_contains "no such remote or remote group: bob"
+  [[ $(git config remote.alice.url) == https://github.com/alice/dotfiles.git ]]
+  run git config remote.bob.url
+  assert_failure
 }
 
 @test "fetch --multiple after --, or as an option's value, is not the option" {
@@ -167,11 +186,11 @@ git fetch --multiple --depth=1 carol -j4 alice --recurse-submodules bob --recurs
   assert_gh_not_called
 }
 
-@test "a name given twice is added and fetched once" {
+@test "a name given twice gets one remote" {
   make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
   run hub --noop fetch alice,alice,
   assert_success
-  assert_output_equals $'git remote add alice https://github.com/alice/dotfiles.git\ngit fetch alice'
+  assert_output_equals $'git remote add alice https://github.com/alice/dotfiles.git\ngit fetch --multiple alice alice'
 }
 
 @test "arguments after the list stay in place" {
@@ -235,18 +254,6 @@ git fetch --multiple --depth=1 carol -j4 alice --recurse-submodules bob --recurs
   run hub --noop fetch origin.backup,alice
   assert_success
   assert_output_equals $'git remote add alice https://github.com/alice/dotfiles.git\ngit fetch --multiple origin.backup alice'
-}
-
-@test "outside a repository it is plain git fetch" {
-  mkdir outside && cd outside
-  export GIT_CEILING_DIRECTORIES=$HUB_TEST_TMP
-  run hub --noop fetch alice
-  assert_success
-  assert_output_equals "git fetch alice"
-  run hub --noop fetch --multiple alice bob
-  assert_success
-  assert_output_equals "git fetch --multiple alice bob"
-  assert_gh_not_called
 }
 
 @test "fetch uses SSH when hub.protocol is ssh, without asking gh" {

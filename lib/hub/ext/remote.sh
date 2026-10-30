@@ -1,39 +1,23 @@
 # shellcheck shell=bash
 # Summary: Add or change a remote using a GitHub OWNER[/REPO] name.
 # Usage: hub remote add [-p] [<git-remote-add options>] [NAME] OWNER[/REPO]
-#        hub remote add [-p] [<git-remote-add options>] origin
 #        hub remote set-url [-p] [--push | --add] NAME OWNER[/REPO] [OLDURL]
 #
-# Expands OWNER[/REPO] to a clone URL for `git remote add` or `git remote
-# set-url`. A bare OWNER means OWNER's copy of the current repository: REPO
-# defaults to the current project's name on GitHub (GH_REPO, else the upstream,
-# github or origin remote), else to the name of the work tree's directory. NAME
-# defaults to OWNER.
-#
-# `hub remote add origin`, with origin as the only name, adds your own copy of
-# the current repository as origin: OWNER is your login on the project's host,
-# as gh knows it. With an OWNER[/REPO] after it, origin is just the NAME.
-#
-# The URL is on the current project's host (else GH_HOST, else github.com) and
-# uses SSH or HTTPS as `hub clone` does. Nothing else is looked up on GitHub.
-# URLs, paths and the other `git remote` subcommands go to git untouched.
+# Expands OWNER[/REPO] to a clone URL on the current project's host and runs git
+# remote with every other argument in place. REPO defaults to the current
+# project's name (GH_REPO, else the upstream, github or origin remote, else the
+# work tree's directory), and NAME to OWNER. `hub remote add origin` alone adds
+# your own copy of the current repository. URLs, paths and the other
+# subcommands go to git unchanged.
 #
 # Options:
-#   -p   Use SSH for the URL, whatever the configured protocol.
+#   -p   Use SSH. Otherwise hub.protocol, else gh's git_protocol, else HTTPS.
 #
 #   $ hub remote add jingweno
 #   > git remote add jingweno https://github.com/jingweno/REPO.git
 #
 #   $ hub remote add origin
 #   > git remote add origin https://github.com/YOUR-LOGIN/REPO.git
-#
-#   $ hub remote add -f upstream github/hub
-#   > git remote add -f upstream https://github.com/github/hub.git
-#
-#   $ hub remote set-url --push origin mislav
-#   > git remote set-url --push origin https://github.com/mislav/REPO.git
-#
-# For git's own options, see `man git-remote`.
 
 hub_ext_remote() {
   local sub=${1-}
@@ -42,90 +26,38 @@ hub_ext_remote() {
     add | set-url) shift ;;
     *) hub::exec_git remote "$@" ;;
   esac
-  local -a args=() flags=() pos=() sep=()
-  local arg proto='' value=0 delete=0
+  local -a args=() pos=()
+  local arg proto='' value=0 ended=0 i name='' spec host repo
   for arg in "$@"; do
     if ((value)); then
       value=0
-      flags+=("$arg")
-    elif ((${#sep[@]})) || [[ $arg != -?* ]]; then
-      pos+=("$arg")
+    elif ((ended)) || [[ $arg != -?* ]]; then
+      pos+=("${#args[@]}")
     else
       case $arg in
-        --) sep=(--) ;;
+        --) ended=1 ;;
         --help) hub::usage ;;
-        -p)
-          proto=ssh
-          continue
-          ;;
-        --delete)
-          delete=1
-          flags+=("$arg")
-          ;;
-        *)
-          flags+=("$arg")
-          [[ $sub == add ]] && _hub_remote_takes_value "$arg" && value=1
-          ;;
+        --delete) hub::exec_git remote "$sub" "$@" ;; # its URL is a regex
+        -p) proto=ssh && continue ;;
+        *) [[ $sub == add ]] && _hub_remote_takes_value "$arg" && value=1 ;;
       esac
     fi
     args+=("$arg")
   done
-  local name spec url mine=0
-  case $sub:${#pos[@]}:$delete in
-    add:1:*)
-      spec=${pos[0]}
-      name=${spec%%/*}
-      [[ $spec == origin ]] && mine=1 # as in hub 2.x: your own copy, not a user named "origin"
-      ;;
-    add:2:* | set-url:[23]:0)
-      name=${pos[0]}
-      spec=${pos[1]}
-      ;;
+  case $sub:${#pos[@]} in
+    add:1) i=${pos[0]} name=${args[pos[0]]%%/*} ;;
+    add:2 | set-url:2 | set-url:3) i=${pos[1]} ;;
     *) hub::exec_git remote "$sub" "${args[@]}" ;;
   esac
+  spec=${args[i]}
   hub::is_shorthand "$spec" || hub::exec_git remote "$sub" "${args[@]}"
-  url=$(_hub_remote_url "$spec" "$proto" "$mine") || exit 1
-  hub::exec_git remote "$sub" "${flags[@]}" "${sep[@]}" "$name" "$url" "${pos[@]:2}"
-}
-
-# _hub_remote_takes_value OPTION : true if a `git remote add` OPTION consumes the next argument.
-_hub_remote_takes_value() {
-  case $1 in
-    --track | --master) return 0 ;;
-    --*) return 1 ;;
-  esac
-  # -t and -m take the rest of a short option cluster (-tmain), or the next argument when last (-ft main).
-  local opts=${1#-} head
-  head=${opts%%[tm]*}
-  [[ $head != "$opts" ]] && ((${#head} + 1 == ${#opts}))
-}
-
-# _hub_remote_url OWNER[/REPO] [PROTOCOL] [MINE] : clone URL on the current project's host;
-# a bare OWNER gets the current project's repository name. MINE=1 means your own copy of the
-# current repository instead: your login on that host (dies if unknown) and its repository name.
-_hub_remote_url() {
-  local spec=$1 host repo
-  read -r host repo <<<"$(_hub_remote_project)"
-  if [[ ${3-} == 1 ]]; then
-    spec=$(hub::current_user "$host") || return 1
+  read -r host repo <<<"$(hub::project_or_dir)"
+  if [[ -n $name && $spec == origin ]]; then # your own copy, not a user named origin
+    spec=$(hub::current_user "$host") || exit
   fi
   [[ $spec == */* ]] || spec=$spec/$repo
-  [[ ${spec##*/} == ?*.git ]] && spec=${spec%.git}
-  # GH_HOST makes hub::protocol read gh's git_protocol for this host.
-  GH_HOST=$host hub::git_url "$spec" "$host" "${2-}"
+  args[i]=$(hub::git_url "${spec%.git}" "$host" "$proto")
+  hub::exec_git remote "$sub" "${args[@]:0:i}" ${name:+"$name"} "${args[@]:i}"
 }
 
-# _hub_remote_project : print "HOST REPO" for the current project: its GitHub host and repository
-# name (hub::main_project), else the default host and the work tree's directory name.
-_hub_remote_project() {
-  local info name
-  if info=$(hub::main_project 2>/dev/null && printf '%s\n' "$HUB_PROJECT_HOST"); then
-    name=${info%%$'\n'*}
-    printf '%s %s\n' "${info##*$'\n'}" "${name#*/}"
-    return 0
-  fi
-  name=$(hub::git_query rev-parse --show-toplevel) || name=$PWD
-  name=${name##*/}
-  name=${name%.git}
-  printf '%s %s\n' "$(hub::host)" "${name//[^A-Za-z0-9_.-]/-}"
-}
+_hub_remote_takes_value() { [[ $1 == --track || $1 == --master || $1 =~ ^-[^-tm]*[tm]$ ]]; }

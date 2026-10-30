@@ -23,17 +23,17 @@ stub_git_push() {
   local real
   real=$(command -v git)
   mkdir -p "$HUB_TEST_TMP/bin"
-  cat >"$HUB_TEST_TMP/bin/git" <<EOF
+  cat >"$HUB_TEST_TMP/bin/git" <<STUB
 #!/bin/sh
 if [ "\$1" = push ]; then echo "git \$*" >>"$HUB_TEST_TMP/pushes"; exit 0; fi
 exec "$real" "\$@"
-EOF
+STUB
   chmod +x "$HUB_TEST_TMP/bin/git"
   export PATH=$HUB_TEST_TMP/bin:$PATH
 }
 
 # stub_parent HOST/OWNER/REPO PARENT : GitHub reports PARENT (OWNER/REPO, '' for none) as the
-# parent of that repository, which hub looks up to tell a fork of the base (gh repo view --json parent).
+# parent of that repository (gh repo view --json parent).
 stub_parent() { stub_gh "repo view $1 --json parent *" "$2"; }
 
 # stub_account OWNER TYPE [HOST] : GitHub reports OWNER's account type (User or Organization).
@@ -46,7 +46,7 @@ stub_fork() {
   stub_account "${owner%%/*}" "${3:-User}" "${1%%/*}"
 }
 
-@test "pull-request with no message lets gh prompt" {
+@test "without a message, gh asks for the title and body" {
   feature_repo
   run hub --noop pull-request
   assert_success
@@ -54,252 +54,124 @@ stub_fork() {
   assert_gh_not_called
 }
 
-@test "-m gives the title and an empty body, so gh does not prompt" {
+@test "-m and -F give the title (the first paragraph) and the body, so gh does not prompt" {
   feature_repo
   run hub --noop pull-request -m "Fix the bug"
   assert_success
   assert_output_equals "gh pr create --title Fix\\ the\\ bug --body '' --repo github.com/mislav/dotfiles"
-}
-
-@test "-m splits the first paragraph into the title and the rest into the body" {
-  feature_repo
-  run hub --noop pull-request -m $'Fix the\nbug\n\nIt was broken.\nNow it is not.\n'
-  assert_success
-  assert_output_equals "gh pr create --title Fix\\ the\\ bug --body \$'It was broken.\\nNow it is not.' --repo github.com/mislav/dotfiles"
-}
-
-@test "repeated -m are joined as paragraphs" {
-  feature_repo
-  run hub --noop pull-request -m "Fix the bug" -m "It was broken." -m "Now it is not."
+  run hub --noop pull-request -m $'Fix the\nbug\n\nIt was broken.' -m "Now it is not."
   assert_success
   assert_output_equals "gh pr create --title Fix\\ the\\ bug --body \$'It was broken.\\n\\nNow it is not.' --repo github.com/mislav/dotfiles"
-}
-
-@test "-F reads the title and body from a file" {
-  feature_repo
   printf 'Fix the bug\n\nIt was broken.\n' >"$HUB_TEST_TMP/msg.txt"
   run hub --noop pull-request -F "$HUB_TEST_TMP/msg.txt"
   assert_success
   assert_output_equals "gh pr create --title Fix\\ the\\ bug --body It\\ was\\ broken. --repo github.com/mislav/dotfiles"
-  run hub --noop pull-request -F <(printf 'From a pipe\n')
+  run hub --noop pull-request -F - <<<$'From stdin\n\nBody.'
   assert_success
-  assert_output_equals "gh pr create --title From\\ a\\ pipe --body '' --repo github.com/mislav/dotfiles"
+  assert_output_equals "gh pr create --title From\\ stdin --body Body. --repo github.com/mislav/dotfiles"
 }
 
-@test "-F - reads the title and body from stdin" {
-  feature_repo
-  run hub --noop pull-request -F - <<<$'Fix the bug\n\nIt was broken.'
-  assert_success
-  assert_output_equals "gh pr create --title Fix\\ the\\ bug --body It\\ was\\ broken. --repo github.com/mislav/dotfiles"
-}
-
-@test "unreadable files, empty titles and -m with -F abort" {
+@test "an unreadable file, an empty title, -m with -F and a missing value abort" {
   feature_repo
   run hub --noop pull-request -F no-such-file
   assert_failure
-  assert_output_contains "Aborted: cannot read no-such-file"
+  assert_output_equals "Aborted: cannot read no-such-file"
   run hub --noop pull-request -m ""
   assert_failure
-  assert_output_contains "Aborted: the pull request title is empty."
+  assert_output_equals "Aborted: the pull request title is empty."
   run hub --noop pull-request -m Fix -F - <<<"Other"
   assert_failure
-  assert_output_contains "Aborted: -m and -F cannot be used together."
+  assert_output_equals "Aborted: -m and -F cannot be used together."
   run hub --noop pull-request -b
   assert_failure
-  assert_output_contains "Aborted: -b needs a value."
+  assert_output_equals "Aborted: -b needs a value."
+  assert_gh_not_called
 }
 
-@test "-e opens gh's editor, pre-filled with any message" {
+@test "-e opens gh's editor, filled with any message; --no-edit uses the first commit" {
   feature_repo
   run hub --noop pull-request -e -m "Fix the bug"
   assert_success
-  assert_output_equals "gh pr create --title Fix\\ the\\ bug --body '' --editor --repo github.com/mislav/dotfiles"
-  run hub --noop pull-request --edit
+  assert_output_equals "gh pr create --title Fix\\ the\\ bug --body '' --repo github.com/mislav/dotfiles --editor"
+  run hub --noop pull-request --edit -m ""
   assert_success
-  assert_output_equals "gh pr create --editor --repo github.com/mislav/dotfiles"
-}
-
-@test "--no-edit uses the first commit's message" {
-  feature_repo
+  assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --editor"
   run hub --noop pull-request --no-edit
   assert_success
-  assert_output_equals "gh pr create --fill-first --repo github.com/mislav/dotfiles"
+  assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --fill-first"
 }
 
 @test "hub's base, head, draft, reviewer, assignee, milestone and label options become gh's" {
   feature_repo
   run hub --noop pull-request -b develop -h mislav:feature -d -r alice,bob -r org/team -a carol -M v1.0 -l bug,ui --no-maintainer-edits
   assert_success
-  assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --base develop --head mislav:feature --draft --reviewer alice,bob --reviewer org/team --assignee carol --milestone v1.0 --label bug,ui --no-maintainer-edit"
+  assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --base develop --head mislav:feature --draft --no-maintainer-edit --reviewer alice,bob --reviewer org/team --assignee carol --milestone v1.0 --label bug,ui"
 }
 
-@test "long options, --opt=value and bundled short options are understood" {
+@test "hub's options take long names, attached values and clusters, as gh's do" {
   feature_repo
-  run hub --noop pull-request --message="Fix it" --base=develop --head=feature --reviewer=alice --assign=carol --milestone=v1.0 --labels=bug --draft
-  assert_success
-  assert_output_equals "gh pr create --title Fix\\ it --body '' --repo github.com/mislav/dotfiles --base develop --head feature --draft --reviewer alice --assignee carol --milestone v1.0 --label bug"
-  run hub --noop pull-request -dmFix -bdevelop
-  assert_success
-  assert_output_equals "gh pr create --title Fix --body '' --repo github.com/mislav/dotfiles --base develop --draft"
-}
-
-@test "hub's short options take a value attached with =, as gh's do" {
-  feature_repo
-  run hub --noop pull-request -m=Fix -b=develop -h=feature -r=alice -a=carol -M=v1.0 -l=bug -d
-  assert_success
-  assert_output_equals "gh pr create --title Fix --body '' --repo github.com/mislav/dotfiles --base develop --head feature --draft --reviewer alice --assignee carol --milestone v1.0 --label bug"
-  run hub --noop pull-request -dB=develop -H=other
-  assert_success
-  assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --base develop --head other --draft"
-  printf 'From a file\n' >"$HUB_TEST_TMP/msg.txt"
-  run hub --noop pull-request -F="$HUB_TEST_TMP/msg.txt"
-  assert_success
-  assert_output_equals "gh pr create --title From\\ a\\ file --body '' --repo github.com/mislav/dotfiles"
-  run hub --noop pull-request -i=12 -b=main
+  local args
+  for args in "-m Fix -b develop -h feature -d -r alice -l bug" \
+    "--message Fix --base develop --head feature --draft --reviewer alice --labels bug" \
+    "--message=Fix --base=develop --head=feature --draft --reviewer=alice --labels=bug" \
+    "-mFix -bdevelop -hfeature -d -ralice -lbug" \
+    "-m=Fix -b=develop -h=feature -d -r=alice -l=bug" \
+    "-dmFix -Bdevelop -H=feature -r alice -l bug"; do
+    # shellcheck disable=SC2086  # split on purpose
+    run hub --noop pull-request $args
+    assert_success
+    assert_output_equals "gh pr create --title Fix --body '' --repo github.com/mislav/dotfiles --base develop --head feature --draft --reviewer alice --label bug"
+  done
+  run hub --noop pull-request -F="$HUB_TEST_TMP/no-such-file"
+  assert_failure
+  assert_output_equals "Aborted: cannot read $HUB_TEST_TMP/no-such-file"
+  run hub --noop pull-request --issue=12 -b=main
   assert_success
   assert_output_equals "gh api --hostname github.com repos/mislav/dotfiles/pulls -F issue=12 -F head=feature -f base=main --jq .html_url"
 }
 
-@test "options hub doesn't know are passed to gh unchanged" {
-  feature_repo
-  stub_fork github.com/mislav/dotfiles cli/cli # here, a fork of cli/cli
-  run hub --noop pull-request --fill -T template.md -R cli/cli --dry-run -w
-  assert_success
-  assert_output_equals "gh pr create --head mislav:feature --fill -T template.md -R cli/cli --dry-run -w"
-  run hub --noop pull-request -m Fix --assignee @me --project=Roadmap
-  assert_success
-  assert_output_equals "gh pr create --title Fix --body '' --repo github.com/mislav/dotfiles --assignee @me --project=Roadmap"
-}
-
-@test "gh's -B and -H are hub's -b and -h" {
-  feature_repo
-  run hub --noop pull-request -B develop -H mislav:feature
-  assert_success
-  assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --base develop --head mislav:feature"
-  run hub --noop pull-request -Bdevelop -Hfeature
-  assert_success
-  assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --base develop --head feature"
-}
-
-@test "gh's -H inside a cluster of gh's options is hub's -h, so -p pushes to that head" {
+@test "gh's -B and -H are hub's -b and -h, and hub's letters keep hub's meaning in a cluster of gh's" {
   feature_repo origin=https://github.com/mislav/dotfiles.git alice=https://github.com/alice/dotfiles.git
   stub_fork github.com/alice/dotfiles mislav/dotfiles
-  run hub --noop pull-request -p -wH alice:other -m title
+  run hub --noop pull-request -B develop -wH alice:other -m title
   assert_success
-  assert_output_equals $'git push alice HEAD:refs/heads/other\ngh pr create --title title --body \'\' --repo github.com/mislav/dotfiles --head alice:other -w'
-  run hub --noop pull-request -p -wHalice:other -m title
+  assert_output_equals "gh pr create --title title --body '' --repo github.com/mislav/dotfiles --base develop --head alice:other -w"
+  run hub --noop pull-request -wpHalice:other -wmtitle
   assert_success
-  assert_output_equals $'git push alice HEAD:refs/heads/other\ngh pr create --title title --body \'\' --repo github.com/mislav/dotfiles --head alice:other -w'
-  run hub --noop pull-request -p -wH=alice:other
+  assert_output_equals $'git push alice HEAD:refs/heads/other\ngh pr create --title title --body \'\' --repo github.com/mislav/dotfiles --head alice:other -w -w'
+}
+
+@test "options hub doesn't know go to gh with their values, which are never read as hub's" {
+  feature_repo
+  run hub --noop pull-request --fill -T template.md -w --assignee @me --project=Roadmap --body-file body.md
   assert_success
-  assert_output_equals $'git push alice HEAD:refs/heads/other\ngh pr create --repo github.com/mislav/dotfiles --head alice:other -w'
-  run hub --noop pull-request -dwH other -p
+  assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --fill -T template.md -w --assignee @me --project Roadmap --body-file body.md"
+  run hub --noop pull-request --title -p --body -i -dt -f -T=-h --label -m
   assert_success
-  assert_output_equals $'git push origin HEAD:refs/heads/other\ngh pr create --repo github.com/mislav/dotfiles --head other --draft -w'
-  run hub --noop pull-request -f -wH other
+  assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --draft --title -p --body -i -t -f -T -h --label -m"
+  run hub --noop pull-request -m Fix --body https://github.com/mislav/dotfiles/issues/12
   assert_success
-  assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --head other -w"
-  run hub --noop pull-request -m title -wH
-  assert_failure
-  assert_output_equals "Aborted: -H needs a value."
+  assert_output_equals "gh pr create --title Fix --body '' --repo github.com/mislav/dotfiles --body https://github.com/mislav/dotfiles/issues/12"
+  assert_gh_not_called
 }
 
 @test "two different heads abort before anything runs" {
   feature_repo
   run hub --noop pull-request -p -h feature -wH alice:other
   assert_failure
-  assert_output_equals "Aborted: two different heads given (feature and alice:other); give the head once, with -h, -H or --head."
-  run hub --noop pull-request -wHalice:other --head=feature
+  assert_output_equals "Aborted: two different heads: feature and alice:other."
+  run hub --noop pull-request -H a --head=b
   assert_failure
-  assert_output_equals "Aborted: two different heads given (alice:other and feature); give the head once, with -h, -H or --head."
-  run hub --noop pull-request -h a -H b
-  assert_failure
-  assert_output_equals "Aborted: two different heads given (a and b); give the head once, with -h, -H or --head."
+  assert_output_equals "Aborted: two different heads: a and b."
   run hub --noop pull-request -h other -wH other
   assert_success
   assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --head other -w"
-}
-
-@test "a gh option's value is never read as one of hub's options" {
-  feature_repo
-  run hub --noop pull-request --title -p --body example
-  assert_success
-  assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --title -p --body example"
-  run hub --noop pull-request --title=-p --project Roadmap -T -i
-  assert_success
-  assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --title=-p --project Roadmap -T -i"
-}
-
-@test "values of gh's options inside option clusters are left alone too" {
-  feature_repo
-  run hub --noop pull-request -dt -p -wl -f -wtTitle -p
-  assert_success
-  assert_output_equals $'git push --set-upstream origin HEAD\ngh pr create --repo github.com/mislav/dotfiles --head feature --draft -t -p -wl -f -wtTitle'
-}
-
-@test "-b OWNER:BRANCH and OWNER/REPO:BRANCH put the base in another repository" {
-  feature_repo
-  run hub --noop pull-request -m Fix -b alice:develop
-  assert_success
-  assert_output_equals "gh pr create --title Fix --body '' --repo github.com/alice/dotfiles --base develop"
-  run hub --noop pull-request -m Fix --base=alice/fork:develop
-  assert_success
-  assert_output_equals "gh pr create --title Fix --body '' --repo github.com/alice/fork --base develop"
-  run hub --noop pull-request -m Fix -b develop
-  assert_success
-  assert_output_equals "gh pr create --title Fix --body '' --repo github.com/mislav/dotfiles --base develop"
-}
-
-@test "-b OWNER:BRANCH on GitHub Enterprise names the host" {
-  git config --global --add hub.host ghe.example.com
-  feature_repo origin=https://ghe.example.com/mislav/dotfiles.git
-  run hub --noop pull-request -b alice:develop
-  assert_success
-  assert_output_equals "gh pr create --repo ghe.example.com/alice/dotfiles --base develop"
-}
-
-@test "-b OWNER:BRANCH names the current repository's host, whatever gh's default host" {
-  make_repo repo origin=https://github.com/mislav/repo.git
-  export GH_HOST=enterprise.example
-  run hub --noop pull-request -b other:main -m title
-  assert_success
-  assert_output_equals "gh pr create --title title --body '' --repo github.com/other/repo --base main"
-  git config --global --add hub.host ghe.example.com
-  cd "$HUB_TEST_TMP"
-  make_repo ghe origin=https://ghe.example.com/mislav/repo.git
-  export GH_HOST=github.com
-  run hub --noop pull-request -b other/fork:main -m title
-  assert_success
-  assert_output_equals "gh pr create --title title --body '' --repo ghe.example.com/other/fork --base main"
   assert_gh_not_called
-}
-
-@test "-b OWNER:BRANCH together with -R, or a malformed base, aborts before anything runs" {
-  feature_repo
-  run hub --noop pull-request -b alice:develop -R cli/cli
-  assert_failure
-  assert_output_equals "Aborted: -b OWNER:BRANCH and -R/--repo both name the base repository; use one."
-  run hub --noop pull-request --repo=cli/cli -p -b alice:develop
-  assert_failure
-  assert_output_equals "Aborted: -b OWNER:BRANCH and -R/--repo both name the base repository; use one."
-  run hub --noop pull-request -wR cli/cli -b alice:develop
-  assert_failure
-  assert_output_equals "Aborted: -b OWNER:BRANCH and -R/--repo both name the base repository; use one."
-  run hub --noop pull-request -wRcli/cli -b alice:develop
-  assert_failure
-  assert_output_equals "Aborted: -b OWNER:BRANCH and -R/--repo both name the base repository; use one."
-  run hub --noop pull-request -b alice:
-  assert_failure
-  assert_output_equals "Aborted: not a base: alice: (use BRANCH, OWNER:BRANCH or OWNER/REPO:BRANCH)"
-  run hub --noop pull-request -R cli/cli -b develop
-  assert_success
-  assert_output_equals "gh pr create --base develop -R cli/cli"
 }
 
 @test "the repository hub resolves is always named for gh, whatever gh's defaults" {
   make_repo repo origin=https://github.com/mislav/repo.git upstream=https://github.com/github/repo.git
-  # gh repo set-default mislav/repo records this; hub's own choice is upstream.
-  git config remote.origin.gh-resolved base
+  git config remote.origin.gh-resolved base # gh repo set-default mislav/repo; hub's choice is upstream
   export GH_HOST=enterprise.example
   run hub --noop pull-request -m Test
   assert_success
@@ -318,55 +190,58 @@ stub_fork() {
   assert_gh_not_called
 }
 
+@test "-b OWNER:BRANCH and OWNER/REPO:BRANCH put the base in that repository, on the current host" {
+  feature_repo
+  export GH_HOST=enterprise.example
+  run hub --noop pull-request -m Fix -b alice:develop
+  assert_success
+  assert_output_equals "gh pr create --title Fix --body '' --repo github.com/alice/dotfiles --base develop"
+  run hub --noop pull-request -m Fix --base=alice/fork:develop
+  assert_success
+  assert_output_equals "gh pr create --title Fix --body '' --repo github.com/alice/fork --base develop"
+  git config --global --add hub.host ghe.example.com
+  git remote set-url origin https://ghe.example.com/mislav/dotfiles.git
+  run hub --noop pull-request -b alice:develop
+  assert_success
+  assert_output_equals "gh pr create --repo ghe.example.com/alice/dotfiles --base develop"
+  run hub --noop pull-request -b alice:
+  assert_failure
+  assert_output_equals "Aborted: not a base: alice: (use [OWNER[/REPO]:]BRANCH)"
+  run hub --noop pull-request -b alice:develop -R cli/cli
+  assert_failure
+  assert_output_equals "Aborted: name the base repository once: with -R, -b OWNER[/REPO]:BRANCH or an issue URL."
+  assert_gh_not_called
+}
+
 @test "-R or --repo, in any spelling, replaces the repository hub would name" {
   feature_repo
-  local spelling
-  for spelling in "-R cli/cli" "-Rcli/cli" "-R=cli/cli" "--repo cli/cli" "--repo=cli/cli" "-wR cli/cli" "-wRcli/cli" "-wR=cli/cli" "-R github.com/cli/cli" "--repo=ghe.example.com:8443/cli/cli.github.io"; do
+  local pair
+  for pair in "-R cli/cli=-R cli/cli" "-Rcli/cli=-R cli/cli" "-R=cli/cli=-R cli/cli" "-wR cli/cli=-w -R cli/cli" \
+    "--repo=cli/cli=--repo cli/cli" "-R github.com/cli/cli=-R github.com/cli/cli" \
+    "--repo ghe.example.com:8443/cli/cli.github.io=--repo ghe.example.com:8443/cli/cli.github.io"; do
     # shellcheck disable=SC2086  # split on purpose
-    run hub --noop pull-request -m Fix $spelling
+    run hub --noop pull-request -m Fix -b develop ${pair%%=-*}
     assert_success
-    assert_output_equals "gh pr create --title Fix --body '' $spelling"
+    assert_output_equals "gh pr create --title Fix --body '' --base develop -${pair#*=-}"
   done
 }
 
 @test "an empty or malformed -R/--repo aborts before anything runs" {
   feature_repo
-  run hub --noop pull-request -p --repo= -m Title
-  assert_failure
-  assert_output_equals "Aborted: --repo needs a value."
-  run hub --noop pull-request -p --repo=bad -m Title
-  assert_failure
-  assert_output_equals "Aborted: not a repository: bad (use --repo [HOST/]OWNER/REPO)"
-  run hub --noop pull-request -p -R= -m Title
-  assert_failure
-  assert_output_equals "Aborted: -R needs a value."
-  run hub --noop pull-request -p -R '' -m Title
-  assert_failure
-  assert_output_equals "Aborted: -R needs a value."
-  run hub --noop pull-request -p -wR= -m Title
-  assert_failure
-  assert_output_equals "Aborted: -R needs a value."
-  run hub --noop pull-request -p --repo '' -m Title
-  assert_failure
-  assert_output_equals "Aborted: --repo needs a value."
+  local value
+  for value in '' bad bad/ /bad cli/cli/x/y https://github.com/cli/cli "cli/c li" -p; do
+    run hub --noop pull-request -p --repo "$value" -m Title
+    assert_failure
+    assert_output_equals "Aborted: not a repository: '$value' (use --repo [HOST/]OWNER/REPO)"
+  done
+  for value in -Rbad -R=bad -wR=bad --repo=; do
+    run hub --noop pull-request -p "$value" -m Title
+    assert_failure
+    assert_output_contains "Aborted: not a repository: "
+  done
   run hub --noop pull-request -p -m Title -R
   assert_failure
   assert_output_equals "Aborted: -R needs a value."
-  run hub --noop pull-request -p -m Title --repo
-  assert_failure
-  assert_output_equals "Aborted: --repo needs a value."
-  local spelling value
-  for spelling in "-Rbad" "-R=bad" "-R bad" "-wR bad" "-wRbad" "-wR=bad"; do
-    # shellcheck disable=SC2086  # split on purpose
-    run hub --noop pull-request -p $spelling -m Title
-    assert_failure
-    assert_output_equals "Aborted: not a repository: bad (use -R [HOST/]OWNER/REPO)"
-  done
-  for value in bad/ /bad cli/cli/x/y https://github.com/cli/cli "cli/c li" -p; do
-    run hub --noop pull-request -p --repo "$value" -m Title
-    assert_failure
-    assert_output_equals "Aborted: not a repository: $value (use --repo [HOST/]OWNER/REPO)"
-  done
   assert_gh_not_called
 }
 
@@ -374,65 +249,56 @@ stub_fork() {
   make_repo repo origin=https://gitlab.com/mislav/repo.git
   run hub --noop pull-request -m Fix
   assert_failure
-  assert_output_equals "Aborted: could not find a GitHub remote in this repository (looked for upstream, github, origin); name the repository with -R [HOST/]OWNER/REPO."
+  assert_output_equals "Aborted: could not find a GitHub remote in this repository (looked for upstream, github, origin)"
   run hub --noop pull-request -m Fix -R mislav/repo
   assert_success
   assert_output_equals "gh pr create --title Fix --body '' -R mislav/repo"
   assert_gh_not_called
 }
 
-@test "-p pushes the current branch to origin before creating" {
-  feature_repo
+@test "-p pushes the current branch where git pushes it, and names it as the head" {
+  feature_repo origin=https://github.com/mislav/dotfiles.git fork=https://github.com/alice/dotfiles.git upstream=https://github.com/github/dotfiles.git
+  stub_fork github.com/alice/dotfiles github/dotfiles
+  stub_fork github.com/mislav/dotfiles github/dotfiles
   run hub --noop pull-request -p -m Fix
   assert_success
-  assert_output_equals $'git push --set-upstream origin HEAD\ngh pr create --title Fix --body \'\' --repo github.com/mislav/dotfiles --head feature'
-}
-
-@test "-p pushes to the branch's push remote when one is configured" {
-  feature_repo
-  git remote add fork https://github.com/alice/dotfiles.git
+  assert_output_equals $'git push --set-upstream origin HEAD:refs/heads/feature\ngh pr create --title Fix --body \'\' --repo github.com/github/dotfiles --head mislav:feature'
   git config remote.pushDefault fork
-  stub_fork github.com/alice/dotfiles mislav/dotfiles
   run hub --noop pull-request -p
   assert_success
-  assert_output_equals $'git push --set-upstream fork HEAD\ngh pr create --repo github.com/mislav/dotfiles --head alice:feature'
-  git remote add mine https://github.com/mislav/dotfiles.git
-  git config branch.feature.pushRemote mine
+  assert_output_equals $'git push --set-upstream fork HEAD:refs/heads/feature\ngh pr create --repo github.com/github/dotfiles --head alice:feature'
+  git config branch.feature.pushRemote upstream
   run hub --noop pull-request --push
   assert_success
-  assert_output_equals $'git push --set-upstream mine HEAD\ngh pr create --repo github.com/mislav/dotfiles --head feature'
-}
-
-@test "-p pushes to the branch's tracking remote" {
-  feature_repo origin=https://github.com/mislav/dotfiles.git upstream=https://github.com/github/dotfiles.git
-  git config branch.feature.remote upstream
+  assert_output_equals $'git push --set-upstream upstream HEAD:refs/heads/feature\ngh pr create --repo github.com/github/dotfiles --head feature'
+  # The branch name git pushes to (push.default=upstream).
+  git config --unset branch.feature.pushRemote
+  git config --unset remote.pushDefault
+  git config branch.feature.remote origin
+  git config branch.feature.merge refs/heads/topic
+  git config push.default upstream
   run hub --noop pull-request -p
   assert_success
-  assert_output_equals $'git push --set-upstream upstream HEAD\ngh pr create --repo github.com/github/dotfiles --head feature'
+  assert_output_equals $'git push --set-upstream origin HEAD:refs/heads/topic\ngh pr create --repo github.com/github/dotfiles --head mislav:topic'
 }
 
-@test "-p to a push remote that is not a remote here aborts before anything runs" {
-  feature_repo
-  git config branch.feature.pushRemote mine
-  run hub --noop pull-request -p
-  assert_failure
-  assert_output_equals "Aborted: no remote named mine; add it with git remote add, or push it yourself and drop -p."
-  run hub --noop pull-request -f
-  assert_failure
-  assert_output_equals "Aborted: no remote named mine; add it with git remote add, or name the head with -h OWNER:BRANCH."
-  assert_gh_not_called
-}
-
-@test "-p on a detached HEAD aborts before anything runs" {
-  feature_repo
+@test "-p -h BRANCH pushes HEAD to BRANCH on the push remote, even from a detached HEAD" {
+  feature_repo origin=https://github.com/mislav/dotfiles.git upstream=https://github.com/github/dotfiles.git
+  stub_fork github.com/mislav/dotfiles github/dotfiles
+  run hub --noop pull-request -p -h other -m title
+  assert_success
+  assert_output_equals $'git push origin HEAD:refs/heads/other\ngh pr create --title title --body \'\' --repo github.com/github/dotfiles --head mislav:other'
   git checkout -q --detach
+  run hub --noop pull-request -p -h other
+  assert_success
+  assert_output_equals $'git push origin HEAD:refs/heads/other\ngh pr create --repo github.com/github/dotfiles --head mislav:other'
   run hub --noop pull-request -p -m Fix
   assert_failure
-  assert_output_equals "Aborted: not currently on any branch."
+  assert_output_equals "Aborted: not currently on any branch; name the head with -h [OWNER:]BRANCH."
 }
 
-@test "-p with -h OWNER:BRANCH pushes HEAD to BRANCH on OWNER's remote" {
-  feature_repo origin=https://github.com/mislav/dotfiles.git alice=https://github.com/alice/dotfiles.git
+@test "-p -h OWNER:BRANCH pushes to OWNER's remote, the push remote first, then one of the base's name" {
+  feature_repo origin=https://github.com/mislav/dotfiles.git backup=git@github.com:mislav/dotfiles.git alice=https://github.com/alice/dotfiles.git
   stub_fork github.com/alice/dotfiles mislav/dotfiles
   stub_account Alice User
   run hub --noop pull-request -p -h alice:other -m title
@@ -441,67 +307,39 @@ stub_fork() {
   run hub --noop pull-request -p -h Alice:other
   assert_success
   assert_output_equals $'git push alice HEAD:refs/heads/other\ngh pr create --repo github.com/mislav/dotfiles --head Alice:other'
-  assert_gh_called 'repo view github.com/alice/dotfiles --json parent *'
-  assert_gh_called 'api --hostname github.com users/Alice -q .type'
-}
-
-@test "-p with -h OWNER:BRANCH prefers the push remote among OWNER's remotes" {
-  feature_repo origin=https://github.com/mislav/dotfiles.git backup=git@github.com:mislav/dotfiles.git
   run hub --noop pull-request -p -h mislav:other
   assert_success
   assert_output_equals $'git push origin HEAD:refs/heads/other\ngh pr create --repo github.com/mislav/dotfiles --head mislav:other'
-}
-
-@test "-p with -h OWNER:BRANCH aborts before anything runs when OWNER has no remote here" {
-  git config --global --add hub.host ghe.example.com
-  feature_repo origin=https://github.com/mislav/dotfiles.git alice=https://ghe.example.com/alice/dotfiles.git
-  run hub --noop pull-request -p -h alice:other -m title
-  assert_failure
-  assert_output_equals "Aborted: no remote pushes to alice's fork of github.com/mislav/dotfiles; add one with git remote add, or push it yourself and drop -p."
-  run hub --noop pull-request -p -h alice/fork:other
-  assert_failure
-  assert_output_equals "Aborted: -p cannot push to alice/fork:other; give the head as BRANCH or OWNER:BRANCH."
-  assert_gh_not_called
-}
-
-@test "-p with -h OWNER:BRANCH aborts before anything runs when OWNER's remote pushes elsewhere" {
-  feature_repo origin=https://github.com/mislav/dotfiles.git alice=https://github.com/alice/dotfiles.git
+  # What a remote pushes to counts, not what it fetches from.
   git remote set-url --push alice https://github.com/bob/dotfiles.git
-  run hub --noop pull-request -p -h alice:other -m title
-  assert_failure
-  assert_output_equals "Aborted: remote alice is for github.com/alice/dotfiles, but it pushes to https://github.com/bob/dotfiles.git; fix its push URL (git remote set-url --push), or push it yourself and drop -p."
-  # Two push URLs, one of them elsewhere (and never print the credentials in it).
-  git remote set-url --push alice https://github.com/alice/dotfiles.git
-  git remote set-url --add --push alice https://bob:s3cret@github.com/bob/dotfiles.git
-  run hub --noop pull-request -p -h alice:other --dry-run
-  assert_failure
-  assert_output_equals "Aborted: remote alice is for github.com/alice/dotfiles, but it pushes to https://github.com/bob/dotfiles.git; fix its push URL (git remote set-url --push), or push it yourself and drop -p."
-  # The push URL as git rewrites it (pushInsteadOf).
-  git config --unset-all remote.alice.pushurl
-  git config url./srv/mirror/.pushInsteadOf https://github.com/alice/
   run hub --noop pull-request -p -h alice:other
   assert_failure
-  assert_output_equals "Aborted: remote alice is for github.com/alice/dotfiles, but it pushes to /srv/mirror/dotfiles.git; fix its push URL (git remote set-url --push), or push it yourself and drop -p."
-  assert_gh_not_called
-}
-
-@test "-p with -h OWNER:BRANCH pushes when every push URL is OWNER's repository" {
-  feature_repo origin=https://github.com/mislav/dotfiles.git alice=https://github.com/alice/dotfiles.git
-  stub_parent github.com/Alice/Dotfiles mislav/dotfiles
-  stub_fork github.com/alice/dotfiles mislav/dotfiles
-  git remote set-url --push alice https://github.com/Alice/Dotfiles
-  git remote set-url --add --push alice git@github.com:alice/dotfiles.git
+  assert_output_equals "Aborted: no remote here pushes to a repository of alice's that is mislav/dotfiles, a fork of it or a sibling fork."
+  git remote set-url --push origin https://github.com/alice/dotfiles.git
   run hub --noop pull-request -p -h alice:other
   assert_success
-  assert_output_equals $'git push alice HEAD:refs/heads/other\ngh pr create --repo github.com/mislav/dotfiles --head alice:other'
-  git config --unset-all remote.alice.pushurl
-  git config url.git@github.com:.pushInsteadOf https://github.com/
-  run hub --noop pull-request -p -h alice:other
-  assert_success
-  assert_output_equals $'git push alice HEAD:refs/heads/other\ngh pr create --repo github.com/mislav/dotfiles --head alice:other'
+  assert_output_equals $'git push origin HEAD:refs/heads/other\ngh pr create --repo github.com/mislav/dotfiles --head alice:other'
 }
 
-@test "-p -h OWNER:BRANCH with -R or -b pushes to OWNER's fork of that repository, not of the current one" {
+@test "-p -h OWNER:BRANCH checks OWNER's remotes before it chooses one" {
+  feature_repo upstream=https://github.com/org/repo.git origin=https://github.com/alice/repo.git renamed=https://github.com/alice/renamed.git
+  stub_parent github.com/alice/repo ''
+  stub_fork github.com/alice/renamed org/repo
+  run hub --noop pull-request -p -h alice:topic -m Title
+  assert_success
+  assert_output_equals $'git push renamed HEAD:refs/heads/topic\ngh pr create --title Title --body \'\' --repo github.com/org/repo --head alice:topic'
+  assert_gh_called 'repo view github.com/alice/repo --json parent *'
+  stub_parent github.com/alice/renamed ''
+  run hub --noop pull-request -p -h alice:topic
+  assert_failure
+  assert_output_equals "Aborted: no remote here pushes to a repository of alice's that is org/repo, a fork of it or a sibling fork."
+  stub_gh 'repo view github.com/alice/repo --json parent *' '' 1
+  run hub --noop pull-request -p -h alice:topic
+  assert_failure
+  assert_output_equals "Aborted: could not look up github.com/alice/repo."
+}
+
+@test "-p -h OWNER:BRANCH with -R or -b OWNER/REPO:BRANCH pushes to OWNER's fork of that repository" {
   feature_repo origin=https://github.com/mislav/dotfiles.git bob=https://github.com/bob/dotfiles.git bob-b=https://github.com/bob/b.git
   stub_fork github.com/bob/b other/b
   stub_fork github.com/bob/dotfiles mislav/dotfiles
@@ -511,251 +349,97 @@ stub_fork() {
   run hub --noop pull-request -b other/b:main -p -h bob:feature
   assert_success
   assert_output_equals $'git push bob-b HEAD:refs/heads/feature\ngh pr create --repo github.com/other/b --base main --head bob:feature'
-  # With only bob's fork of the current repository, GitHub's answer stops hub before it pushes.
-  git remote remove bob-b
-  run hub --noop pull-request -R github.com/other/b -p -h bob:feature -m Title
-  assert_failure
-  assert_output_equals "Aborted: remote bob pushes to github.com/bob/dotfiles, a fork of mislav/dotfiles, not of other/b; push it yourself and drop -p."
 }
 
-@test "-p with -h BRANCH pushes HEAD to BRANCH on the push remote" {
-  feature_repo
-  run hub --noop pull-request -p -h other -m title
-  assert_success
-  assert_output_equals $'git push origin HEAD:refs/heads/other\ngh pr create --title title --body \'\' --repo github.com/mislav/dotfiles --head other'
-  git remote add mine https://github.com/mislav/dotfiles.git
-  git config branch.feature.pushRemote mine
-  run hub --noop pull-request -p -h other
-  assert_success
-  assert_output_equals $'git push mine HEAD:refs/heads/other\ngh pr create --repo github.com/mislav/dotfiles --head other'
-  git checkout -q --detach
-  run hub --noop pull-request -p -h other
-  assert_success
-  assert_output_equals $'git push origin HEAD:refs/heads/other\ngh pr create --repo github.com/mislav/dotfiles --head other'
-}
-
-@test "-p with -h BRANCH in a fork clone names the fork's owner in the head" {
-  feature_repo origin=https://github.com/mislav/dotfiles.git upstream=https://github.com/github/dotfiles.git
-  stub_fork github.com/mislav/dotfiles github/dotfiles
-  run hub --noop pull-request -p -h other
-  assert_success
-  assert_output_equals $'git push origin HEAD:refs/heads/other\ngh pr create --repo github.com/github/dotfiles --head mislav:other'
-  run hub --noop pull-request -p -h other -i 12 -b main
-  assert_success
-  assert_output_equals $'git push origin HEAD:refs/heads/other\ngh api --hostname github.com repos/github/dotfiles/pulls -F issue=12 -F head=mislav:other -f base=main --jq .html_url'
-}
-
-@test "the head names the owner of the repository the push remote pushes to, not fetches from" {
+@test "the head is in the repository the push remote pushes to, not the one it fetches from" {
   feature_repo upstream=https://github.com/org/repo.git origin=https://github.com/alice/repo.git
   git remote set-url --push origin https://github.com/bob/repo.git
   stub_fork github.com/bob/repo org/repo
   stub_fork github.com/carol/repo org/repo
-  run hub --noop pull-request -p -h feature -m Title
-  assert_success
-  assert_output_equals $'git push origin HEAD:refs/heads/feature\ngh pr create --title Title --body \'\' --repo github.com/org/repo --head bob:feature'
   run hub --noop pull-request -p -m Title
   assert_success
-  assert_output_equals $'git push --set-upstream origin HEAD\ngh pr create --title Title --body \'\' --repo github.com/org/repo --head bob:feature'
-  run hub --noop pull-request -p -f
-  assert_success
-  assert_output_equals $'git push --set-upstream origin HEAD\ngh pr create --repo github.com/org/repo --head bob:feature'
-  run hub --noop pull-request -p -i 12 -b main
-  assert_success
-  assert_output_equals $'git push --set-upstream origin HEAD\ngh api --hostname github.com repos/org/repo/pulls -F issue=12 -F head=bob:feature -f base=main --jq .html_url'
-  run hub --noop pull-request --dry-run -m Title
-  assert_success
-  assert_output_equals "gh pr create --title Title --body '' --repo github.com/org/repo --head bob:feature --dry-run"
+  assert_output_equals $'git push --set-upstream origin HEAD:refs/heads/feature\ngh pr create --title Title --body \'\' --repo github.com/org/repo --head bob:feature'
   run hub --noop pull-request -f
   assert_success
   assert_output_equals "gh pr create --repo github.com/org/repo --head bob:feature"
-  assert_gh_called 'repo view github.com/bob/repo --json parent *'
-  # The push URL as git rewrites it (pushInsteadOf), and one in the base repository itself.
+  # The push URL as git rewrites it (pushInsteadOf).
   git config --unset-all remote.origin.pushurl
   git config url.https://github.com/carol/.pushInsteadOf https://github.com/alice/
-  run hub --noop pull-request -p -h feature
+  run hub --noop pull-request -f
   assert_success
-  assert_output_equals $'git push origin HEAD:refs/heads/feature\ngh pr create --repo github.com/org/repo --head carol:feature'
-  assert_gh_called 'repo view github.com/carol/repo --json parent *'
+  assert_output_equals "gh pr create --repo github.com/org/repo --head carol:feature"
+  # A push URL in the base itself needs no lookup.
   git config --unset url.https://github.com/carol/.pushInsteadOf
   git remote set-url --push origin git@github.com:Org/Repo.git
   : >"$HUB_TEST_LOG"
-  run hub --noop pull-request -p -h feature
+  run hub --noop pull-request -f
   assert_success
-  assert_output_equals $'git push origin HEAD:refs/heads/feature\ngh pr create --repo github.com/org/repo --head feature'
+  assert_output_equals "gh pr create --repo github.com/org/repo --head feature"
   assert_gh_not_called
 }
 
-@test "a fork under another name is found, and accepted, through its parent" {
-  feature_repo upstream=https://github.com/org/repo.git origin=https://github.com/alice/repo-fork.git
+@test "a fork of the base, under any name, or a sibling fork is in the base's network" {
+  feature_repo upstream=https://github.com/bob/repo.git origin=https://github.com/alice/repo-fork.git
+  stub_fork github.com/alice/repo-fork bob/repo
+  run hub --noop pull-request -f
+  assert_success
+  assert_output_equals "gh pr create --repo github.com/bob/repo --head alice:feature"
+  [[ $(gh_calls) != *'repo view github.com/bob/repo '* ]] # a fork of the base needs no lookup of the base
   stub_fork github.com/alice/repo-fork org/repo
-  run hub --noop pull-request -p -m Title
+  stub_parent github.com/bob/repo org/repo
+  run hub --noop pull-request -f
   assert_success
-  assert_output_equals $'git push --set-upstream origin HEAD\ngh pr create --title Title --body \'\' --repo github.com/org/repo --head alice:feature'
-  run hub --noop pull-request -p -h alice:topic
-  assert_success
-  assert_output_equals $'git push origin HEAD:refs/heads/topic\ngh pr create --repo github.com/org/repo --head alice:topic'
-  assert_gh_called 'repo view github.com/alice/repo-fork --json parent *'
-  # Of OWNER's remotes, -h OWNER:BRANCH takes one of the base's name first.
-  git remote add alice https://github.com/alice/repo.git
-  stub_fork github.com/alice/repo org/repo
-  run hub --noop pull-request -p -h alice:topic
-  assert_success
-  assert_output_equals $'git push alice HEAD:refs/heads/topic\ngh pr create --repo github.com/org/repo --head alice:topic'
+  assert_output_equals "gh pr create --repo github.com/bob/repo --head alice:feature"
+  assert_gh_called 'repo view github.com/bob/repo --json parent *'
 }
 
-@test "a push repository that is not a fork of the base aborts before anything runs" {
+@test "a push repository outside the base's network aborts before anything runs" {
   feature_repo upstream=https://github.com/org/repo.git origin=https://github.com/alice/repo.git
   stub_parent github.com/alice/repo bob/repo
-  run hub --noop pull-request -p -m Title
-  assert_failure
-  assert_output_equals "Aborted: remote origin pushes to github.com/alice/repo, a fork of bob/repo, not of org/repo; push it yourself and drop -p."
-  run hub --noop pull-request -p -h alice:feature
-  assert_failure
-  assert_output_equals "Aborted: remote origin pushes to github.com/alice/repo, a fork of bob/repo, not of org/repo; push it yourself and drop -p."
-  stub_parent github.com/alice/repo ''
-  run hub --noop pull-request -p -f
-  assert_failure
-  assert_output_equals "Aborted: remote origin pushes to github.com/alice/repo, which is neither org/repo nor a fork of it; push it yourself and name the head with -h OWNER:BRANCH, without -p."
-  stub_gh 'repo view github.com/alice/repo --json parent *' '' 1
-  run hub --noop pull-request --dry-run
-  assert_failure
-  assert_output_equals "Aborted: could not look up github.com/alice/repo to check that it is a fork of org/repo; name the head with -h OWNER:BRANCH."
-  [[ $(gh_calls) != *users/* ]]
-}
-
-@test "a push remote on another host than the base aborts before anything runs" {
-  git config --global --add hub.host ghe.example.com
-  feature_repo origin=https://ghe.example.com/org/dotfiles.git fork=https://github.com/mislav/dotfiles.git
-  git config remote.pushDefault fork
-  local refused="Aborted: remote fork pushes to github.com, but the pull request targets ghe.example.com;"
-  run hub --noop pull-request -p -m Title
-  assert_failure
-  assert_output_equals "$refused push it yourself and drop -p."
-  run hub --noop pull-request -p -h feature --dry-run
-  assert_failure
-  assert_output_equals "$refused push it yourself and name the head with -h OWNER:BRANCH, without -p."
-  run hub --noop pull-request -f
-  assert_failure
-  assert_output_equals "$refused name the head with -h OWNER:BRANCH."
-  run hub --noop pull-request -p -h mislav:feature
-  assert_failure
-  assert_output_equals "Aborted: no remote pushes to mislav's fork of ghe.example.com/org/dotfiles; add one with git remote add, or push it yourself and drop -p."
-  # An Enterprise base named with -R from a github.com clone: with its host, or on GH_HOST.
-  cd "$HUB_TEST_TMP"
-  make_repo plain origin=https://github.com/mislav/dotfiles.git
-  run hub --noop pull-request -R ghe.example.com/org/dotfiles -p -m Title
-  assert_failure
-  assert_output_equals "Aborted: remote origin pushes to github.com, but the pull request targets ghe.example.com; push it yourself and drop -p."
-  export GH_HOST=ghe.example.com
-  run hub --noop pull-request -R org/dotfiles -p -m Title
-  assert_failure
-  assert_output_equals "Aborted: remote origin pushes to github.com, but the pull request targets ghe.example.com; push it yourself and drop -p."
-  assert_gh_not_called
-}
-
-@test "hosts are compared without their ports" {
-  git config --global --add hub.host ghe.example.com
-  feature_repo origin=https://ghe.example.com/org/dotfiles.git fork=ssh://git@ghe.example.com:2222/mislav/dotfiles.git
-  git config remote.pushDefault fork
-  stub_fork ghe.example.com:8443/mislav/dotfiles org/dotfiles
-  run hub --noop pull-request -R ghe.example.com:8443/org/dotfiles -p -m Title
-  assert_success
-  assert_output_equals $'git push --set-upstream fork HEAD\ngh pr create --title Title --body \'\' --head mislav:feature -R ghe.example.com:8443/org/dotfiles'
-  assert_gh_called 'repo view ghe.example.com:8443/mislav/dotfiles --json parent *'
-  assert_gh_called 'api --hostname ghe.example.com:8443 users/mislav -q .type'
-}
-
-@test "a head in an organization's fork aborts before anything runs, as gh pr create cannot take it" {
-  feature_repo upstream=https://github.com/org/repo.git origin=https://github.com/acme/repo.git
-  stub_fork github.com/acme/repo org/repo Organization
-  local refused="Aborted: gh pr create cannot take a head owned by an organization (acme:feature); with the branch pushed to github.com/acme/repo, open the pull request with gh api --hostname github.com repos/org/repo/pulls -f head=acme:feature -f base=BRANCH -f title=TITLE" args
-  for args in "-p -m Title" "-p -h feature" "-p -h acme:feature" "-f" "--dry-run"; do
+  stub_parent github.com/org/repo carol/repo
+  local refused="Aborted: remote origin pushes to alice/repo, which is not org/repo, a fork of it or a sibling fork." args
+  for args in "-p -m Title" "-p -h topic" "-f" "--dry-run" "-i 12 -b main"; do
     # shellcheck disable=SC2086  # split on purpose
     run hub --noop pull-request $args
     assert_failure
     assert_output_equals "$refused"
   done
-  assert_gh_called 'api --hostname github.com users/acme -q .type'
-  # -i opens it through the REST API, which takes it.
-  run hub --noop pull-request -p -i 12 -b main
-  assert_success
-  assert_output_equals $'git push --set-upstream origin HEAD\ngh api --hostname github.com repos/org/repo/pulls -F issue=12 -F head=acme:feature -f base=main --jq .html_url'
-  # Where the account type can't be looked up, hub can't tell either.
-  stub_gh 'api --hostname github.com users/acme *' '' 1
-  run hub --noop pull-request -p -m Title
+  stub_parent github.com/alice/repo ''
+  run hub --noop pull-request -p
   assert_failure
-  assert_output_equals "Aborted: could not look up acme on github.com to check that gh pr create can take a head of theirs; push it yourself and drop -p."
-  stub_account acme User
-  run hub --noop pull-request -p -m Title
-  assert_success
-  assert_output_equals $'git push --set-upstream origin HEAD\ngh pr create --title Title --body \'\' --repo github.com/org/repo --head acme:feature'
+  assert_output_equals "$refused"
+  stub_gh 'repo view github.com/alice/repo --json parent *' '' 1
+  run hub --noop pull-request -p
+  assert_failure
+  assert_output_equals "Aborted: could not look up github.com/alice/repo."
+  [[ $(gh_calls) != *users/* ]]
 }
 
-@test "a fork owned by the base's owner aborts before anything runs, as OWNER:BRANCH would be the base's branch" {
-  feature_repo origin=https://github.com/org/repo.git fork=https://github.com/org/repo-fork.git
-  git config remote.pushDefault fork
-  stub_parent github.com/org/repo-fork org/repo
-  local refused="Aborted: org:feature would be a branch of org/repo itself, not of its fork github.com/org/repo-fork, as both have the same owner; with the branch pushed there, open the pull request with gh api --hostname github.com repos/org/repo/pulls -f head=org:feature -f head_repo=repo-fork"
-  run hub --noop pull-request -p -m Title
-  assert_failure
-  assert_output_equals "$refused -f base=BRANCH -f title=TITLE"
-  run hub --noop pull-request -i 12 -b main
-  assert_failure
-  assert_output_equals "$refused -F issue=ISSUE -f base=BRANCH"
-  # -h org:BRANCH is a branch of org/repo, so that is where -p pushes it.
-  run hub --noop pull-request -p -h org:feature
-  assert_success
-  assert_output_equals $'git push origin HEAD:refs/heads/feature\ngh pr create --repo github.com/org/repo --head org:feature'
-}
-
-@test "push URLs that name two repositories abort before anything runs" {
+@test "push URLs that name no single repository on the base's host abort wherever hub needs the head" {
   feature_repo upstream=https://github.com/org/repo.git origin=https://github.com/alice/repo.git
-  git remote set-url --push origin https://github.com/alice/repo.git
+  # refused : -p and -f abort before anything runs.
+  refused() {
+    local args
+    for args in "-p -m Title" "-f"; do
+      # shellcheck disable=SC2086  # split on purpose
+      run hub --noop pull-request $args
+      assert_failure
+      assert_output_equals "Aborted: remote origin must push to one repository on github.com (git remote get-url --push --all origin)."
+    done
+  }
+  git remote set-url --add --push origin https://github.com/alice/repo.git
   git remote set-url --add --push origin https://bob:s3cret@github.com/bob/repo.git
-  local both="Aborted: remote origin pushes to both https://github.com/alice/repo.git and https://github.com/bob/repo.git; fix its push URLs (git remote set-url --push), or"
-  run hub --noop pull-request -p -m Title
-  assert_failure
-  assert_output_equals "$both push it yourself and drop -p."
-  run hub --noop pull-request -p -h feature
-  assert_failure
-  assert_output_equals "$both push it yourself and name the head with -h OWNER:BRANCH, without -p."
-  run hub --noop pull-request -p -i 12 -b main
-  assert_failure
-  assert_output_equals "$both push it yourself and name the head with -h OWNER:BRANCH, without -p."
-  run hub --noop pull-request -f
-  assert_failure
-  assert_output_equals "$both name the head with -h OWNER:BRANCH."
-  run hub --noop pull-request --dry-run
-  assert_failure
-  assert_output_equals "$both name the head with -h OWNER:BRANCH."
-  run hub --noop pull-request -i 12 -b main
-  assert_failure
-  assert_output_equals "$both name the head with -h OWNER:BRANCH."
-  run hub --noop pull-request -f -h bob:feature
-  assert_success
-  assert_output_equals "gh pr create --repo github.com/org/repo --head bob:feature"
-  assert_gh_not_called
-}
-
-@test "a local or mirror push URL aborts wherever hub pushes or works out the head" {
-  feature_repo upstream=https://github.com/org/repo.git origin=https://github.com/alice/repo.git
+  refused # two repositories (and no credentials shown)
+  git config --unset-all remote.origin.pushurl
   git config url./srv/mirror/.pushInsteadOf https://github.com/alice/
-  local mirror="Aborted: remote origin pushes to /srv/mirror/repo.git, which is not a GitHub repository, so hub cannot tell where the head is;" args
-  run hub --noop pull-request -p -m Title
-  assert_failure
-  assert_output_equals "$mirror push it yourself and drop -p."
-  # shellcheck disable=SC2086  # split on purpose
-  for args in "-p -h feature" "-p -f" "-p --dry-run" "-p -i 12 -b main"; do
-    run hub --noop pull-request $args
-    assert_failure
-    assert_output_equals "$mirror push it yourself and name the head with -h OWNER:BRANCH, without -p."
-  done
-  # shellcheck disable=SC2086  # split on purpose
-  for args in "-f" "--dry-run" "-i 12 -b main"; do
-    run hub --noop pull-request $args
-    assert_failure
-    assert_output_equals "$mirror name the head with -h OWNER:BRANCH."
-  done
+  refused # a mirror, as git rewrites the push URL
+  git config --unset url./srv/mirror/.pushInsteadOf
+  git remote set-url --add --push origin https://github.com/alice/repo.git
+  git remote set-url --add --push origin "$HUB_TEST_TMP/backup.git"
+  refused # a local backup beside the GitHub repository
+  git config --unset-all remote.origin.pushurl
+  git remote set-url --push origin https://gitlab.com/alice/repo.git
+  refused # another host
   # Where hub neither pushes nor names the head, the push URL is gh's business.
   run hub --noop pull-request -m Title
   assert_success
@@ -763,228 +447,186 @@ stub_fork() {
   run hub --noop pull-request --dry-run -h alice:feature
   assert_success
   assert_output_equals "gh pr create --repo github.com/org/repo --head alice:feature --dry-run"
-  # A GitHub push URL beside a local one (a backup, say) is no better.
-  git config --unset url./srv/mirror/.pushInsteadOf
-  git remote set-url --add --push origin https://github.com/alice/repo.git
-  git remote set-url --add --push origin "$HUB_TEST_TMP/backup.git"
+  git config branch.feature.pushRemote mine
   run hub --noop pull-request -p
   assert_failure
-  assert_output_equals "Aborted: remote origin pushes to $HUB_TEST_TMP/backup.git, which is not a GitHub repository, so hub cannot tell where the head is; push it yourself and drop -p."
-  run hub --noop pull-request -f
-  assert_failure
-  assert_output_equals "Aborted: remote origin pushes to $HUB_TEST_TMP/backup.git, which is not a GitHub repository, so hub cannot tell where the head is; name the head with -h OWNER:BRANCH."
+  assert_output_equals "Aborted: remote mine must push to one repository on github.com (git remote get-url --push --all mine)."
   assert_gh_not_called
 }
 
-@test "-p with -h OWNER:BRANCH takes the remote that pushes to OWNER's repository, whatever it fetches" {
-  feature_repo origin=https://github.com/org/repo.git
-  git remote set-url --push origin https://github.com/alice/repo.git
-  stub_fork github.com/alice/repo org/repo
-  run hub --noop pull-request -p -h alice:feature -m Title
+@test "the base's host decides, compared without case or port, and is the one gh is asked about" {
+  git config --global --add hub.host ghe.example.com
+  feature_repo origin=https://ghe.example.com/org/dotfiles.git fork=ssh://git@GHE.example.com:2222/mislav/dotfiles.git other=https://github.com/mislav/dotfiles.git
+  git config remote.pushDefault fork
+  stub_fork ghe.example.com:8443/mislav/dotfiles org/dotfiles
+  run hub --noop pull-request -R ghe.example.com:8443/org/dotfiles -p -m Title
   assert_success
-  assert_output_equals $'git push origin HEAD:refs/heads/feature\ngh pr create --title Title --body \'\' --repo github.com/org/repo --head alice:feature'
+  assert_output_equals $'git push --set-upstream fork HEAD:refs/heads/feature\ngh pr create --title Title --body \'\' --head mislav:feature -R ghe.example.com:8443/org/dotfiles'
+  assert_gh_called 'api --hostname ghe.example.com:8443 users/mislav -q .type'
+  git config remote.pushDefault other
   run hub --noop pull-request -p -m Title
-  assert_success
-  assert_output_equals $'git push --set-upstream origin HEAD\ngh pr create --title Title --body \'\' --repo github.com/org/repo --head alice:feature'
-}
-
-@test "--dry-run with -p prints the push instead of pushing" {
-  feature_repo
-  stub_git_push # a local push URL would do, but hub names the head here and needs it on GitHub
-  stub_gh 'pr create *' 'Would have created a pull request'
-  export BROWSER='echo browse'
-  run hub pull-request -p --dry-run -m Fix
-  assert_success
-  assert_output_equals $'git push --set-upstream origin HEAD\nWould have created a pull request'
-  assert_gh_called 'pr create --title Fix --body  --repo github.com/mislav/dotfiles --head feature --dry-run'
-  run hub pull-request -o -p -h other --dry-run=true
-  assert_success
-  assert_output_equals $'git push origin HEAD:refs/heads/other\nWould have created a pull request'
-  [[ ! -e $HUB_TEST_TMP/pushes ]]
-  # The same push, for real this time: the check above would have seen it.
-  run hub pull-request -p --dry-run=false -m Fix
-  assert_success
-  [[ $(cat "$HUB_TEST_TMP/pushes") == "git push --set-upstream origin HEAD" ]]
-}
-
-@test "--dry-run names the head, so that gh's dry run neither pushes nor forks" {
-  make_repo repo origin=https://github.com/mislav/repo.git
-  stub_fork github.com/mislav/repo other/repo
-  run hub --noop pull-request -p --dry-run -m Test
-  assert_success
-  assert_output_equals $'git push --set-upstream origin HEAD\ngh pr create --title Test --body \'\' --repo github.com/mislav/repo --head main --dry-run'
-  run hub --noop pull-request --dry-run=true -b other:main -m Test --
-  assert_success
-  assert_output_equals "gh pr create --title Test --body '' --repo github.com/other/repo --base main --head mislav:main --dry-run=true --"
-  run hub --noop pull-request -p --dry-run=false -m Test
-  assert_success
-  assert_output_equals $'git push --set-upstream origin HEAD\ngh pr create --title Test --body \'\' --repo github.com/mislav/repo --head main --dry-run=false'
-  assert_gh_called 'repo view github.com/mislav/repo --json parent *'
-}
-
-@test "--dry-run in a fork clone names the fork's owner in the head" {
-  make_repo repo origin=https://github.com/mislav/repo.git upstream=https://github.com/github/repo.git
-  stub_fork github.com/mislav/repo github/repo
-  run hub --noop pull-request -p --dry-run -m Test
-  assert_success
-  assert_output_equals $'git push --set-upstream origin HEAD\ngh pr create --title Test --body \'\' --repo github.com/github/repo --head mislav:main --dry-run'
-}
-
-@test "--dry-run keeps a head given with -h or gh's -H, and needs one on a detached HEAD" {
-  make_repo repo origin=https://github.com/mislav/repo.git
-  run hub --noop pull-request --dry-run -h topic
-  assert_success
-  assert_output_equals "gh pr create --repo github.com/mislav/repo --head topic --dry-run"
-  run hub --noop pull-request --dry-run -wH topic
-  assert_success
-  assert_output_equals "gh pr create --repo github.com/mislav/repo --head topic --dry-run -w"
-  run hub --noop pull-request -wHtopic --dry-run
-  assert_success
-  assert_output_equals "gh pr create --repo github.com/mislav/repo --head topic -w --dry-run"
-  git checkout -q --detach
-  run hub --noop pull-request --dry-run -m Test
   assert_failure
-  assert_output_equals "Aborted: not currently on any branch; with --dry-run, name the head with -h [OWNER:]BRANCH."
-  run hub --noop pull-request --dry-run -H mislav:topic
-  assert_success
-  assert_output_equals "gh pr create --repo github.com/mislav/repo --head mislav:topic --dry-run"
+  assert_output_equals "Aborted: remote other must push to one repository on ghe.example.com (git remote get-url --push --all other)."
+  export GH_HOST=ghe.example.com # -R without a host is on gh's default host, as gh reads it
+  run hub --noop pull-request -R org/dotfiles -p -m Title
+  assert_failure
+  assert_output_equals "Aborted: remote other must push to one repository on ghe.example.com (git remote get-url --push --all other)."
 }
 
-@test "-f names the pushed branch as the head, so gh neither pushes nor forks" {
+@test "a head owned by an organization aborts before anything runs, except with -i" {
+  feature_repo upstream=https://github.com/org/repo.git origin=https://github.com/acme/repo.git
+  stub_fork github.com/acme/repo org/repo Organization
+  local refused="Aborted: gh pr create cannot take a head owned by an organization (acme:feature); use gh api repos/org/repo/pulls." args
+  for args in "-p -m Title" "-p -h feature" "-p -h acme:feature" "-f" "--dry-run"; do
+    # shellcheck disable=SC2086  # split on purpose
+    run hub --noop pull-request $args
+    assert_failure
+    assert_output_equals "$refused"
+  done
+  run hub --noop pull-request -p -i 12 -b main
+  assert_success
+  assert_output_equals $'git push --set-upstream origin HEAD:refs/heads/feature\ngh api --hostname github.com repos/org/repo/pulls -F issue=12 -F head=acme:feature -f base=main --jq .html_url'
+  stub_gh 'api --hostname github.com users/acme *' '' 1
+  run hub --noop pull-request -f
+  assert_failure
+  assert_output_equals "Aborted: could not look up acme on github.com."
+}
+
+@test "-f names the head as it is on GitHub, so gh neither pushes nor forks" {
   feature_repo
+  stub_fork github.com/mislav/dotfiles github/dotfiles
   run hub --noop pull-request -f -m Fix
   assert_success
   assert_output_equals "gh pr create --title Fix --body '' --repo github.com/mislav/dotfiles --head feature"
-}
-
-@test "-f in a fork clone names the fork's owner" {
-  feature_repo origin=https://github.com/mislav/dotfiles.git upstream=https://github.com/github/dotfiles.git
-  stub_fork github.com/mislav/dotfiles github/dotfiles
-  run hub --noop pull-request -f
-  assert_success
-  assert_output_equals "gh pr create --repo github.com/github/dotfiles --head mislav:feature"
-}
-
-@test "-f against a base in another repository names the head's owner" {
-  feature_repo
-  stub_fork github.com/mislav/dotfiles github/dotfiles
   run hub --noop pull-request -f -b github:main
   assert_success
   assert_output_equals "gh pr create --repo github.com/github/dotfiles --base main --head mislav:feature"
   run hub --noop pull-request -f -R github/dotfiles
   assert_success
   assert_output_equals "gh pr create --head mislav:feature -R github/dotfiles"
-  run hub --noop pull-request -f -R=github/dotfiles
-  assert_success
-  assert_output_equals "gh pr create --head mislav:feature -R=github/dotfiles"
-}
-
-@test "-f keeps an explicit -h, and -pf pushes first" {
-  feature_repo
   run hub --noop pull-request -f -h other
   assert_success
   assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --head other"
   run hub --noop pull-request -pf
   assert_success
-  assert_output_equals $'git push --set-upstream origin HEAD\ngh pr create --repo github.com/mislav/dotfiles --head feature'
+  assert_output_equals $'git push --set-upstream origin HEAD:refs/heads/feature\ngh pr create --repo github.com/mislav/dotfiles --head feature'
 }
 
-@test "-o prints the new pull request's URL and opens it" {
+@test "--dry-run never pushes: hub prints the push, and gh creates nothing to open" {
   feature_repo
-  stub_gh 'pr create *' 'https://github.com/mislav/dotfiles/pull/7'
+  stub_git_push
+  stub_gh 'pr create *' 'Would have created a pull request'
   export BROWSER='echo browse'
-  run hub pull-request -o -m Fix
+  run hub pull-request -o -p --dry-run -m Fix
   assert_success
-  assert_output_equals $'https://github.com/mislav/dotfiles/pull/7\nbrowse https://github.com/mislav/dotfiles/pull/7'
-  assert_gh_called 'pr create --title Fix --body  --repo github.com/mislav/dotfiles'
+  assert_output_equals $'git push --set-upstream origin HEAD:refs/heads/feature\nWould have created a pull request'
+  assert_gh_called 'pr create --title Fix --body  --repo github.com/mislav/dotfiles --head feature --dry-run'
+  run hub pull-request -p --dry-run=wat -m Fix
+  assert_failure
+  assert_output_equals "Aborted: not a boolean: --dry-run=wat"
+  [[ ! -e $HUB_TEST_TMP/pushes ]]
+  run hub pull-request -p --dry-run=false -m Fix
+  assert_success
+  [[ $(cat "$HUB_TEST_TMP/pushes") == "git push --set-upstream origin HEAD:refs/heads/feature" ]]
 }
 
-@test "-c copies the new pull request's URL" {
+@test "--dry-run=VALUE takes Go's spellings of true and false only" {
+  make_repo repo origin=https://github.com/mislav/repo.git
+  local value
+  for value in True 1 t T TRUE true; do
+    run hub --noop pull-request "--dry-run=$value" -m Test
+    assert_success
+    assert_output_equals "gh pr create --title Test --body '' --repo github.com/mislav/repo --head main --dry-run=$value"
+  done
+  for value in 0 f F FALSE false False; do
+    run hub --noop pull-request "--dry-run=$value" -m Test
+    assert_success
+    assert_output_equals "gh pr create --title Test --body '' --repo github.com/mislav/repo --dry-run=$value"
+  done
+  for value in wat '' yes; do
+    run hub --noop pull-request -p "--dry-run=$value" -m Test
+    assert_failure
+    assert_output_equals "Aborted: not a boolean: --dry-run=$value"
+  done
+  assert_gh_not_called
+}
+
+@test "--dry-run names the head for gh, unless -h or -H does, and needs one on a detached HEAD" {
+  make_repo repo origin=https://github.com/mislav/repo.git
+  stub_fork github.com/mislav/repo other/repo
+  run hub --noop pull-request --dry-run=true -b other:main -m Test --
+  assert_success
+  assert_output_equals "gh pr create --title Test --body '' --repo github.com/other/repo --base main --head mislav:main --dry-run=true --"
+  run hub --noop pull-request -wHtopic --dry-run
+  assert_success
+  assert_output_equals "gh pr create --repo github.com/mislav/repo --head topic -w --dry-run"
+  git checkout -q --detach
+  run hub --noop pull-request --dry-run -m Test
+  assert_failure
+  assert_output_equals "Aborted: not currently on any branch; name the head with -h [OWNER:]BRANCH."
+  run hub --noop pull-request --dry-run -h mislav:topic
+  assert_success
+  assert_output_equals "gh pr create --repo github.com/mislav/repo --head mislav:topic --dry-run"
+}
+
+@test "-o prints the new pull request's URL and opens it; -c copies it" {
   feature_repo
   stub_clipboard
   stub_gh 'pr create *' 'https://github.com/mislav/dotfiles/pull/7'
-  run hub pull-request -c -m Fix -d
+  export BROWSER='echo browse'
+  run hub pull-request -o -c -m Fix
   assert_success
-  assert_output_equals "https://github.com/mislav/dotfiles/pull/7"
+  assert_output_equals $'https://github.com/mislav/dotfiles/pull/7\nbrowse https://github.com/mislav/dotfiles/pull/7'
   [[ $(cat "$HUB_TEST_TMP/clipboard") == "https://github.com/mislav/dotfiles/pull/7" ]]
-  assert_gh_called 'pr create --title Fix --body  --repo github.com/mislav/dotfiles --draft'
-}
-
-@test "-o and -c under --noop print only the gh command" {
-  feature_repo
+  assert_gh_called 'pr create --title Fix --body  --repo github.com/mislav/dotfiles'
   run hub --noop pull-request -o -c -m Fix
   assert_success
   assert_output_equals "gh pr create --title Fix --body '' --repo github.com/mislav/dotfiles"
-  assert_gh_not_called
-}
-
-@test "-o opens nothing when gh fails" {
-  feature_repo
   stub_gh 'pr create *' '' 1
-  export BROWSER='echo browse'
   run hub pull-request -o -m Fix
   assert_failure
   [[ $output != *browse* ]]
+  stub_gh 'api --hostname github.com repos/mislav/dotfiles/pulls -F issue=12 *' 'https://github.com/mislav/dotfiles/pull/12'
+  run hub pull-request -i 12 -b main -o
+  assert_success
+  assert_output_equals $'https://github.com/mislav/dotfiles/pull/12\nbrowse https://github.com/mislav/dotfiles/pull/12'
 }
 
-@test "-i turns an issue into a pull request through the REST API" {
+@test "-i N converts the issue in hub's repository, on its host, through the REST API" {
   feature_repo
+  export GH_HOST=enterprise.example
   run hub --noop pull-request -i 12 -b develop
   assert_success
   assert_output_equals "gh api --hostname github.com repos/mislav/dotfiles/pulls -F issue=12 -F head=feature -f base=develop --jq .html_url"
-  assert_gh_not_called
-}
-
-@test "-i accepts #N and defaults the base to the default branch" {
-  feature_repo
   set_remote_head origin trunk
   run hub --noop pull-request --issue '#12'
   assert_success
   assert_output_equals "gh api --hostname github.com repos/mislav/dotfiles/pulls -F issue=12 -F head=feature -f base=trunk --jq .html_url"
-}
-
-@test "an issue URL as the argument converts that issue in its own repository" {
-  feature_repo
-  stub_parent github.com/mislav/dotfiles github/dotfiles
-  run hub --noop pull-request https://github.com/mislav/dotfiles/issues/12 -b main
-  assert_success
-  assert_output_equals "gh api --hostname github.com repos/mislav/dotfiles/pulls -F issue=12 -F head=feature -f base=main --jq .html_url"
-  run hub --noop pull-request -i https://github.com/github/dotfiles/issues/3 -b main
-  assert_success
-  assert_output_equals "gh api --hostname github.com repos/github/dotfiles/pulls -F issue=3 -F head=mislav:feature -f base=main --jq .html_url"
-}
-
-@test "an issue in another repository takes that repository's default branch" {
-  feature_repo
-  stub_parent github.com/mislav/dotfiles github/dotfiles
-  stub_gh 'repo view github.com/github/dotfiles --json defaultBranchRef -q .defaultBranchRef.name' 'trunk'
-  run hub --noop pull-request -i https://github.com/github/dotfiles/issues/3
-  assert_success
-  assert_output_equals "gh api --hostname github.com repos/github/dotfiles/pulls -F issue=3 -F head=mislav:feature -f base=trunk --jq .html_url"
-  assert_gh_called 'repo view github.com/github/dotfiles --json defaultBranchRef -q .defaultBranchRef.name'
-}
-
-@test "an issue URL in the current repository takes the local default branch" {
-  feature_repo
-  set_remote_head origin develop
-  run hub --noop pull-request -i https://github.com/Mislav/Dotfiles/issues/12
-  assert_success
-  assert_output_equals "gh api --hostname github.com repos/Mislav/Dotfiles/pulls -F issue=12 -F head=feature -f base=develop --jq .html_url"
   assert_gh_not_called
 }
 
-@test "an issue in another repository aborts before anything runs if its default branch is unknown" {
+@test "an issue URL converts that issue in its own repository, onto its default branch" {
   feature_repo
+  set_remote_head origin develop
   stub_parent github.com/mislav/dotfiles github/dotfiles
+  stub_gh 'repo view github.com/github/dotfiles --json defaultBranchRef -q .defaultBranchRef.name' 'trunk'
+  run hub --noop pull-request https://github.com/Mislav/Dotfiles/issues/12
+  assert_success
+  assert_output_equals "gh api --hostname github.com repos/Mislav/Dotfiles/pulls -F issue=12 -F head=feature -f base=develop --jq .html_url"
+  run hub --noop pull-request -i https://github.com/github/dotfiles/issues/3
+  assert_success
+  assert_output_equals "gh api --hostname github.com repos/github/dotfiles/pulls -F issue=3 -F head=mislav:feature -f base=trunk --jq .html_url"
+  [[ $(gh_calls) != *users/* ]] # the REST API takes any owner's head
   stub_gh 'repo view github.com/github/dotfiles --json defaultBranchRef *' '' 1
   run hub --noop pull-request -p -i https://github.com/github/dotfiles/issues/3
   assert_failure
   assert_output_equals "Aborted: could not look up the default branch of github/dotfiles; give the base with -b BRANCH."
 }
 
-@test "an issue in another repository on GitHub Enterprise is looked up there" {
+@test "an Enterprise issue URL goes to its own host, whatever gh's default host" {
   git config --global --add hub.host ghe.example.com
   feature_repo origin=https://ghe.example.com/mislav/dotfiles.git
+  export GH_HOST=enterprise.example
   stub_parent ghe.example.com/mislav/dotfiles github/dotfiles
   stub_gh 'repo view ghe.example.com/github/dotfiles --json defaultBranchRef -q .defaultBranchRef.name' 'trunk'
   run hub --noop pull-request -i https://ghe.example.com/github/dotfiles/issues/3
@@ -992,129 +634,33 @@ stub_fork() {
   assert_output_equals "gh api --hostname ghe.example.com repos/github/dotfiles/pulls -F issue=3 -F head=mislav:feature -f base=trunk --jq .html_url"
 }
 
-@test "-i with -b OWNER:BRANCH converts an issue of that repository" {
-  feature_repo
-  stub_parent github.com/mislav/dotfiles github/dotfiles
-  run hub --noop pull-request -i 12 -b github:main
-  assert_success
-  assert_output_equals "gh api --hostname github.com repos/github/dotfiles/pulls -F issue=12 -F head=mislav:feature -f base=main --jq .html_url"
-  run hub --noop pull-request -i https://github.com/github/dotfiles/issues/3 -b github:main
-  assert_success
-  assert_output_equals "gh api --hostname github.com repos/github/dotfiles/pulls -F issue=3 -F head=mislav:feature -f base=main --jq .html_url"
-  run hub --noop pull-request -i https://github.com/github/dotfiles/issues/3 -b alice:main
-  assert_failure
-  assert_output_equals "Aborted: -b names alice/dotfiles, but the issue is in github/dotfiles."
-}
-
-@test "-i takes the head owner from the push remote, or -h as given" {
-  feature_repo origin=https://github.com/mislav/dotfiles.git upstream=https://github.com/github/dotfiles.git
-  stub_parent github.com/mislav/dotfiles github/dotfiles
-  run hub --noop pull-request -i 12 -b main
-  assert_success
-  assert_output_equals "gh api --hostname github.com repos/github/dotfiles/pulls -F issue=12 -F head=mislav:feature -f base=main --jq .html_url"
-  run hub --noop pull-request -i 12 -b main -h someone:topic
-  assert_success
-  assert_output_equals "gh api --hostname github.com repos/github/dotfiles/pulls -F issue=12 -F head=someone:topic -f base=main --jq .html_url"
-}
-
-@test "-p -i pushes first; -d and --no-maintainer-edits become API fields" {
+@test "-i takes -p, -h, -d and --no-maintainer-edits" {
   feature_repo
   run hub --noop pull-request -p -d --no-maintainer-edits -i 12 -b main
   assert_success
-  assert_line_equals 0 "git push --set-upstream origin HEAD"
-  assert_line_equals 1 "gh api --hostname github.com repos/mislav/dotfiles/pulls -F issue=12 -F head=feature -f base=main -F draft=true -F maintainer_can_modify=false --jq .html_url"
-  [[ ${#lines[@]} -eq 2 ]]
-}
-
-@test "-i on GitHub Enterprise passes --hostname" {
-  git config --global --add hub.host ghe.example.com
-  feature_repo origin=https://ghe.example.com/mislav/dotfiles.git
-  run hub --noop pull-request -i 12 -b main
+  assert_output_equals $'git push --set-upstream origin HEAD:refs/heads/feature\ngh api --hostname github.com repos/mislav/dotfiles/pulls -F issue=12 -F head=feature -f base=main -F draft=true -F maintainer_can_modify=false --jq .html_url'
+  run hub --noop pull-request -i 12 -b main -h someone:topic
   assert_success
-  assert_output_equals "gh api --hostname ghe.example.com repos/mislav/dotfiles/pulls -F issue=12 -F head=feature -f base=main --jq .html_url"
-}
-
-@test "-i N converts the issue in hub's repository on its host, whatever gh's defaults" {
-  make_repo repo origin=https://github.com/mislav/repo.git
-  run hub --noop pull-request -i 12 -b main
-  assert_success
-  assert_output_equals "gh api --hostname github.com repos/mislav/repo/pulls -F issue=12 -F head=main -f base=main --jq .html_url"
-  export GH_HOST=enterprise.example
-  run hub --noop pull-request -i 12 -b main
-  assert_success
-  assert_output_equals "gh api --hostname github.com repos/mislav/repo/pulls -F issue=12 -F head=main -f base=main --jq .html_url"
-  assert_gh_not_called
-  # gh repo set-default mislav/repo records this; hub's own choice is upstream.
-  git remote add upstream https://github.com/github/repo.git
-  git config remote.origin.gh-resolved base
-  stub_parent github.com/mislav/repo github/repo
-  run hub --noop pull-request -i 12 -b main
-  assert_success
-  assert_output_equals "gh api --hostname github.com repos/github/repo/pulls -F issue=12 -F head=mislav:main -f base=main --jq .html_url"
-  assert_gh_called 'repo view github.com/mislav/repo --json parent *'
-  [[ $(gh_calls) != *users/* ]] # the REST API takes any owner's head, so -i never asks for the account type
-}
-
-@test "a github.com issue URL goes to github.com even when gh's default host is another" {
-  make_repo repo origin=https://github.com/mislav/repo.git
-  export GH_HOST=enterprise.example
-  run hub --noop pull-request https://github.com/mislav/repo/issues/3 -b main
-  assert_success
-  assert_output_equals "gh api --hostname github.com repos/mislav/repo/pulls -F issue=3 -F head=main -f base=main --jq .html_url"
-  stub_parent github.com/mislav/repo github/repo
-  stub_gh 'repo view github.com/github/repo --json defaultBranchRef -q .defaultBranchRef.name' 'trunk'
-  run hub --noop pull-request -i https://github.com/github/repo/issues/4
-  assert_success
-  assert_output_equals "gh api --hostname github.com repos/github/repo/pulls -F issue=4 -F head=mislav:main -f base=trunk --jq .html_url"
-  assert_gh_called 'repo view github.com/github/repo --json defaultBranchRef -q .defaultBranchRef.name'
-}
-
-@test "an Enterprise issue URL goes to its own host, whatever gh's default host" {
-  git config --global --add hub.host ghe.example.com
-  make_repo repo origin=https://ghe.example.com/mislav/repo.git
-  run hub --noop pull-request -i https://ghe.example.com/mislav/repo/issues/3 -b main
-  assert_success
-  assert_output_equals "gh api --hostname ghe.example.com repos/mislav/repo/pulls -F issue=3 -F head=main -f base=main --jq .html_url"
-  export GH_HOST=enterprise.example
-  run hub --noop pull-request -i https://ghe.example.com/mislav/repo/issues/3 -b main
-  assert_success
-  assert_output_equals "gh api --hostname ghe.example.com repos/mislav/repo/pulls -F issue=3 -F head=main -f base=main --jq .html_url"
+  assert_output_equals "gh api --hostname github.com repos/mislav/dotfiles/pulls -F issue=12 -F head=someone:topic -f base=main --jq .html_url"
   assert_gh_not_called
 }
 
-@test "-i with -o opens the converted pull request" {
+@test "-i rejects what doesn't apply to an existing issue" {
   feature_repo
-  stub_gh 'api --hostname github.com repos/mislav/dotfiles/pulls -F issue=12 *' 'https://github.com/mislav/dotfiles/pull/12'
-  export BROWSER='echo browse'
-  run hub pull-request -i 12 -b main -o
-  assert_success
-  assert_output_equals $'https://github.com/mislav/dotfiles/pull/12\nbrowse https://github.com/mislav/dotfiles/pull/12'
-}
-
-@test "-i rejects options that don't apply to an existing issue" {
-  feature_repo
-  run hub --noop pull-request -i 12 -m Fix
-  assert_failure
-  assert_output_contains "Aborted: -i uses the issue's title and body"
-  run hub --noop pull-request -i 12 -r alice
-  assert_failure
-  assert_output_contains "Aborted: -i cannot add reviewers"
-  run hub --noop pull-request -i 12 --fill
-  assert_failure
-  assert_output_contains "Aborted: -i does not take gh pr create options: --fill"
+  local args
+  for args in "-m Fix" "-e" "-r alice" "-l bug" "--fill" "-R cli/cli"; do
+    # shellcheck disable=SC2086  # split on purpose
+    run hub --noop pull-request -i 12 $args
+    assert_failure
+    assert_output_equals "Aborted: -i keeps the issue's title and body, and takes only -b, -h, -p, -f, -d, --no-maintainer-edits, -o and -c."
+  done
   run hub --noop pull-request -i twelve
   assert_failure
-  assert_output_contains "Aborted: not an issue number or issue URL: twelve"
-}
-
-@test "an issue URL given as the value of a gh option is left alone" {
-  feature_repo
-  run hub --noop pull-request -m Fix --body https://github.com/mislav/dotfiles/issues/12
-  assert_success
-  assert_output_equals "gh pr create --title Fix --body '' --repo github.com/mislav/dotfiles --body https://github.com/mislav/dotfiles/issues/12"
-  run hub --noop pull-request -m Fix -wb https://github.com/mislav/dotfiles/issues/12
-  assert_success
-  assert_output_equals "gh pr create --title Fix --body '' --repo github.com/mislav/dotfiles -wb https://github.com/mislav/dotfiles/issues/12"
+  assert_output_equals "Aborted: not an issue number or URL: twelve"
+  run hub --noop pull-request -i https://github.com/github/dotfiles/issues/3 -b alice:main
+  assert_failure
+  assert_output_equals "Aborted: name the base repository once: with -R, -b OWNER[/REPO]:BRANCH or an issue URL."
+  assert_gh_not_called
 }
 
 @test "--help and a bare -h print the manual" {

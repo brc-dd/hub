@@ -25,26 +25,26 @@ load ../test_helper
   SHELL=/bin/tcsh run hub alias -s
   assert_output_equals "alias git hub"
   SHELL=/opt/homebrew/bin/zsh run hub alias
-  assert_output_equals $'# Make git run hub: add this line to ~/.zshrc\neval "$(hub alias -s zsh)"'
+  assert_output_equals $'# Make git run hub: add this line to ~/.zshrc, after the lines that set up PATH\neval "$(hub alias -s zsh)"'
 }
 
 @test "alias without -s says where to put the line" {
   run hub alias bash
   assert_success
-  assert_output_equals $'# Make git run hub: add this line to ~/.bashrc\neval "$(hub alias -s bash)"'
+  assert_output_equals $'# Make git run hub: add this line to ~/.bashrc, after the lines that set up PATH\neval "$(hub alias -s bash)"'
   run hub alias tcsh
-  assert_output_equals $'# Make git run hub: add this line to ~/.tcshrc\neval "`hub alias -s tcsh`"'
+  assert_output_equals $'# Make git run hub: add this line to ~/.tcshrc, after the lines that set up PATH\neval "`hub alias -s tcsh`"'
   run hub alias fish
-  assert_output_equals $'# Make git run hub: add this line to ~/.config/fish/config.fish\nhub alias -s fish | source'
+  assert_output_equals $'# Make git run hub: add this line to ~/.config/fish/config.fish, after the lines that set up PATH\nhub alias -s fish | source'
   run hub alias ksh
-  assert_line_equals 0 "# Make git run hub: add this line to ~/.kshrc"
+  assert_line_equals 0 "# Make git run hub: add this line to ~/.kshrc, after the lines that set up PATH"
 }
 
 @test "alias rejects shells it does not know" {
   run hub alias -s rc
   assert_failure
   assert_output_contains "hub alias: unsupported shell: rc"
-  SHELL= run hub alias -s
+  SHELL='' run hub alias -s
   assert_failure
   assert_output_contains "can't tell your shell"
 }
@@ -62,13 +62,19 @@ load ../test_helper
     command -v "$sh" >/dev/null || continue
     snippet=$("$HUB_BIN" alias -s "$sh")
     out=$("$sh" -c "$snippet; alias git")
-    [[ $out == *git* && $out == *hub* ]] || { echo "$sh: $out"; return 1; }
+    [[ $out == *git* && $out == *hub* ]] || {
+      echo "$sh: $out"
+      return 1
+    }
   done
   for sh in csh tcsh; do
     command -v "$sh" >/dev/null || continue
     snippet=$("$HUB_BIN" alias -s "$sh")
     out=$("$sh" -fc "eval \"$snippet\"; alias git")
-    [[ $out == hub ]] || { echo "$sh: $out"; return 1; }
+    [[ $out == hub ]] || {
+      echo "$sh: $out"
+      return 1
+    }
   done
 }
 

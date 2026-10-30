@@ -114,8 +114,9 @@ warning: 'unmerged' was deleted on origin, but appears not merged into 'main'"
   behind=$(tip behind) merged=$(tip merged)
   run hub sync origin
   assert_failure
-  assert_output_contains "error: could not fast-forward 'behind' to origin/behind"
-  assert_output_contains "error: could not delete 'merged'"
+  # git's own errors (worded differently by older git) name the branch
+  assert_output_contains "branch 'behind'"
+  assert_output_contains "branch 'merged'"
   # The other branches are still dealt with.
   assert_output_contains "warning: 'ahead' seems to contain unpushed commits"
   assert_output_contains "Updated branch main (was "
@@ -134,7 +135,7 @@ warning: 'unmerged' was deleted on origin, but appears not merged into 'main'"
   git worktree add -q "$HUB_TEST_TMP/wt-main" main
   run hub sync origin
   assert_failure
-  assert_output_contains "error: could not fast-forward 'main' to origin/main"
+  assert_output_contains "branch 'main'"
   assert_output_contains "error: could not check out 'main' to delete 'merged'"
   assert_output_contains "Updated branch behind (was "
   [[ $(tip behind) == $(git rev-parse refs/remotes/origin/behind) ]]
@@ -231,7 +232,7 @@ git merge --ff-only --quiet refs/remotes/upstream/main"
   assert_output_contains "Aborted: no GitHub remote found"
   run hub sync nope
   assert_failure
-  assert_output_equals "Aborted: no such remote: nope"
+  assert_output_contains "'nope' does not appear to be a git repository"
   assert_gh_not_called
 }
 

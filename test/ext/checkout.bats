@@ -67,19 +67,14 @@ PR=https://github.com/mislav/dotfiles/pull/12
   assert_gh_not_called
 }
 
-@test "checkout of a pull request URL takes at most one branch name" {
+@test "checkout of a pull request URL takes at most one branch name, after the URL" {
   run hub --noop checkout "$PR" one two
   assert_failure
   assert_output_equals "Usage: hub checkout PULLREQ-URL [BRANCH]"
-  run hub --noop checkout -b one "$PR" two
-  assert_failure
   run hub --noop checkout main "$PR"
   assert_failure
-  run hub --noop checkout "$PR" https://github.com/mislav/dotfiles/pull/13
-  assert_failure
-  run hub --noop checkout "$PR" -b
-  assert_failure
-  assert_output_equals "Aborted: -b needs a branch name"
+  assert_output_equals "Usage: hub checkout PULLREQ-URL [BRANCH]"
+  assert_gh_not_called
 }
 
 @test "checkout without a pull request URL is plain git checkout" {

@@ -33,7 +33,7 @@ load test_helper
   run hub -c hub.protocol=ssh --noop status
   assert_success
   assert_output_equals "git -c hub.protocol=ssh status"
-  run hub --noop --config-env=foo.bar=HUB_X -c foo.bar=x status
+  run env HUB_X=1 "$HUB_BIN" --noop --config-env=foo.bar=HUB_X -c foo.bar=x status
   assert_output_equals "git --config-env=foo.bar=HUB_X -c foo.bar=x status"
 }
 
@@ -59,14 +59,16 @@ load test_helper
   assert_output_contains "unknown option"
 }
 
-@test "version prints git's version and hub's" {
+@test "version names git, gh and this hub by its repository" {
+  stub_gh '--version' 'gh version 2.103.2 (2026-10-23)\nhttps://github.com/cli/cli/releases/tag/v2.103.2'
   run hub version
   assert_success
   [[ ${lines[0]} == "git version "* ]]
-  [[ ${lines[1]} == "hub version "* ]]
+  assert_line_equals 1 "gh version 2.103.2 (2026-10-23)"
+  [[ ${lines[2]} == "hub version "*" (https://github.com/brc-dd/hub)" ]]
   run hub --version
   assert_success
-  [[ ${lines[1]} == "hub version "* ]]
+  [[ ${lines[2]} == "hub version "* ]]
 }
 
 @test "help lists the commands hub adds" {
@@ -92,7 +94,7 @@ load test_helper
 
 @test "refuses to run under bash older than 5" {
   [[ -x /bin/bash ]] || skip "no /bin/bash"
-  (( $(/bin/bash -c 'echo ${BASH_VERSINFO[0]}') < 5 )) || skip "/bin/bash is already bash 5+"
+  (($(/bin/bash -c 'echo ${BASH_VERSINFO[0]}') < 5)) || skip "/bin/bash is already bash 5+"
   run /bin/bash "$HUB_BIN" status
   assert_failure
   assert_output_contains "bash 5 or newer is required"
@@ -132,12 +134,25 @@ load test_helper
   assert_output_equals "other"
 }
 
-@test "-c and --config-env also reach gh's own git subprocesses through the environment" {
+@test "-c and --config-env reach gh's own git subprocesses, but are not applied twice to git" {
   make_repo r1 origin=https://github.com/mislav/r1.git
   mkdir -p "$HUB_TEST_TMP/fakegh"
-  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "${GIT_CONFIG_COUNT:-0} ${GIT_CONFIG_KEY_0:-}=${GIT_CONFIG_VALUE_0:-} ${GIT_CONFIG_KEY_1:-}=${GIT_CONFIG_VALUE_1:-}"\n' >"$HUB_TEST_TMP/fakegh/gh"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "${GIT_CONFIG_COUNT:-0} ${GIT_CONFIG_KEY_0:-}=${GIT_CONFIG_VALUE_0:-} ${GIT_CONFIG_KEY_1:-}=${GIT_CONFIG_VALUE_1:-} dir=${GIT_DIR:-} tree=${GIT_WORK_TREE:-}"\n' >"$HUB_TEST_TMP/fakegh/gh"
   chmod +x "$HUB_TEST_TMP/fakegh/gh"
   PATH=$HUB_TEST_TMP/fakegh:$PATH run env HUB_X=other "$HUB_BIN" -c foo.bar --config-env=baz.qux=HUB_X pr list
   assert_success
-  assert_output_equals "2 foo.bar=true baz.qux=other"
+  assert_output_equals "2 foo.bar=true baz.qux=other dir= tree="
+  # git itself only gets the flags: a multi-valued key is not duplicated
+  run hub -c example.option=one config --get-all example.option
+  assert_success
+  assert_output_equals "one"
+  # the git context given to hub reaches gh as well
+  PATH=$HUB_TEST_TMP/fakegh:$PATH run "$HUB_BIN" --git-dir=.git --work-tree . pr list
+  assert_output_equals "0 = = dir=.git tree=."
+  # environment names bash cannot read still work, and a missing variable is fatal like in git
+  PATH=$HUB_TEST_TMP/fakegh:$PATH run env 'CONFIG.VAR=develop' "$HUB_BIN" --config-env=branch.main.gh-merge-base=CONFIG.VAR pr list
+  assert_output_equals "1 branch.main.gh-merge-base=develop = dir= tree="
+  PATH=$HUB_TEST_TMP/fakegh:$PATH run env -u MISSING_ENV_TEST "$HUB_BIN" --config-env=example.option=MISSING_ENV_TEST pr list
+  assert_failure
+  assert_output_contains "missing environment variable 'MISSING_ENV_TEST'"
 }

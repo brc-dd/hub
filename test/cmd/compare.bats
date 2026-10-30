@@ -234,6 +234,31 @@ load ../test_helper
   assert_output_equals "Aborted: the branch 'feature' is not pushed to any GitHub remote; push it first or name a range"
 }
 
+@test "compare only counts a branch pushed to a remote on the compare page's host" {
+  git config --global hub.host enterprise.example
+  make_repo repo upstream=https://enterprise.example/org/repo.git origin=https://github.com/alice/repo.git
+  set_remote_head upstream main
+  git checkout -q -b feature
+  git config branch.feature.pushRemote origin
+  git update-ref refs/remotes/origin/feature HEAD # pushed to github.com, not to enterprise.example
+  run hub compare -u
+  assert_failure
+  assert_output_equals "Aborted: the branch 'feature' is not pushed to any GitHub remote; push it first or name a range"
+  GH_REPO=github.com/org/repo run hub compare -u
+  assert_success
+  assert_output_equals "https://github.com/org/repo/compare/alice:feature"
+  git update-ref refs/remotes/upstream/feature HEAD # the main remote's ref is next
+  run hub compare -u
+  assert_success
+  assert_output_equals "https://enterprise.example/org/repo/compare/feature"
+  # the same host, in other case and with a port
+  git remote set-url origin https://Enterprise.Example:8443/alice/repo.git
+  run hub compare -u
+  assert_success
+  assert_output_equals "https://enterprise.example/org/repo/compare/alice:feature"
+  assert_gh_not_called
+}
+
 @test "compare with GH_REPO names the head after the main remote's copy that has the branch" {
   make_repo repo origin=https://github.com/alice/repo.git
   set_remote_head origin main

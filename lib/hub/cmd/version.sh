@@ -1,9 +1,10 @@
 # shellcheck shell=bash
-# Summary: Show git and hub version information.
+# Summary: Show the versions of git, gh and hub.
 # Usage: hub version
 #        hub --version
 
 hub_cmd_version() {
   "$HUB_GIT" --version
-  printf 'hub version %s\n' "$HUB_VERSION"
+  if command -v gh >/dev/null 2>&1; then gh --version | head -n 1; fi
+  printf 'hub version %s (https://github.com/brc-dd/hub)\n' "$HUB_VERSION"
 }

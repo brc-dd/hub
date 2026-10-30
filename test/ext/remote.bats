@@ -139,14 +139,14 @@ load ../test_helper
   assert_output_equals "git remote add alice git@github.com:alice/dotfiles.git"
 }
 
-@test "git remote add options are kept and go before the name" {
+@test "git remote add options are kept in place" {
   make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
   run hub --noop remote add -f -t main -m main --mirror=fetch --no-tags alice
   assert_success
   assert_output_equals "git remote add -f -t main -m main --mirror=fetch --no-tags alice https://github.com/alice/dotfiles.git"
   run hub --noop remote add alice -f
   assert_success
-  assert_output_equals "git remote add -f alice https://github.com/alice/dotfiles.git"
+  assert_output_equals "git remote add alice https://github.com/alice/dotfiles.git -f"
 }
 
 @test "values of -t, -m, --track and --master are never taken for the name" {
@@ -204,7 +204,7 @@ load ../test_helper
   make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
   run hub --noop remote set-url origin alice --push
   assert_success
-  assert_output_equals "git remote set-url --push origin https://github.com/alice/dotfiles.git"
+  assert_output_equals "git remote set-url origin https://github.com/alice/dotfiles.git --push"
   run hub --noop remote set-url --add --push origin alice/dots
   assert_success
   assert_output_equals "git remote set-url --add --push origin https://github.com/alice/dots.git"
@@ -287,6 +287,9 @@ load ../test_helper
   run hub remote set-url -p alice alice/dots
   assert_success
   [[ $(git config remote.alice.url) == git@github.com:alice/dots.git ]]
+  run hub remote set-url alice bob --push
+  assert_success
+  [[ $(git config remote.alice.pushurl) == https://github.com/bob/dotfiles.git ]]
   run hub remote add alice
   assert_failure
   assert_output_contains "remote alice already exists"

@@ -7,34 +7,6 @@ ACCEPT='-H Accept:\ application/vnd.github.v3.patch'
 # ESCAPES : the line of `gh pr diff --help` and `gh api --help` in gh 2.103 and later that hub looks for.
 ESCAPES='      --allow-escape-sequences   Allow printing terminal escape sequences'
 
-# use_tmpdir : point TMPDIR at an empty directory, so the temporary files hub makes can be found.
-use_tmpdir() {
-  export TMPDIR=$HUB_TEST_TMP/tmp
-  mkdir -p "$TMPDIR"
-}
-
-# untmp : in $output and $lines, replace the temporary directory hub made with TMP.
-untmp() {
-  local i
-  output=${output//"$TMPDIR"\/hub-am.??????/TMP}
-  for i in "${!lines[@]}"; do lines[i]=${lines[i]//"$TMPDIR"\/hub-am.??????/TMP}; done
-}
-
-assert_tmp_cleaned() {
-  [[ -z $(ls -A "$TMPDIR") ]] || {
-    printf 'temporary files left behind:\n%s\n' "$(ls -A "$TMPDIR")"
-    return 1
-  }
-}
-
-# stub_gh_file 'ARGS GLOB' FILE : like stub_gh, answering with the contents of FILE.
-stub_gh_file() {
-  local body
-  body=$(<"$2")
-  body=${body//\\/\\\\}
-  stub_gh "$1" "${body//$'\n'/\\n}"
-}
-
 @test "am of a pull request URL downloads its patch series with gh and runs git am on it" {
   use_tmpdir
   run hub --noop am -3 "$PR"

@@ -2,49 +2,25 @@
 # Summary: Open a GitHub repository page in the browser.
 # Usage: hub browse [-u] [-c] [[OWNER/]REPO | --] [SUBPAGE]
 #
-# Opens https://HOST/OWNER/REPO, plus /SUBPAGE when one is given. Without a
-# repository argument, or with `--` in its place, the current repository is
-# used: its upstream, github or origin remote (or GH_REPO). A bare REPO means
-# your own repository; HOST/OWNER/REPO names one on another host.
-#
-# SUBPAGE is appended as given: issues, pulls, wiki, actions, releases,
-# settings, tree/BRANCH, blob/main/README.md, ...
-#
-# For the current repository, no SUBPAGE and the SUBPAGEs tree and commits
-# follow the branch you are on: on a branch other than the default branch,
-# hub opens tree/BRANCH (commits/BRANCH for commits) in the repository the
-# branch pushes to, which is your fork when the branch tracks a fork remote.
-# Otherwise (the default branch, a REPO argument, GH_REPO) tree is the front
-# page and commits the history of the default branch.
-#
-# A repository named REPO.wiki (a wiki clone, GH_REPO or a REPO argument) is
-# the wiki of REPO: hub opens OWNER/REPO/wiki, also for the SUBPAGEs tree and
-# wiki; commits opens the wiki's history (wiki/_history) and any other
-# SUBPAGE X opens wiki/_X, e.g. pages for wiki/_pages. The branch you are on
-# plays no part.
-#
-# The URL is built locally. GitHub is only asked for your login (bare REPO)
-# and, when refs/remotes/REMOTE/HEAD is missing, the default branch.
+# Opens https://HOST/OWNER/REPO, plus /SUBPAGE (issues, wiki, tree/BRANCH, ...), for REPO or,
+# without one or with `--`, for the current repository. A bare REPO is yours; HOST/OWNER/REPO
+# names another host. In the current repository on a branch other than the default branch, the
+# front page, tree and commits open at that branch, in the repository it pushes to. REPO.wiki is
+# the wiki of REPO: hub opens its wiki, wiki/_history for commits and wiki/_SUBPAGE otherwise.
 #
 # Options:
 #   -u, --url    Print the URL instead of opening it.
 #   -c, --copy   Copy the URL to the clipboard instead of opening it.
 #
-#   $ hub browse
-#   > open https://github.com/mislav/dotfiles
 #   $ hub browse -- issues
 #   > open https://github.com/mislav/dotfiles/issues
-#   $ hub browse -- commits      # on the branch feature
-#   > open https://github.com/mislav/dotfiles/commits/feature
 #   $ hub browse -u cli/cli releases
 #   https://github.com/cli/cli/releases
-#   $ hub browse -- commits      # in a clone of mislav/dotfiles.wiki
-#   > open https://github.com/mislav/dotfiles/wiki/_history
 
 hub_cmd_browse() {
   local print=0 copy=0 arg repo subpage proj host branch url
   local -a args=()
-  for arg in "$@"; do
+  for arg; do
     case $arg in
       -u | --url) print=1 ;;
       -c | --copy) copy=1 ;;
@@ -56,28 +32,24 @@ hub_cmd_browse() {
   done
   ((${#args[@]} <= 2)) || hub::die "Usage: hub browse [-u] [-c] [[OWNER/]REPO | --] [SUBPAGE]"
   repo=${args[0]-} subpage=${args[1]-}
-  [[ $repo == -- ]] && repo=
-
-  if [[ -n $repo ]]; then
-    case $repo in
-      */*/*) host=${repo%%/*} proj=${repo#*/} ;;
-      *)
-        host=$(hub::host)
-        proj=$(hub::expand_project "$repo") || exit 1
-        ;;
-    esac
+  [[ $repo != -- ]] || repo=
+  if [[ $repo == */*/* ]]; then
+    host=${repo%%/*} proj=${repo#*/}
+  elif [[ -n $repo ]]; then
+    host=$(hub::host)
+    proj=$(hub::expand_project "$repo") || exit 1
   else
-    proj=$(hub::main_project && printf '%s\n' "$HUB_PROJECT_HOST") || exit 1
-    host=${proj##*$'\n'} proj=${proj%%$'\n'*}
+    hub::main_project >/dev/null
+    proj=$HUB_PROJECT host=$HUB_PROJECT_HOST
     if [[ -z $subpage || $subpage == tree || $subpage == commits ]] && [[ -z ${GH_REPO:-} && $proj != */?*.wiki ]] \
       && branch=$(hub::current_branch) && [[ $branch != "$(hub::default_branch)" ]]; then
-      _hub_browse_push_target "$branch"
-      subpage=${subpage:-tree}/$(_hub_browse_escape "$branch")
+      if hub::push_target "$branch" && hub::remote_project "$HUB_PUSH_REMOTE" >/dev/null; then
+        proj=$HUB_PROJECT host=$HUB_PROJECT_HOST branch=$HUB_PUSH_BRANCH
+      fi
+      subpage=${subpage:-tree}/$(hub::url_escape "$branch")
     fi
   fi
-  # A bare tree is the default branch, i.e. the front page (GitHub has no .../tree page).
-  if [[ $subpage == tree ]]; then subpage=; fi
-  # OWNER/REPO.wiki is the wiki of OWNER/REPO, whose own pages are wiki/_NAME.
+  [[ $subpage != tree ]] || subpage= # GitHub has no bare tree page: the front page shows the default branch
   if [[ $proj == */?*.wiki ]]; then
     proj=${proj%.wiki}
     case $subpage in
@@ -86,37 +58,8 @@ hub_cmd_browse() {
       *) subpage=wiki/_$subpage ;;
     esac
   fi
-
   url=https://$host/$proj${subpage:+/$subpage}
   if ((print)); then printf '%s\n' "$url"; fi
   if ((copy)); then hub::copy "$url"; fi
   if ((! print && ! copy)); then hub::open_url "$url"; fi
-}
-
-# _hub_browse_push_target BRANCH : if BRANCH pushes to a GitHub remote, point the
-# caller's host, proj and branch at that repository and the branch name there.
-_hub_browse_push_target() {
-  local remote ref out
-  IFS=$'\t' read -r remote ref < <(hub::git_query for-each-ref --format='%(push:remotename)%09%(push)' "refs/heads/$1") || return 0
-  [[ -n $remote ]] || return 0
-  out=$(hub::remote_project "$remote" && printf '%s\n' "$HUB_PROJECT_HOST") || return 0
-  proj=${out%%$'\n'*} host=${out##*$'\n'}
-  [[ $ref == "refs/remotes/$remote/"?* ]] && branch=${ref#"refs/remotes/$remote/"}
-  return 0
-}
-
-# _hub_browse_escape STR : percent-encode STR for use in a URL path (/ : @ and unreserved characters are kept).
-_hub_browse_escape() {
-  local LC_ALL=C s=$1 out='' c i
-  for ((i = 0; i < ${#s}; i++)); do
-    c=${s:i:1}
-    case $c in
-      [A-Za-z0-9._~/:@-]) out+=$c ;;
-      *)
-        printf -v c '%%%02X' "'$c"
-        out+=$c
-        ;;
-    esac
-  done
-  printf '%s\n' "$out"
 }

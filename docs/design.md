@@ -7,7 +7,7 @@ and host setting belongs to the official GitHub CLI, `gh`.
 
 ## Why `alias git=hub` works
 
-git cannot be taught new behaviour for its own commands. When you run
+git cannot be taught new behavior for its own commands. When you run
 `git clone`, git looks for a built-in command, then a `git-clone` program on
 PATH, and only then for an alias; git-config(1) says aliases that hide
 existing git commands are ignored. So `git config alias.clone '!…'` never
@@ -33,7 +33,7 @@ measured against plain git. The fast path sources nothing.
 
 ## Prerequisites
 
-- **bash 5 or newer.** macOS ships bash 3.2; install a current one with
+- **bash 5.3 or newer.** macOS ships bash 3.2; install a current one with
   Homebrew (`brew install bash`) and put Homebrew's bin directory before
   `/bin` in PATH. `bin/hub` uses `#!/usr/bin/env bash` and refuses to run on an
   older bash, with that hint.
@@ -143,7 +143,7 @@ Which option letters a command takes depends on whose command name it is:
   was risky, the safer one wins: `hub create` makes private repositories.
 - **git commands hub extends** (`clone`, `fetch`, `push`, `remote`,
   `checkout`, `merge`, `am`, `apply`, `cherry-pick`) take git's options; hub
-  only recognises its GitHub shorthands (`clone OWNER/REPO`, `push a,b`,
+  only recognizes its GitHub shorthands (`clone OWNER/REPO`, `push a,b`,
   `fetch USER`, pull-request and commit URLs).
 
 hub doesn't imitate old hub's output or prompts: what you see is gh's and
@@ -163,7 +163,7 @@ git's.
   `open URL` lines (`assert_output_equals`, `assert_gh_called`,
   `assert_gh_not_called`). Fixture repositories are made with real git
   (`make_repo NAME remote=URL…`, `set_remote_head`).
-- Behaviour that only shows without `--noop` is tested against local bare
+- Behavior that only shows without `--noop` is tested against local bare
   repositories (push, fork's fetch) or a throwaway gh shim (create's working
   directory). No test uses the network.
 
@@ -200,25 +200,13 @@ work) and add hub's own commands.
   interactive-shell alias.
 - No reproduction of old hub's output formats, prompts or quirks.
 
-## Follow-ups
+## Shared helpers
 
-Helpers that two or more modules currently define privately and that belong in
-`lib/hub/core.sh` once their shape has settled:
-
-- `hub::project_vars` — set `HUB_PROJECT` and `HUB_PROJECT_HOST` without
-  printing (`hub::main_project` prints, so its host is lost inside `$(…)`);
-  used by browse, compare, fork and pull-request.
-- `hub::push_target BRANCH` — the remote and branch a branch pushes to;
-  duplicated in browse, compare and pull-request.
-- `hub::remote_for_project OWNER/REPO HOST` — the local remote pointing at a
-  project; duplicated in merge and cherry-pick.
-- `hub::gh_hostname_args HOST` — `--hostname HOST`; inlined in am, cherry-pick,
-  ci-status and pull-request (the last two now always pass it, since gh's
-  default host can differ from the project's).
-- `hub::message FILE|MSG…` — join repeated `-m` values or read `-F FILE`, then
-  `hub::split_message`; duplicated in issue, release and pull-request.
-- `hub::url_escape STR` — percent-encode a path segment; duplicated in browse
-  and compare.
-- `hub::next_opt` — split `--x=v`, `-xv` and `-x v` option forms; the same scan
-  loop appears in five parsers.
-
+`lib/hub/core.sh` holds what more than one module needs: running git and gh
+(`hub::git`, `hub::gh`, `hub::exec_git`, `hub::exec_gh`, the `_query` variants),
+repository and host resolution (`hub::main_project`, `hub::remote_project`,
+`hub::remote_for_project`, `hub::project_or_dir`, `hub::push_target`, `hub::default_branch`,
+`hub::host`, `hub::same_host`), identity and URLs (`hub::current_user`,
+`hub::git_url`, `hub::parse_github_url`, `hub::url_escape`), and text
+(`hub::message`, `hub::split_message`). A module keeps a helper private only
+while it is the sole user; when a second module needs it, it moves here.

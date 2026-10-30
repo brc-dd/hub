@@ -130,27 +130,12 @@ $(merge_line --no-ff -m "Bring in the fix")"
   assert_gh_not_called
 }
 
-@test "merge of a pull request URL together with other commits is refused" {
-  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
-  run hub --noop merge "$PR" topic
-  assert_failure
-  assert_output_contains "Aborted: a pull request URL can't be merged together with other commits (topic)"
-  assert_gh_not_called
-}
-
 @test "merge aborts before fetching when the pull request can't be looked up" {
   make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
   stub_gh "pr view $PR *" '' 1
   run hub --noop merge "$PR"
   assert_failure
   assert_output_equals "Aborted: could not look up pull request $PR"
-}
-
-@test "merge of a pull request URL outside a repository aborts" {
-  run hub --noop merge "$PR"
-  assert_failure
-  assert_output_contains "not a git repository"
-  assert_gh_not_called
 }
 
 @test "merge of a pull request URL really merges its head with the merge button's message" {

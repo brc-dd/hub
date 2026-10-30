@@ -36,7 +36,7 @@ load ../test_helper
   assert_success
   assert_output_equals 'gh repo create --source=. --remote=origin --private -d My\ dotfiles -h https://example.com/dots'
   run hub --noop create --description=Dots --homepage=https://example.com
-  assert_output_equals "gh repo create --source=. --remote=origin --private -d Dots -h https://example.com"
+  assert_output_equals "gh repo create --source=. --remote=origin --private --description=Dots --homepage=https://example.com"
 }
 
 @test "create --remote-name names the new remote" {
@@ -101,7 +101,7 @@ load ../test_helper
     # (unquoted on purpose: each entry is one or two words)
     run hub --noop create $opt
     assert_failure
-    assert_output_contains "always makes the repository from the current work tree (--source=.)"
+    assert_output_contains "can't be used with hub create"
   done
   assert_gh_not_called
 }
@@ -212,5 +212,5 @@ SH
 @test "create --help prints the manual" {
   run hub create --help
   assert_success
-  assert_output_contains "PRIVATE unless --public"
+  assert_output_contains "private unless --public"
 }

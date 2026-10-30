@@ -1,265 +1,105 @@
 #!/usr/bin/env bash
-# Usage: script/update-formula [--sha256 HEX] [--dry-run] [--force] vX.Y.Z
+# Usage: script/update-formula [--sha256=HEX] [--dry-run] [--force] vX.Y.Z
 #        script/update-formula --self-test
 #
-# Points Formula/hub.rb at the source tarball of tag vX.Y.Z: downloads
-# https://github.com/OWNER/REPO/archive/refs/tags/vX.Y.Z.tar.gz, computes its
-# SHA-256 and rewrites the formula's url and sha256 lines in place. Nothing else
-# in the file changes.
-#
-# It never goes back to an older version on its own: when the formula's url
-# already names a newer one (a tag pushed late or by hand), it changes nothing
-# and fails, unless --force is given. Newer is SemVer 2.0.0 precedence, so
-# v1.0.0-rc.1 is older than v1.0.0, and v1.0.0-alpha.1 than v1.0.0-alpha.beta.
-#
-# OWNER/REPO comes from the origin remote when that is a GitHub URL, else from
-# $HUB_GITHUB_REPO, else it is brc-dd/hub. It has to match REPO in the formula.
+# Points the url and sha256 lines of Formula/hub.rb at the source tarball of tag
+# vX.Y.Z of REPO (set in the formula), downloading it for the checksum. It
+# refuses to go back to an older version (by SemVer precedence) without --force.
 #
 # Options:
-#       --sha256 HEX   use this checksum instead of downloading the tarball
-#   -n, --dry-run      print the new url and sha256 lines instead of writing them
+#       --sha256=HEX   use this checksum instead of downloading the tarball
+#   -n, --dry-run      show the change instead of writing it
 #   -f, --force        point the formula at vX.Y.Z even when it names a newer version
-#       --self-test    check the version order against the examples in this script
+#       --self-test    check the version comparison against known orderings
 #   -h, --help         show this help
-
 set -euo pipefail
 
-if ((BASH_VERSINFO[0] < 5)); then
-  printf 'script/update-formula: bash 5 or newer is required, but this is bash %s\n' "$BASH_VERSION" >&2
-  exit 1
-fi
-
-me=script/update-formula
-default_repo=brc-dd/hub # assumed GitHub slug of this project (REPO in Formula/hub.rb)
 formula=Formula/hub.rb
-semver_re='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$'
-
-usage() { awk 'NR > 1 { if (!/^#/) exit; sub(/^# ?/, ""); print }' "${BASH_SOURCE[0]}"; }
+semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$'
 die() {
-  printf '%s: %s\n' "$me" "$*" >&2
+  printf 'script/update-formula: %s\n' "$*" >&2
   exit 1
 }
-usage_error() {
-  printf '%s: %s\nUsage: %s [--sha256 HEX] [--dry-run] [--force] vX.Y.Z (see --help)\n' "$me" "$1" "$me" >&2
-  exit 2
-}
 
-# github_slug URL : print OWNER/REPO for a github.com remote URL; fail for anything else
-github_slug() {
-  local url=${1%/}
-  local web='^(https?|ssh|git|git\+ssh)://([^/@]+@)?(www\.|ssh\.)?github\.com(:[0-9]+)?/([^/]+)/([^/]+)$'
-  local scp='^([^/@:]+@)?github\.com:/?([^/]+)/([^/]+)$'
-  if [[ $url =~ $web ]]; then
-    printf '%s/%s\n' "${BASH_REMATCH[5]}" "${BASH_REMATCH[6]%.git}"
-  elif [[ $url =~ $scp ]]; then
-    printf '%s/%s\n' "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]%.git}"
-  else
-    return 1
-  fi
-}
-
-# version_lt A B : version A has lower precedence than version B, both X.Y.Z or X.Y.Z-PRE as
-# semver_re has it, by SemVer 2.0.0: X, Y and Z compare as numbers; a release is above all of
-# its pre-releases; two pre-releases compare identifier by identifier, and when one's
-# identifiers all begin the other's, the one with fewer is lower.
+# version_lt A B : X.Y.Z[-PRE] version A has lower precedence than B (SemVer 2.0.0)
 version_lt() {
-  local -a a b
-  local i n
-  IFS=. read -ra a <<<"${1%%-*}"
-  IFS=. read -ra b <<<"${2%%-*}"
-  for i in 0 1 2; do
-    if [[ ${a[i]} != "${b[i]}" ]]; then
-      identifier_lt "${a[i]}" "${b[i]}"
-      return
+  local LC_ALL=C a=${1/-/.} b=${2/-/.} i x y num='^[0-9]+$'
+  # A release ends in "~", which sorts above any pre-release identifier.
+  [[ $1 == *-* ]] || a+=.~
+  [[ $2 == *-* ]] || b+=.~
+  IFS=. read -ra a <<<"$a"
+  IFS=. read -ra b <<<"$b"
+  for ((i = 0; i < ${#a[@]} && i < ${#b[@]}; i++)); do
+    x=${a[i]} y=${b[i]}
+    [[ $x != "$y" ]] || continue
+    # Numbers (of any length) sort below other identifiers, which sort in ASCII order.
+    if [[ $x =~ $num ]]; then
+      [[ ! $y =~ $num ]] || ((${#x} < ${#y})) || [[ ${#x} -eq ${#y} && $x < "$y" ]]
+    else
+      [[ ! $y =~ $num && $x < "$y" ]]
     fi
-  done
-  [[ $1 == *-* ]] || return 1 # A is the release
-  [[ $2 == *-* ]] || return 0 # B is the release, A one of its pre-releases
-  IFS=. read -ra a <<<"${1#*-}"
-  IFS=. read -ra b <<<"${2#*-}"
-  n=$((${#a[@]} < ${#b[@]} ? ${#a[@]} : ${#b[@]}))
-  for ((i = 0; i < n; i++)); do
-    if [[ ${a[i]} != "${b[i]}" ]]; then
-      identifier_lt "${a[i]}" "${b[i]}"
-      return
-    fi
+    return
   done
   ((${#a[@]} < ${#b[@]}))
 }
 
-# identifier_lt A B : SemVer identifier A is below a different identifier B. Numeric ones
-# (digits only, so no leading zeros) compare as numbers of any length and are below the
-# others, which compare in ASCII order.
-identifier_lt() {
-  local LC_ALL=C num='^[0-9]+$' # [[ < ]] collates by the locale; SemVer wants ASCII
-  if [[ $1 =~ $num ]]; then
-    [[ $2 =~ $num ]] || return 0
-    if ((${#1} != ${#2})); then
-      ((${#1} < ${#2}))
-      return
-    fi
-  elif [[ $2 =~ $num ]]; then
-    return 1
-  fi
-  [[ $1 < "$2" ]]
-}
-
-# Precedence that version_lt must reproduce (--self-test checks it), each line in ascending
-# order. The first line is SemVer 2.0.0's own example.
-version_order=(
-  '1.0.0-alpha 1.0.0-alpha.1 1.0.0-alpha.beta 1.0.0-beta 1.0.0-beta.2 1.0.0-beta.11 1.0.0-rc.1 1.0.0'
-  '1.0.0 1.0.1 1.1.0 2.0.0'
-  '1.9.0 1.10.0'
-  '1.9.9 2.0.0-0 2.0.0'
-  '1.0.0-2 1.0.0-10 1.0.0-99999999999999999999 1.0.0-100000000000000000000 1.0.0-1a 1.0.0-Alpha 1.0.0-a-b 1.0.0-a0 1.0.0-alpha'
-)
-
-# self_test : within each line of version_order, every version is a release version and is
-# below each later one, and not below itself or any earlier one.
+# Each line is in ascending order; the first one is SemVer 2.0.0's own example.
 self_test() {
-  local line i j count=0 failed=0
-  local -a v
-  for line in "${version_order[@]}"; do
+  local line v i j
+  for line in \
+    '1.0.0-alpha 1.0.0-alpha.1 1.0.0-alpha.beta 1.0.0-beta 1.0.0-beta.2 1.0.0-beta.11 1.0.0-rc.1 1.0.0' \
+    '1.0.0 1.0.1 1.9.0 1.10.0 2.0.0-0 2.0.0 10.0.0' \
+    '1.0.0-2 1.0.0-10 1.0.0-99999999999999999999 1.0.0-100000000000000000000 1.0.0-1a 1.0.0-Alpha 1.0.0-a-b 1.0.0-a0 1.0.0-alpha'; do
     read -ra v <<<"$line"
     for ((i = 0; i < ${#v[@]}; i++)); do
-      if ! [[ ${v[i]} =~ $semver_re ]]; then
-        printf 'not a release version: %s\n' "${v[i]}"
-        failed=1
-      fi
+      [[ ${v[i]} =~ $semver ]] || die "not a version: ${v[i]}"
       for ((j = 0; j < ${#v[@]}; j++)); do
-        count=$((count + 1))
-        if ((i < j)) && ! version_lt "${v[i]}" "${v[j]}"; then
-          printf 'wrong: %s is not below %s\n' "${v[i]}" "${v[j]}"
-          failed=1
-        elif ((i >= j)) && version_lt "${v[i]}" "${v[j]}"; then
-          printf 'wrong: %s is below %s\n' "${v[i]}" "${v[j]}"
-          failed=1
-        fi
+        if version_lt "${v[i]}" "${v[j]}"; then ((i < j)); else ((i >= j)); fi \
+          || die "wrong order: ${v[i]} and ${v[j]}"
       done
     done
   done
-  ((! failed)) || die "the version order is wrong"
-  printf 'The version order is right (%d comparisons).\n' "$count"
+  echo "The version order is right."
 }
 
-# sha256_of FILE : print the file's SHA-256
-sha256_of() {
-  local sum
-  if command -v sha256sum >/dev/null 2>&1; then
-    sum=$(sha256sum "$1")
-  elif command -v shasum >/dev/null 2>&1; then
-    sum=$(shasum -a 256 "$1")
-  else
-    die "neither sha256sum nor shasum is installed"
-  fi
-  printf '%s\n' "${sum%% *}"
-}
-
-dry_run=0 force=0 run_self_test=0 sha256='' tag=''
-while (($#)); do
-  case $1 in
-    --sha256)
-      (($# >= 2)) || usage_error "--sha256 needs a value"
-      sha256=$2
-      shift
-      ;;
-    --sha256=*) sha256=${1#*=} ;;
+dry_run=0 force=0 sha256='' tag=''
+for arg; do
+  case $arg in
+    --sha256=*) sha256=${arg#*=} ;;
     -n | --dry-run) dry_run=1 ;;
     -f | --force) force=1 ;;
-    --self-test) run_self_test=1 ;;
-    -h | --help)
-      usage
-      exit 0
-      ;;
-    -*) usage_error "unknown option: $1" ;;
-    *)
-      [[ -z $tag ]] || usage_error "unexpected argument: $1"
-      tag=$1
-      ;;
+    --self-test) self_test && exit ;;
+    -h | --help) exec sed -n '2,/^[^#]/s/^# \{0,1\}//p' "$0" ;;
+    -*) die "unknown option: $arg" ;;
+    *) tag=v${arg#v} ;;
   esac
-  shift
 done
-if ((run_self_test)); then
-  self_test
-  exit
-fi
-[[ -n $tag ]] || usage_error "missing the tag (vX.Y.Z)"
-[[ ${tag#v} =~ $semver_re ]] || die "not a release tag (vX.Y.Z or vX.Y.Z-PRE): $tag"
-tag=v${tag#v}
-if [[ -n $sha256 ]]; then
-  sha256=${sha256,,}
-  [[ $sha256 =~ ^[0-9a-f]{64}$ ]] || die "not a SHA-256 (64 hex digits): $sha256"
-fi
+[[ ${tag#v} =~ $semver ]] || die "usage: script/update-formula [--sha256=HEX] [--dry-run] [--force] vX.Y.Z"
+[[ -z $sha256 || $sha256 =~ ^[0-9a-f]{64}$ ]] || die "not a SHA-256 (64 lowercase hex digits): $sha256"
 
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
-[[ -f $formula ]] || die "$formula not found"
-
-if origin=$(git remote get-url origin 2>/dev/null) && repo=$(github_slug "$origin"); then
-  :
-elif [[ -n ${HUB_GITHUB_REPO:-} ]]; then
-  repo=$HUB_GITHUB_REPO
-else
-  repo=$default_repo
+cd "$(dirname "$0")/.."
+current=$(sed -n 's#^ *url ".*/v\([^/]*\)\.tar\.gz"$#\1#p' "$formula")
+if ((! force)) && [[ $current =~ $semver ]] && version_lt "${tag#v}" "$current"; then
+  die "$formula points at v$current, which is newer than $tag (--force to go back)"
 fi
-[[ $repo =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "not a GitHub OWNER/REPO: $repo"
-
-# The formula spells its slug once, as REPO = "OWNER/REPO", and builds its URLs from it.
-formula_repo=$(awk -F'"' '/^[ \t]*REPO[ \t]*=/ { print $2; exit }' "$formula")
-if [[ -n $formula_repo ]]; then
-  [[ ${formula_repo,,} == "${repo,,}" ]] \
-    || die "$formula has REPO = \"$formula_repo\", but the release would come from $repo; fix REPO in $formula (or the origin remote / HUB_GITHUB_REPO)"
-  url="https://github.com/#{REPO}/archive/refs/tags/$tag.tar.gz"
-else
-  url="https://github.com/$repo/archive/refs/tags/$tag.tar.gz"
-fi
-
-# The version the formula points at now: the vX.Y.Z[-PRE] tarball on its first url line (none
-# when that is not a release version, as version_lt needs).
-current=$(awk '/^[ \t]*url[ \t]+"/ { print; exit }' "$formula")
-if [[ $current =~ /v([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)\.tar\.gz\" ]]; then
-  current=${BASH_REMATCH[1]}
-  [[ $current =~ $semver_re ]] || current=''
-else
-  current=''
-fi
-if [[ -n $current ]] && version_lt "${tag#v}" "$current"; then
-  ((force)) || die "$formula points at v$current, which is newer than $tag; leaving it alone (pass --force to point it at $tag anyway)"
-  printf 'Pointing %s back from v%s to %s (--force)\n' "$formula" "$current" "$tag" >&2
-fi
-
-tmp_root=${TMPDIR:-/tmp}
-tmpdir=$(mktemp -d "${tmp_root%/}/hub-update-formula.XXXXXX")
-trap 'rm -rf "$tmpdir"' EXIT
-
 if [[ -z $sha256 ]]; then
-  tarball_url="https://github.com/$repo/archive/refs/tags/$tag.tar.gz"
-  printf 'Downloading %s\n' "$tarball_url" >&2
-  curl -fsSL --retry 3 -o "$tmpdir/source.tar.gz" "$tarball_url" \
-    || die "could not download $tarball_url (has $tag been pushed to $repo?)"
-  sha256=$(sha256_of "$tmpdir/source.tar.gz")
+  repo=$(sed -n 's/^ *REPO = "\([^"]*\)".*/\1/p' "$formula")
+  url=https://github.com/$repo/archive/refs/tags/$tag.tar.gz
+  echo "Downloading $url" >&2
+  sha256=$(curl -fsSL --retry 3 "$url" | shasum -a 256) || die "could not download $url"
+  sha256=${sha256%% *}
 fi
 
-# Replace the quoted value on the first url line and on the first sha256 line (the
-# stable spec; head has no sha256) and keep everything else, indentation included.
-# With only_changed=1, print just those two lines. Exit status 3: a line is missing.
-rewrite() {
-  awk -v url="$url" -v sha256="$sha256" -v only_changed="$1" '
-    { changed = 0 }
-    !done_url && /^[ \t]*url[ \t]+"/ { sub(/"[^"]*"/, "\"" url "\""); done_url = changed = 1 }
-    !done_sha && /^[ \t]*sha256[ \t]+"/ { sub(/"[^"]*"/, "\"" sha256 "\""); done_sha = changed = 1 }
-    !only_changed || changed { print }
-    END { if (!done_url || !done_sha) exit 3 }
-  ' "$formula"
-}
-
+# Replace the quoted values of the first url and sha256 lines.
+new=$(awk -v url="https://github.com/#{REPO}/archive/refs/tags/$tag.tar.gz" -v sha256="$sha256" '
+  !u && /^ *url "/ { sub(/"[^"]*"/, "\"" url "\""); u = 1 }
+  !s && /^ *sha256 "/ { sub(/"[^"]*"/, "\"" sha256 "\""); s = 1 }
+  { print }
+  END { exit !(u && s) }
+' "$formula") || die "$formula has no url or sha256 line"
 if ((dry_run)); then
-  rewrite 1 || die "$formula has no url or no sha256 line to update"
-  exit 0
-fi
-rewrite 0 >"$tmpdir/hub.rb" || die "$formula has no url or no sha256 line to update"
-if cmp -s "$tmpdir/hub.rb" "$formula"; then
-  printf '%s already points at %s\n' "$formula" "$tag"
+  diff -u "$formula" - <<<"$new" || true
 else
-  cat "$tmpdir/hub.rb" >"$formula"
-  printf 'Updated %s to %s (sha256 %s)\n' "$formula" "$tag" "$sha256"
+  printf '%s\n' "$new" >"$formula"
+  echo "Pointed $formula at $tag (sha256 $sha256)"
 fi

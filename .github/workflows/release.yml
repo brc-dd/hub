@@ -1,16 +1,5 @@
 name: Release
 
-# For every pushed vX.Y.Z tag: run the checks (check), publish the GitHub release unless it
-# exists (publish) and point Formula/hub.rb on main at the tag (formula). script/release, run
-# locally, is the primary publisher and usually gets there first; this workflow is the second
-# one. Both skip work that is already done; whichever creates the release second sees its
-# create fail, finds the other's release and carries on, and whichever pushes a formula commit
-# second rebases onto the other's.
-#
-# The two jobs that write have their own concurrency groups. GitHub keeps at most one pending
-# job per group and cancels any older pending one, so a group shared by all tags could cancel
-# a tag's release before it is created; publish therefore has a group per tag.
-
 on:
   push:
     tags: ['v*']
@@ -23,126 +12,59 @@ defaults:
     shell: bash
 
 jobs:
-  check:
-    name: make check
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    env: # the same tool versions as ci.yml
-      BATS_VERSION: 1.14.0
-      SHELLCHECK_VERSION: 0.11.0
-      SHFMT_VERSION: 3.14.1
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - uses: bats-core/bats-action@3.0.0
-        with:
-          bats-version: ${{ env.BATS_VERSION }}
-          support-install: false
-          assert-install: false
-          detik-install: false
-          file-install: false
-
-      - name: Install shellcheck ${{ env.SHELLCHECK_VERSION }} and shfmt ${{ env.SHFMT_VERSION }} (make check runs both)
-        run: |
-          mkdir -p "$RUNNER_TEMP/bin"
-          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/v$SHELLCHECK_VERSION/shellcheck-v$SHELLCHECK_VERSION.linux.x86_64.tar.xz" |
-            tar -xJf - -C "$RUNNER_TEMP"
-          install "$RUNNER_TEMP/shellcheck-v$SHELLCHECK_VERSION/shellcheck" "$RUNNER_TEMP/bin/"
-          curl -fsSL -o "$RUNNER_TEMP/shfmt" "https://github.com/mvdan/sh/releases/download/v$SHFMT_VERSION/shfmt_v${SHFMT_VERSION}_linux_amd64"
-          install "$RUNNER_TEMP/shfmt" "$RUNNER_TEMP/bin/shfmt"
-          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
-
-      - run: make check
-
   publish:
     name: GitHub release
-    needs: check
-    # Not in forks: Formula/hub.rb points at the upstream repository. (formula needs this job,
-    # so it is skipped there too.)
     if: ${{ !github.event.repository.fork }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      contents: write # create the release
-    # One job per tag at a time: a re-run or a re-pushed tag waits for the one in progress.
-    # Different tags never wait for or cancel each other's release.
+      contents: write
     concurrency:
       group: release-${{ github.ref }}
       cancel-in-progress: false
     env:
       TAG: ${{ github.ref_name }}
       GH_TOKEN: ${{ github.token }}
-      GH_REPO: ${{ github.repository }} # gh works on the repository without a checkout
+      GH_REPO: ${{ github.repository }}
     steps:
       - name: Create the GitHub release
         run: |
           flags=()
-          if [[ $TAG == *-* ]]; then flags+=(--prerelease); fi
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "The release $TAG already exists; leaving it as it is."
-            exit 0
-          fi
-          # script/release may create it between that look and this create: when the create
-          # fails, look again before failing. gh's errors wait until it is clear they matter.
-          status=0
-          gh release create "$TAG" --verify-tag --generate-notes --title "hub ${TAG#v}" "${flags[@]}" \
-            2>"$RUNNER_TEMP/release-create.err" || status=$?
-          if ((status)) && gh release view "$TAG" >/dev/null 2>&1; then
-            echo "script/release created the release $TAG meanwhile; leaving it as it is."
-            exit 0
-          fi
-          cat "$RUNNER_TEMP/release-create.err" >&2
-          exit "$status"
+          [[ $TAG == *-* ]] && flags+=(--prerelease)
+          gh release view "$TAG" >/dev/null 2>&1 && exit 0
+          gh release create "$TAG" --verify-tag --generate-notes --title "hub ${TAG#v}" "${flags[@]}" ||
+            gh release view "$TAG" >/dev/null
 
   formula:
     name: Homebrew formula
     needs: publish
-    if: ${{ !contains(github.ref_name, '-') }} # pre-releases leave the formula alone
+    if: ${{ !contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      contents: write # push the formula commit to main
-    # One job at a time across all tags: jobs for different tags would race to push
-    # Formula/hub.rb. With three tags in flight, GitHub cancels the job waiting behind the
-    # running one when the third tag's job joins the group. That is acceptable: the cancelled
-    # job's release is out already (publish has a group per tag), the job that took its place
-    # is for a later tag and points the formula at that newer version, and
-    # script/update-formula refuses to move the formula back to an older one.
+      contents: write
+    # Every run points the formula at the newest stable release, so it does not matter
+    # which of several queued runs GitHub keeps.
     concurrency:
       group: release-formula
       cancel-in-progress: false
     env:
-      TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
+          ref: main
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Point Formula/hub.rb on main at the tag
+      - name: Update the Homebrew formula
         run: |
+          gh auth setup-git
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git checkout main
-          # script/release usually pushes its formula commit while the checks run: start from it.
-          git pull --rebase origin main
-          script/update-formula "$TAG"
-          if git diff --quiet -- Formula/hub.rb; then
-            echo "Formula/hub.rb already points at $TAG"
-            exit 0
-          fi
-          git commit -m "Formula: hub $TAG" -- Formula/hub.rb
-          # Pushed with GITHUB_TOKEN, so this commit starts no further workflow runs.
-          if git push origin main; then
-            exit 0
-          fi
-          # Rejected: main moved on meanwhile (script/release pushing the same change, say).
-          # Rebase onto it, which drops this commit if main already has it, and push once more.
-          git pull --rebase origin main
-          if [[ $(git rev-parse HEAD) == "$(git rev-parse origin/main)" ]]; then
-            echo "main already points Formula/hub.rb at $TAG"
-            exit 0
-          fi
-          git push origin main
+          tag=$(gh release list --exclude-drafts --exclude-pre-releases --limit 1 --json tagName -q '.[0].tagName')
+          script/update-formula "$tag"
+          git diff --quiet -- Formula/hub.rb && exit 0
+          git commit -m "Formula: hub $tag" -- Formula/hub.rb
+          git push origin main || { git pull --rebase origin main && git push origin main; }

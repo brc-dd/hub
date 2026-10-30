@@ -1,283 +1,77 @@
 #!/usr/bin/env bash
 # Usage: script/release [--dry-run] [VERSION]
 #
-# Releases hub from main in one go:
-#
-#   1. make check
-#   2. with VERSION: script/bump VERSION (commits and tags vVERSION);
-#      without: HEAD must already be at the tag named by the VERSION file
-#   3. git push origin main --follow-tags
-#   4. gh release create vVERSION --verify-tag --generate-notes --title "hub VERSION"
-#      unless that release exists (a pre-release, X.Y.Z-PRE, is marked as one);
-#      when the create fails, look again, and go on if the release exists now
-#   5. script/update-formula vVERSION, then commit Formula/hub.rb and push main
-#      (skipped for pre-releases, and when the formula is already up to date)
-#
-# Steps that are already done are skipped, so if something fails, fix it and
-# run script/release again (without VERSION).
-#
-# This script is the primary publisher, and the release workflow that the tag
-# push starts (.github/workflows/release.yml) is a second one that repeats
-# steps 4 and 5 and skips whatever is already done. When both find no release
-# and create it at once, the create that comes second fails, and that side finds
-# the other's release and carries on. When both push a formula commit, the
-# second push is rejected and that side fetches, drops its duplicate commit (or
-# rebases onto main) and pushes at most once more.
-#
-# The GitHub repository is the origin remote when that is a GitHub URL, else
-# $HUB_GITHUB_REPO, else brc-dd/hub (as in script/update-formula).
+# Releases hub from a clean main that is up to date with origin: make check,
+# script/bump VERSION, push main and the tag, create the GitHub release unless
+# it exists, and point Formula/hub.rb at it (not for pre-releases). Without
+# VERSION, HEAD must be at the tag named by the VERSION file; after a failure,
+# fix it and run script/release again.
 #
 # Options:
-#   -n, --dry-run   run the read-only checks, print the commands instead of
-#                   running them (script/bump runs with --dry-run)
+#   -n, --dry-run   run the checks and print the commands instead of running them
 #   -h, --help      show this help
-
 set -euo pipefail
 
-if ((BASH_VERSINFO[0] < 5)); then
-  printf 'script/release: bash 5 or newer is required, but this is bash %s\n' "$BASH_VERSION" >&2
-  exit 1
-fi
-
-me=script/release
-default_repo=brc-dd/hub # assumed GitHub slug of this project (REPO in Formula/hub.rb)
-semver_re='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$'
-
-usage() { awk 'NR > 1 { if (!/^#/) exit; sub(/^# ?/, ""); print }' "${BASH_SOURCE[0]}"; }
 die() {
-  printf '%s: %s\n' "$me" "$*" >&2
+  printf 'script/release: %s\n' "$*" >&2
   exit 1
-}
-usage_error() {
-  printf '%s: %s\nUsage: %s [--dry-run] [VERSION] (see --help)\n' "$me" "$1" "$me" >&2
-  exit 2
 }
 step() { printf '==> %s\n' "$*"; }
+run() { if ((dry_run)); then echo "[dry-run]$(printf ' %q' "$@")"; else "$@"; fi; }
 
-# quote ARGS... : the arguments as one shell-quoted line (quotes only where needed)
-quote() {
-  local arg q="'\\''" out=()
-  for arg; do
-    if [[ $arg =~ ^[[:alnum:]_./:=@%+,-]+$ ]]; then out+=("$arg"); else out+=("'${arg//\'/$q}'"); fi
-  done
-  printf '%s\n' "${out[*]}"
-}
-
-# run CMD ARGS... : run a command, or under --dry-run print it
-run() {
-  if ((dry_run)); then
-    printf '[dry-run] %s\n' "$(quote "$@")"
-  else
-    "$@"
-  fi
-}
-
-# github_slug URL : print OWNER/REPO for a github.com remote URL; fail for anything else
-github_slug() {
-  local url=${1%/}
-  local web='^(https?|ssh|git|git\+ssh)://([^/@]+@)?(www\.|ssh\.)?github\.com(:[0-9]+)?/([^/]+)/([^/]+)$'
-  local scp='^([^/@:]+@)?github\.com:/?([^/]+)/([^/]+)$'
-  if [[ $url =~ $web ]]; then
-    printf '%s/%s\n' "${BASH_REMATCH[5]}" "${BASH_REMATCH[6]%.git}"
-  elif [[ $url =~ $scp ]]; then
-    printf '%s/%s\n' "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]%.git}"
-  else
-    return 1
-  fi
-}
-
-# only_formula_changed A B : nothing but Formula/hub.rb differs between commits A and B
-only_formula_changed() {
-  [[ -z $(git diff --name-only "$1" "$2" -- . ':(exclude)Formula/hub.rb') ]]
-}
-
-# formula_pin REV : the url and sha256 lines of Formula/hub.rb at REV, the lines script/update-formula writes
-formula_pin() {
-  git show "$1:Formula/hub.rb" 2>/dev/null \
-    | awk '!url && /^[ \t]*url[ \t]+"/ { print; url = 1 } !sha && /^[ \t]*sha256[ \t]+"/ { print; sha = 1 }'
-}
-
-# push_formula [COMMIT] : push main, which ends with the formula COMMIT (empty if there was
-# nothing to commit). If origin rejects the push because main moved on (the release workflow
-# pushed its own formula commit first, say), fetch; drop COMMIT when it is the only local commit
-# and origin/main already pins the same url and sha256, else rebase onto origin/main and push once more.
-push_formula() {
-  local commit=$1 pin
-  if ((dry_run)); then
-    run git push origin main
-    return
-  fi
-  git push origin main && return 0
-  printf 'The push was rejected; fetching origin to see whether the release workflow pushed the formula first.\n'
-  git fetch --quiet origin
-  pin=$(formula_pin HEAD) || pin=''
-  if [[ -n $commit && $(git rev-parse HEAD) == "$commit" && -n $pin && $pin == "$(formula_pin refs/remotes/origin/main)" ]] \
-    && [[ -z $(git status --porcelain) && $(git rev-list --count refs/remotes/origin/main..HEAD) == 1 ]]; then
-    git reset --quiet --hard refs/remotes/origin/main
-    printf 'The release workflow published the same Formula/hub.rb change first; dropped the local duplicate commit.\n'
-    return 0
-  fi
-  printf 'Rebasing main onto origin/main and pushing once more.\n'
-  git pull --rebase --quiet origin main \
-    || die "could not rebase main onto origin/main; resolve it (or git rebase --abort), then push main yourself"
-  if [[ $(git rev-parse HEAD) == "$(git rev-parse refs/remotes/origin/main)" ]]; then
-    printf 'origin/main already has this Formula/hub.rb change; nothing left to push.\n'
-    return 0
-  fi
-  git push origin main
-}
-
-# create_release TAG CMD... : run CMD, the gh release create for TAG. If it fails and TAG has a
-# release after all, the release workflow created it in the meantime: say so and go on.
-# Otherwise show gh's error and fail.
-create_release() {
-  local tag=$1 err status=0
-  shift
-  # gh's output (the release URL) goes straight through; its errors wait until it is clear they matter.
-  { err=$("$@" 2>&1 >&3 3>&-); } 3>&1 || status=$?
-  if ((status)) && gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
-    printf 'The release workflow created the release %s meanwhile; leaving it as it is.\n' "$tag"
-    return 0
-  fi
-  [[ -z $err ]] || printf '%s\n' "$err" >&2
-  return "$status"
-}
-
-# released_at TAG : HEAD is TAG, or a descendant that only changed Formula/hub.rb since
-released_at() {
-  local commit
-  commit=$(git rev-parse --quiet --verify "refs/tags/$1^{commit}") || return 1
-  git merge-base --is-ancestor "$commit" HEAD && only_formula_changed "$commit" HEAD
-}
-
-# check_tag TAG : TAG is an annotated tag that HEAD is at, and VERSION matches it
-check_tag() {
-  released_at "$1" \
-    || die "HEAD is not at $1 (nothing but Formula/hub.rb may change after the tag); check out main at $1 or release a new version: $me X.Y.Z"
-  [[ $(git cat-file -t "refs/tags/$1") == tag ]] \
-    || die "$1 is a lightweight tag, which git push --follow-tags skips; recreate it with: git tag -f -a $1 -m 'hub $1'"
-  [[ $(<VERSION) == "${1#v}" ]] || die "VERSION says $(<VERSION), but the tag is $1"
-}
-
-dry_run=0 version=''
-while (($#)); do
-  case $1 in
+dry_run=0 version=
+for arg; do
+  case $arg in
     -n | --dry-run) dry_run=1 ;;
-    -h | --help)
-      usage
-      exit 0
-      ;;
-    -*) usage_error "unknown option: $1" ;;
-    *)
-      [[ -z $version ]] || usage_error "unexpected argument: $1"
-      version=${1#v}
-      [[ $version =~ $semver_re ]] || die "not a semantic version (X.Y.Z or X.Y.Z-PRE): $1"
-      ;;
+    -h | --help) exec sed -n '2,/^[^#]/s/^# \{0,1\}//p' "$0" ;;
+    -*) die "unknown option: $arg" ;;
+    *) version=${arg#v} ;;
   esac
-  shift
 done
-bump=0
-[[ -n $version ]] && bump=1
 
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
-
-# Read-only checks first, so that nothing is half done when one fails.
-git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "$PWD is not a git work tree"
-branch=$(git symbolic-ref --quiet --short HEAD) || die "HEAD is detached; check out main first"
-[[ $branch == main ]] || die "releases are made from main, but $branch is checked out"
-[[ -z $(git status --porcelain) ]] || die "the working tree is not clean; commit or stash first (git status)"
-origin=$(git remote get-url origin 2>/dev/null) || die "there is no origin remote to push to"
-if repo=$(github_slug "$origin"); then
-  :
-elif [[ -n ${HUB_GITHUB_REPO:-} ]]; then
-  repo=$HUB_GITHUB_REPO
-else
-  repo=$default_repo
-fi
-[[ $repo =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "not a GitHub OWNER/REPO: $repo"
-if ((! dry_run)); then
-  command -v gh >/dev/null 2>&1 || die "the GitHub CLI (gh) is required: https://cli.github.com"
-  gh auth status --hostname github.com >/dev/null 2>&1 || die "gh is not logged in to github.com; run: gh auth login"
-fi
-# Let script/bump vet the new version (tag, CHANGELOG.md) now rather than after make check.
-if ((bump)) && ! git rev-parse --quiet --verify "refs/tags/v$version" >/dev/null; then
-  script/bump --dry-run --quiet "$version" >/dev/null
-fi
-
-step "Syncing with origin"
+cd "$(dirname "$0")/.."
+[[ $(git symbolic-ref --quiet --short HEAD) == main ]] || die "check out main first"
+[[ -z $(git status --porcelain) ]] || die "the working tree is not clean (git status)"
+repo=$(git remote get-url origin)
 run git fetch --quiet origin
-if git rev-parse --quiet --verify refs/remotes/origin/main >/dev/null \
-  && ! git merge-base --is-ancestor refs/remotes/origin/main HEAD; then
-  # origin/main may be ahead by the release workflow's formula commit; take that in.
-  if git merge-base --is-ancestor HEAD refs/remotes/origin/main \
-    && only_formula_changed HEAD refs/remotes/origin/main; then
-    printf 'Fast-forwarding to origin/main (it only adds Formula/hub.rb changes).\n'
-    run git merge --quiet --ff-only refs/remotes/origin/main
-  else
-    die "main is behind or has diverged from origin/main; pull (or rebase) first"
-  fi
-fi
+git merge-base --is-ancestor origin/main HEAD || die "main is behind origin/main; pull first"
+[[ -z $version ]] || script/bump --dry-run "$version" >/dev/null # fail before make check
 
-step "Checking (make check)"
+step "Checking"
 run make check
 
-if ((bump)); then
-  tag=v$version
-  if git rev-parse --quiet --verify "refs/tags/$tag" >/dev/null; then
-    check_tag "$tag"
-    step "$tag is already tagged at HEAD; not bumping again"
-  else
-    step "Bumping to $version (script/bump)"
-    args=(--quiet)
-    ((dry_run)) && args+=(--dry-run)
-    script/bump "${args[@]}" "$version"
-  fi
+if [[ -n $version ]]; then
+  step "Bumping to $version"
+  run script/bump "$version"
 else
   version=$(<VERSION)
-  [[ $version =~ $semver_re ]] \
-    || die "VERSION is $version, not a release version; to cut a release run: $me X.Y.Z"
-  tag=v$version
-  git rev-parse --quiet --verify "refs/tags/$tag" >/dev/null \
-    || die "VERSION is $version, but there is no tag $tag; to cut a release run: $me X.Y.Z"
-  check_tag "$tag"
+  [[ $(git rev-parse --quiet --verify "refs/tags/v$version^{commit}") == "$(git rev-parse HEAD)" ]] \
+    || die "HEAD is not at v$version; to release a new version: script/release X.Y.Z"
 fi
-prerelease=0
-[[ $version == *-* ]] && prerelease=1
+tag=v$version
 
-step "Pushing main and $tag to origin"
+step "Pushing main and $tag"
 run git push origin main --follow-tags
 
 step "Publishing the GitHub release $tag"
 create=(gh release create "$tag" --repo "$repo" --verify-tag --generate-notes --title "hub $version")
-((prerelease)) && create+=(--prerelease)
-view=(gh release view "$tag" --repo "$repo")
+[[ $version != *-* ]] || create+=(--prerelease)
 if ((dry_run)); then
-  printf '[dry-run] %s || %s || %s\n' "$(quote "${view[@]}")" "$(quote "${create[@]}")" "$(quote "${view[@]}")"
-elif "${view[@]}" >/dev/null 2>&1; then
-  printf 'The release %s already exists; leaving it as it is.\n' "$tag"
-else
-  create_release "$tag" "${create[@]}"
+  run "${create[@]}"
+elif ! gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
+  # The release workflow that the tag push started may have created it first.
+  "${create[@]}" || gh release view "$tag" --repo "$repo" >/dev/null
 fi
 
-if ((prerelease)); then
+if [[ $version == *-* ]]; then
   step "Leaving Formula/hub.rb alone: $tag is a pre-release"
 else
   step "Pointing Formula/hub.rb at $tag"
   run script/update-formula "$tag"
-  formula_commit=''
-  if ((dry_run)); then
-    printf '[dry-run] git diff --quiet -- Formula/hub.rb || %s\n' "$(quote git commit -m "Formula: hub $tag" -- Formula/hub.rb)"
-  elif git diff --quiet -- Formula/hub.rb; then
-    printf 'Nothing to commit.\n'
-  else
-    git commit --quiet -m "Formula: hub $tag" -- Formula/hub.rb
-    formula_commit=$(git rev-parse HEAD)
+  if ((dry_run)) || ! git diff --quiet -- Formula/hub.rb; then
+    run git commit --quiet -m "Formula: hub $tag" -- Formula/hub.rb
+    # The release workflow may have pushed the same formula commit first.
+    run git push origin main || { git pull --rebase origin main && git push origin main; }
   fi
-  push_formula "$formula_commit"
 fi
-
-if ((dry_run)); then
-  step "Dry run done; nothing was changed"
-else
-  step "Released hub $version: https://github.com/$repo/releases/tag/$tag"
-fi
+((dry_run)) || step "Released hub $version"

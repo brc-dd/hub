@@ -1,23 +1,8 @@
 #compdef hub
-# zsh completion for hub: hub completes like git, plus hub's own commands.
-# It covers `hub`, and `git` too when git is an alias for hub
-# (eval "$(hub alias -s)"): zsh expands the alias before completing, so the
-# git you type is completed as hub.
-#
-# Install it either way:
-#   - as a file named _hub in a directory on $fpath (make install does that);
-#   - or source it from ~/.zshrc, after compinit. Do this if you use
-#     `setopt complete_aliases`: zsh then completes the alias as git, without
-#     ever loading _hub from $fpath.
-#
-# The commands below are hub's commands that git does not have, as listed by
-# the "# Summary:" lines of lib/hub/{cmd,ext}/*.sh. The git commands hub
-# extends (clone, push, checkout, ...) are completed by zsh's own _git.
+# zsh completion for hub, and for git when it is an alias for hub: zsh's _git
+# plus hub's commands. Install it as _hub in a directory on $fpath (make install
+# does), or, with `setopt complete_aliases`, source it after compinit.
 
-# hub's commands for _git's user-commands style. `hub`, and `git` when it is an
-# alias for hub, are completed in the ...:hub:... context. With `setopt
-# complete_aliases`, the alias is completed as git (...:git:...) instead, so
-# the git context gets the list only while git is an alias for hub.
 typeset -ga _hub_commands
 _hub_commands=(
   'alias:show how to make `git` run hub'
@@ -36,6 +21,7 @@ _hub_commands=(
   'sync:fetch a remote and fast-forward or delete local branches to match it'
 )
 zstyle ':completion:*:*:hub:*' user-commands $_hub_commands
+# With complete_aliases, the alias git=hub completes as git: list hub's commands there too.
 zstyle -e ':completion:*:*:git:*' user-commands \
   'if [[ $aliases[git] == hub(| *) ]]; then reply=($_hub_commands); else reply=(); fi'
 
@@ -53,7 +39,7 @@ _hub_options=(
   browse       '-u --url -c --copy'
   ci-status    '-v --verbose'
   compare      '-u --url -c --copy -b --base'
-  create       '--public -p --private --internal -d --description -h --homepage --remote-name -o --browse --push'
+  create       '--public -p --private --internal -d --description -h --homepage --remote-name -o --browse -c --copy --push'
   delete       '-y --yes'
   fork         '--no-remote --remote-name --org --fork-name --default-branch-only'
   pull-request '-m --message -F --file -e --edit --no-edit -b --base -h --head -d --draft -r --reviewer -a --assign -M --milestone -l --labels --no-maintainer-edits -p --push -f --force -o --browse -c --copy -i --issue --fill --dry-run'

@@ -1,21 +1,11 @@
 #!/usr/bin/env bash
-# hub — git + GitHub, powered by gh.
+# hub — git + GitHub, powered by gh. Safe to alias as git: eval "$(hub alias -s)"
 #
-# hub is a thin wrapper around git. It handles a small set of GitHub-aware
-# commands itself (delegating all API work to `gh`) and passes everything else
-# to the real git untouched, so it is safe to alias as git:
+#   hub <name> ...   lib/hub/cmd/<name>.sh or lib/hub/ext/<name>.sh handles it
+#   anything else    exec git "$@" (nothing is loaded)
 #
-#     eval "$(hub alias -s)"
-#
-# Dispatch:
-#   hub <name> ...  with lib/hub/cmd/<name>.sh  -> gh-backed hub command
-#   hub <name> ...  with lib/hub/ext/<name>.sh  -> git command hub extends (module execs git)
-#   anything else                                -> exec git "$@"  (fast path: nothing is sourced)
-#
-# Global options understood before the command word:
-#   --noop            print the git/gh commands that would run instead of running them
-#   -C <path>, -c <key>=<value>, --config-env and git's other global options are honoured and forwarded
-#   (they also apply to the git commands hub runs itself).
+# Leading options: --noop prints the git/gh commands instead of running them; -C, -c,
+# --config-env and git's other global options are honored and forwarded.
 
 if ((BASH_VERSINFO[0] < 5)); then
   printf 'hub: bash 5 or newer is required, but this is bash %s.\n' "$BASH_VERSION" >&2
@@ -36,7 +26,7 @@ while [[ -L $hub_self ]]; do
   fi
   hub_self=$hub_link
 done
-# dirname and "make absolute" without subshells: this code runs on every git invocation.
+# no subshells here: this runs on every git invocation
 hub_dir=${hub_self%/*}
 [[ $hub_dir == "$hub_self" ]] && hub_dir=.
 [[ $hub_dir == /* ]] || hub_dir=$PWD/$hub_dir
@@ -50,22 +40,30 @@ HUB_NOOP=${HUB_NOOP:-0}
 HUB_GIT_OPTS=() # git global options to forward on every git invocation
 hub_cmd=
 
-# gh runs git itself (pushes, fetches, config reads) without hub's -c flags, so every -c and
-# --config-env is also mirrored into the GIT_CONFIG_* environment that git reads in all processes.
-# The flags stay the source of truth for hub's own git calls and win over the mirror, as in git.
+# gh runs git itself without hub's -c flags, so they are mirrored into the environment of
+# hub's gh calls only (HUB_GH_ENV); git called by hub gets the flags and nothing twice.
+HUB_GH_ENV=()
+hub_gh_env_count=${GIT_CONFIG_COUNT:-0}
 hub_config_mirror() { # KEY[=VALUE]
   local key=${1%%=*} value=${1#*=}
   [[ $1 == *=* ]] || value=true
-  export "GIT_CONFIG_KEY_${GIT_CONFIG_COUNT:-0}=$key" "GIT_CONFIG_VALUE_${GIT_CONFIG_COUNT:-0}=$value"
-  export GIT_CONFIG_COUNT=$((${GIT_CONFIG_COUNT:-0} + 1))
+  HUB_GH_ENV+=("GIT_CONFIG_KEY_$hub_gh_env_count=$key" "GIT_CONFIG_VALUE_$hub_gh_env_count=$value")
+  hub_gh_env_count=$((hub_gh_env_count + 1))
+  HUB_GH_ENV+=("GIT_CONFIG_COUNT=$hub_gh_env_count")
 }
-hub_config_mirror_env() { # KEY=ENVVAR (skipped when ENVVAR is not a name bash can read; git still gets the flag)
-  local key=${1%%=*} var=${1#*=}
-  [[ $1 == *=* && $var =~ ^[A-Za-z_][A-Za-z0-9_]*$ && -n ${!var+x} ]] || return 0
-  hub_config_mirror "$key=${!var}"
+hub_config_mirror_env() { # KEY=ENVVAR
+  local key=${1%%=*} var=${1#*=} value
+  if [[ $1 != *=* || -z $key || -z $var ]]; then
+    printf 'fatal: invalid config format: %s\n' "$1" >&2
+    exit 128
+  fi
+  if ! value=$(printenv -- "$var"); then
+    printf "fatal: missing environment variable '%s' for configuration '%s'\n" "$var" "$key" >&2
+    exit 128
+  fi
+  hub_config_mirror "$key=$value"
 }
 
-# Separate git's global options from the command word.
 while (($#)); do
   case $1 in
     --noop)
@@ -84,25 +82,32 @@ while (($#)); do
       ;;
     -C)
       (($# >= 2)) || break
-      # like `git -C`: later paths are relative to it; an empty path is a no-op for git too
-      if [[ -n $2 ]]; then cd -- "$2" || exit 1; fi
+      if [[ -n $2 ]]; then cd -- "$2" || exit 1; fi # git -C '' is a no-op too
       shift 2
       ;;
     -c | --config-env | --git-dir | --work-tree | --namespace | --attr-source)
-      # Forwarded to git as given, in order, and used by hub's own git queries too, so git's
-      # precedence rules apply unchanged (including valueless -c foo.bar and any env name).
       (($# >= 2)) || break
       HUB_GIT_OPTS+=("$1" "$2")
-      [[ $1 == -c ]] && hub_config_mirror "$2"
-      [[ $1 == --config-env ]] && hub_config_mirror_env "$2"
+      case $1 in
+        -c) hub_config_mirror "$2" ;;
+        --config-env) hub_config_mirror_env "$2" ;;
+        --git-dir) HUB_GH_ENV+=("GIT_DIR=$2") ;;
+        --work-tree) HUB_GH_ENV+=("GIT_WORK_TREE=$2") ;;
+        --namespace) HUB_GH_ENV+=("GIT_NAMESPACE=$2") ;;
+      esac
       shift 2
       ;;
-    --config-env=*)
+    --config-env=* | --git-dir=* | --work-tree=* | --namespace=*)
       HUB_GIT_OPTS+=("$1")
-      hub_config_mirror_env "${1#--config-env=}"
+      case $1 in
+        --config-env=*) hub_config_mirror_env "${1#--config-env=}" ;;
+        --git-dir=*) HUB_GH_ENV+=("GIT_DIR=${1#--git-dir=}") ;;
+        --work-tree=*) HUB_GH_ENV+=("GIT_WORK_TREE=${1#--work-tree=}") ;;
+        --namespace=*) HUB_GH_ENV+=("GIT_NAMESPACE=${1#--namespace=}") ;;
+      esac
       shift
       ;;
-    --exec-path=* | --git-dir=* | --work-tree=* | --namespace=* | --attr-source=* | --list-cmds=*)
+    --exec-path=* | --attr-source=* | --list-cmds=*)
       HUB_GIT_OPTS+=("$1")
       shift
       ;;
@@ -119,7 +124,6 @@ while (($#)); do
   esac
 done
 
-# No command word, or one we never intercept: hand off to git immediately.
 hub_kind=
 if [[ $hub_cmd =~ ^[a-z][a-z0-9-]*$ ]]; then
   if [[ -f $HUB_LIB/cmd/$hub_cmd.sh ]]; then

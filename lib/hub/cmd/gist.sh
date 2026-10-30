@@ -4,27 +4,17 @@
 #        hub gist show ID [FILENAME] [gh gist view options]
 #        hub gist SUBCOMMAND [gh gist options]
 #
-# Runs `gh gist` with gh's own options and behaviour. hub only maps the old
-# argument forms that gh doesn't have:
-#
 #   hub gist create --public        gh gist create -p
 #   hub gist create -o, --browse    gh gist create -w
 #   hub gist show ID [FILENAME]     gh gist view ID --raw [--filename FILENAME]
 #
-# Without FILEs, create reads standard input, as gh does. Everything else goes
-# to gh unchanged: the other subcommands (list, view, edit, delete, clone,
-# rename) and all other options, in order. See `gh gist SUBCOMMAND --help`.
-#
-#   $ hub gist create --public -o notes.md
-#   > gh gist create -p -w notes.md
+# Without FILEs, create reads standard input. Other subcommands and options go to gh unchanged.
 #
 #   $ hub gist show 8f3c4e2 notes.md
 #   > gh gist view 8f3c4e2 --raw --filename notes.md
 
 hub_cmd_gist() {
-  case ${1-} in
-    '' | -h | --help) hub::usage ;;
-  esac
+  case ${1-} in '' | -h | --help) hub::usage ;; esac
   local sub=$1
   shift
   case $sub in
@@ -34,7 +24,6 @@ hub_cmd_gist() {
   esac
 }
 
-# _hub_gist_create ARGS... : gh gist create, with hub's --public and -o/--browse.
 _hub_gist_create() {
   local -a args=()
   while (($#)); do
@@ -59,7 +48,6 @@ _hub_gist_create() {
   hub::exec_gh gist create "${args[@]}"
 }
 
-# _hub_gist_show ID [FILENAME] [OPTIONS...] : gh gist view ID --raw [--filename FILENAME].
 _hub_gist_show() {
   local -a words=() opts=()
   while (($#)); do

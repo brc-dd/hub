@@ -1,163 +1,58 @@
 #!/usr/bin/env bash
-# Usage: script/bump [--dry-run] [--sign] [--quiet] VERSION
+# Usage: script/bump [--dry-run] [--sign] VERSION
 #
-# Commits and tags hub VERSION (X.Y.Z or X.Y.Z-PRE, semver) on main:
-#
-#   1. refuses unless main is checked out and `git status --porcelain` is empty
-#   2. writes VERSION to the VERSION file
-#   3. moves the notes under "## Unreleased" in CHANGELOG.md under a new
-#      "## vVERSION — YYYY-MM-DD" heading, leaving "## Unreleased" empty on top
-#   4. git add VERSION CHANGELOG.md
-#      git commit -m "hub vVERSION"
-#      git tag -a vVERSION -m "hub vVERSION"
-#      (git tag -s, a signed tag, with --sign or when git config tag.gpgSign is true)
-#
-# Nothing is pushed; script/release does that (and more).
+# Bumps hub to VERSION (X.Y.Z or X.Y.Z-PRE) on a clean main: writes the VERSION
+# file, moves the notes under "## Unreleased" in CHANGELOG.md under a new
+# "## vVERSION — YYYY-MM-DD" heading, commits "hub vVERSION" and adds the
+# annotated tag vVERSION. Nothing is pushed; script/release does that.
 #
 # Options:
-#   -n, --dry-run   check everything, show the changes and print the git commands
-#                   instead of running them; no file is touched
-#   -s, --sign      make a signed tag
-#   -q, --quiet     do not print the next steps
+#   -n, --dry-run   show the CHANGELOG.md change and the git commands, change nothing
+#   -s, --sign      make a signed tag (git tag -s)
 #   -h, --help      show this help
-
 set -euo pipefail
 
-if ((BASH_VERSINFO[0] < 5)); then
-  printf 'script/bump: bash 5 or newer is required, but this is bash %s\n' "$BASH_VERSION" >&2
-  exit 1
-fi
-
-me=script/bump
-# A semantic version without build metadata: X.Y.Z or X.Y.Z-PRE (https://semver.org).
-semver_re='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$'
-
-usage() { awk 'NR > 1 { if (!/^#/) exit; sub(/^# ?/, ""); print }' "${BASH_SOURCE[0]}"; }
+semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$'
 die() {
-  printf '%s: %s\n' "$me" "$*" >&2
+  printf 'script/bump: %s\n' "$*" >&2
   exit 1
 }
-usage_error() {
-  printf '%s: %s\nUsage: %s [--dry-run] [--sign] [--quiet] VERSION (see --help)\n' "$me" "$1" "$me" >&2
-  exit 2
-}
+run() { if ((dry_run)); then echo "[dry-run]$(printf ' %q' "$@")"; else "$@"; fi; }
 
-# quote ARGS... : the arguments as one shell-quoted line (quotes only where needed)
-quote() {
-  local arg q="'\\''" out=()
-  for arg; do
-    if [[ $arg =~ ^[[:alnum:]_./:=@%+,-]+$ ]]; then out+=("$arg"); else out+=("'${arg//\'/$q}'"); fi
-  done
-  printf '%s\n' "${out[*]}"
-}
-
-# run CMD ARGS... : run a command, or under --dry-run print it
-run() {
-  if ((dry_run)); then
-    printf '[dry-run] %s\n' "$(quote "$@")"
-  else
-    "$@"
-  fi
-}
-
-dry_run=0 sign=0 quiet=0 version=''
-while (($#)); do
-  case $1 in
+dry_run=0 tag_type=-a version=
+for arg; do
+  case $arg in
     -n | --dry-run) dry_run=1 ;;
-    -s | --sign) sign=1 ;;
-    -q | --quiet) quiet=1 ;;
-    -h | --help)
-      usage
-      exit 0
-      ;;
-    -*) usage_error "unknown option: $1" ;;
-    *)
-      [[ -z $version ]] || usage_error "unexpected argument: $1"
-      version=$1
-      ;;
+    -s | --sign) tag_type=-s ;;
+    -h | --help) exec sed -n '2,/^[^#]/s/^# \{0,1\}//p' "$0" ;;
+    -*) die "unknown option: $arg" ;;
+    *) version=${arg#v} ;;
   esac
-  shift
 done
-[[ -n $version ]] || usage_error "missing VERSION"
-[[ ${version#v} =~ $semver_re ]] || die "not a semantic version (X.Y.Z or X.Y.Z-PRE): $version"
-version=${version#v}
+[[ $version =~ $semver ]] || die "usage: script/bump [--dry-run] [--sign] X.Y.Z[-PRE]"
 tag=v$version
 
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
-git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "$PWD is not a git work tree"
-branch=$(git symbolic-ref --quiet --short HEAD) || die "HEAD is detached; check out main first"
-[[ $branch == main ]] || die "releases are cut from main, but $branch is checked out"
-dirty=$(git status --porcelain)
-[[ -z $dirty ]] || die "the working tree is not clean; commit or stash these first:"$'\n'"$dirty"
-if git rev-parse --quiet --verify "refs/tags/$tag" >/dev/null; then
-  die "tag $tag already exists"
-fi
-[[ -f CHANGELOG.md ]] || die "CHANGELOG.md not found"
-current=$(cat VERSION 2>/dev/null || true)
+cd "$(dirname "$0")/.."
+[[ $(git symbolic-ref --quiet --short HEAD) == main ]] || die "check out main first"
+[[ -z $(git status --porcelain) ]] || die "the working tree is not clean (git status)"
+if git rev-parse --quiet --verify "refs/tags/$tag" >/dev/null; then die "tag $tag already exists"; fi
 
-tmp_root=${TMPDIR:-/tmp}
-tmp=$(mktemp "${tmp_root%/}/hub-bump.XXXXXX")
-trap 'rm -f "$tmp"' EXIT
-
-# Move the body of the Unreleased section under the new heading. Exit status 3:
-# there is no Unreleased section; 4: it is empty.
-rc=0
-awk -v heading="## $tag — $(date +%Y-%m-%d)" '
-  BEGIN { state = "before" }
-  state == "before" && /^## \[?Unreleased\]?[ \t]*$/ {
-    print; print ""; print heading
-    state = "lead"
-    next
-  }
-  state == "lead" {
-    if (/^[ \t]*$/) next
-    if (/^## /) exit 4
-    print ""
-    state = "body"
-  }
+changelog=$(awk -v heading="## $tag — $(date +%Y-%m-%d)" '
+  !found && /^## Unreleased[ \t]*$/ { print; print ""; print heading; found = lead = 1; next }
+  lead && /^[ \t]*$/ { next }
+  lead && /^## / { exit }
+  lead { print ""; lead = 0 }
   { print }
-  END {
-    if (state == "before") exit 3
-    if (state == "lead") exit 4
-  }
-' CHANGELOG.md >"$tmp" || rc=$?
-case $rc in
-  0) ;;
-  3) die "CHANGELOG.md has no '## Unreleased' section" ;;
-  4) die "the Unreleased section of CHANGELOG.md is empty; describe what changed in $tag first" ;;
-  *) die "could not update CHANGELOG.md" ;;
-esac
+  END { exit !found || lead }
+' CHANGELOG.md) || die "CHANGELOG.md has no notes under '## Unreleased'"
 
 if ((dry_run)); then
-  printf 'Would write %s to VERSION (now %s) and update CHANGELOG.md:\n' "$version" "${current:-empty}"
-  diff -u -L CHANGELOG.md -L CHANGELOG.md CHANGELOG.md "$tmp" || true
+  printf '[dry-run] VERSION: %s -> %s\n' "$(<VERSION)" "$version"
+  diff -u CHANGELOG.md - <<<"$changelog" || true
 else
   printf '%s\n' "$version" >VERSION
-  cat "$tmp" >CHANGELOG.md
-fi
-
-tag_kind=-a
-if ((sign)) || [[ $(git config --type=bool --get tag.gpgSign 2>/dev/null) == true ]]; then
-  tag_kind=-s
+  printf '%s\n' "$changelog" >CHANGELOG.md
 fi
 run git add VERSION CHANGELOG.md
-run git commit -m "hub $tag" \
-  || die "git commit failed; VERSION and CHANGELOG.md are changed and staged (to undo: git reset -q && git checkout -- VERSION CHANGELOG.md)"
-run git tag "$tag_kind" "$tag" -m "hub $tag" \
-  || die "git tag failed after the commit; tag it by hand (git tag $tag_kind $tag -m 'hub $tag') or undo the commit (git reset --keep HEAD^)"
-
-((quiet)) && exit 0
-if ((dry_run)); then
-  printf '\nDry run: nothing was changed.\n'
-  exit 0
-fi
-cat <<EOS
-
-Committed and tagged hub $tag; nothing is pushed yet. Next:
-  script/release                       push main and $tag, publish the GitHub release
-                                       and point Formula/hub.rb at it
-or push and let the release workflow (.github/workflows/release.yml) do the rest:
-  git push origin main --follow-tags
-To undo before pushing:
-  git tag -d $tag && git reset --keep HEAD^
-EOS
+run git commit -m "hub $tag"
+run git tag "$tag_type" "$tag" -m "hub $tag"

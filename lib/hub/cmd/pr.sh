@@ -2,23 +2,13 @@
 # Summary: List, view, check out and merge pull requests (gh pr).
 # Usage: hub pr [SUBCOMMAND] [gh pr options]
 #
-# Runs `gh pr` with gh's own options and behaviour. hub only maps the old
-# subcommand names and argument forms that gh doesn't have:
+# Runs `gh pr` with gh's own options. hub maps two old forms:
 #
-#   hub pr show [PR] [-w] [-u]     gh pr view [PR]: shows the pull request in the
-#                                  terminal; -w opens it in the browser instead,
-#                                  and -u prints only its URL (--json url --jq .url).
+#   hub pr show [PR] [-u]          gh pr view [PR]; -u prints only its URL
 #   hub pr checkout PR [BRANCH]    gh pr checkout PR [-b BRANCH]
 #
-# Everything else goes to gh unchanged, for example:
-#
-#   hub pr list [-s STATE] [-L N]  gh pr list
-#   hub pr merge [PR] --squash     gh pr merge: merges on GitHub, right away;
-#                                  it is not a merge into your local branch.
-#   hub pr status | view | diff | checks | comment | review | edit | close | ...
-#
-# PR is a number, a URL or a branch name; without one, gh uses the pull
-# request for the current branch. See `gh pr SUBCOMMAND --help` for options.
+# Everything else goes to gh unchanged: list, status, diff, merge (which merges on
+# GitHub), ... See `gh pr SUBCOMMAND --help`.
 #
 #   $ hub pr checkout 123 fix-typo
 #   > gh pr checkout 123 -b fix-typo
@@ -26,62 +16,22 @@
 hub_cmd_pr() {
   case ${1-} in
     -h | --help) hub::usage ;;
-    '') hub::exec_gh pr ;;
+    show | checkout | co) ;;
+    *) hub::exec_gh pr "$@" ;;
   esac
-  local sub=$1
-  shift
-  case $sub in
-    show) _hub_pr_show "$@" ;;
-    checkout | co) _hub_pr_checkout "$sub" "$@" ;;
-    *) hub::exec_gh pr "$sub" "$@" ;;
-  esac
-}
-
-# _hub_pr_show ARGS... : gh pr view, with hub's -u/--url printing just the URL.
-_hub_pr_show() {
+  local sub=$1 arg url=0 n=0
   local -a args=()
-  local arg url=0
-  while (($#)); do
-    arg=$1
-    shift
-    case $arg in
-      -u | --url) url=1 ;;
-      --json | -q | --jq | -t | --template | -R | --repo)
-        # gh's options that take a value: the value is gh's, even if it reads -u.
-        args+=("$arg")
-        if (($#)); then
-          args+=("$1")
-          shift
-        fi
-        ;;
-      --)
-        args+=(-- "$@")
-        break
-        ;;
-      *) args+=("$arg") ;;
-    esac
-  done
-  # hub's flags go right after the subcommand, ahead of any "--".
-  ((url)) && args=(--json url --jq .url "${args[@]}")
-  hub::exec_gh pr view "${args[@]}"
-}
-
-# _hub_pr_checkout SUBCOMMAND ARGS... : gh pr checkout; an old-style second
-# positional argument (the local branch name) becomes -b BRANCH.
-_hub_pr_checkout() {
-  local -a args=("$1")
-  local arg positionals=0
   shift
   while (($#)); do
     arg=$1
     shift
     case $arg in
-      -b | --branch | --worktree | -R | --repo)
-        args+=("$arg")
-        if (($#)); then
-          args+=("$1")
-          shift
-        fi
+      -u | --url)
+        if [[ $sub == show ]]; then url=1; else args+=("$arg"); fi
+        ;;
+      --json | -q | --jq | -t | --template | -b | --branch | --worktree | -R | --repo)
+        args+=("$arg" "${@:1:1}") # the value is gh's, even if it reads -u
+        shift $(($# > 0))
         ;;
       --)
         args+=(-- "$@")
@@ -89,10 +39,12 @@ _hub_pr_checkout() {
         ;;
       -?*) args+=("$arg") ;;
       *)
-        positionals=$((positionals + 1))
-        if ((positionals == 2)); then args+=(-b "$arg"); else args+=("$arg"); fi
+        n=$((n + 1))
+        if [[ $sub != show ]] && ((n == 2)); then args+=(-b "$arg"); else args+=("$arg"); fi
         ;;
     esac
   done
-  hub::exec_gh pr "${args[@]}"
+  [[ $sub != show ]] || sub=view
+  ((url)) && args=(--json url --jq .url "${args[@]}") # ahead of any --
+  hub::exec_gh pr "$sub" "${args[@]}"
 }

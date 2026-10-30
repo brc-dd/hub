@@ -1,21 +1,13 @@
 # shellcheck shell=bash
-# shellcheck disable=SC2154  # cur, prev, words and cword are set by git's completion (__git_func_wrap)
-# bash completion for hub: hub completes like git, plus hub's own commands.
-# It covers `hub`, and `git` too when git is an alias for hub
-# (eval "$(hub alias -s)"). Source this file from ~/.bashrc, or install it
-# into a bash_completion.d directory (make install does that).
-#
-# git's own bash completion (git-completion.bash) does the real work and is
-# loaded first when it can be found. Without it, hub's command names are
-# still completed. Works in bash 3.2 and later.
-#
-# The commands below are hub's commands that git does not have, as listed by
-# the "# Summary:" lines of lib/hub/{cmd,ext}/*.sh. The git commands hub
-# extends (clone, push, checkout, ...) are completed by git's completion.
+# shellcheck disable=SC2154  # cur, prev, words and cword are set by git's completion
+# bash completion for hub, and for git when it is an alias for hub: git's own
+# completion plus hub's commands. Source it from ~/.bashrc or install it into a
+# bash_completion.d directory (make install does). It runs in the user's shell,
+# which may be bash 3.2.
 
 __hub_commands='alias api browse ci-status compare create delete fork gist issue pr pull-request release sync'
 
-# Load git's completion if it isn't loaded yet.
+# Load git's completion: through bash-completion, else from where git installs it.
 if ! declare -F __git_main >/dev/null 2>&1; then
   if declare -F _comp_load >/dev/null 2>&1; then
     _comp_load git >/dev/null 2>&1
@@ -41,7 +33,7 @@ if ! declare -F __git_main >/dev/null 2>&1; then
 fi
 
 if declare -F __git_main >/dev/null 2>&1 && declare -F __git_complete >/dev/null 2>&1; then
-  # git's completion, plus hub's commands where a command word is expected.
+  # git's completion, plus hub's commands where the command word goes.
   __hub_main() {
     __git_main
     if [[ ${words[0]##*/} != hub && $(alias "${words[0]}" 2>/dev/null) != *=\'hub* ]]; then
@@ -67,7 +59,7 @@ if declare -F __git_main >/dev/null 2>&1 && declare -F __git_complete >/dev/null
   __git_complete hub __hub_main
   __git_complete git __hub_main
 
-  # __hub_complete CMD : the arguments of hub's command CMD (git's completion calls _git_CMD).
+  # __hub_complete CMD : the arguments of CMD; git's completion calls _git_CMD for them.
   __hub_complete() {
     local cmd=$1 subcommands='' options='' word i n=0
     case $cmd in
@@ -82,7 +74,7 @@ if declare -F __git_main >/dev/null 2>&1 && declare -F __git_complete >/dev/null
       browse) options='--url --copy' ;;
       ci-status) options='--verbose' ;;
       compare) options='--url --copy --base' ;;
-      create) options='--public --private --internal --description --homepage --remote-name --browse --push' ;;
+      create) options='--public --private --internal --description --homepage --remote-name --browse --copy --push' ;;
       delete) options='--yes' ;;
       fork) options='--no-remote --remote-name --org --fork-name --default-branch-only' ;;
       pull-request) options='--message --file --edit --no-edit --base --head --draft --reviewer --assign --milestone --labels --no-maintainer-edits --push --force --browse --copy --issue --fill --dry-run' ;;
@@ -126,7 +118,7 @@ if declare -F __git_main >/dev/null 2>&1 && declare -F __git_complete >/dev/null
   done
   unset __hub_cmd
 else
-  # No git completion: hub's own commands, then file names.
+  # Without git's completion: hub's commands, then file names.
   __hub_fallback() {
     COMPREPLY=()
     if ((COMP_CWORD == 1)); then

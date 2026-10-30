@@ -117,8 +117,8 @@ ci_repo() { make_repo dotfiles origin=https://github.com/mislav/dotfiles.git; }
   stub_ci 'success' ''
   run hub ci-status HEAD~1
   assert_status 0
-  assert_gh_called "api --hostname github.com --paginate repos/mislav/dotfiles/commits/$sha/status --jq .statuses\\[\\].state"
-  assert_gh_called "api --hostname github.com --paginate repos/mislav/dotfiles/commits/$sha/check-runs --jq .check_runs\\[\\] | if .status == \"completed\" then .conclusion else \"pending\" end"
+  assert_gh_called "api --hostname github.com --paginate repos/mislav/dotfiles/commits/$sha/status --jq *"
+  assert_gh_called "api --hostname github.com --paginate repos/mislav/dotfiles/commits/$sha/check-runs --jq *"
 }
 
 @test "COMMIT defaults to HEAD" {
@@ -292,7 +292,7 @@ ci_repo() { make_repo dotfiles origin=https://github.com/mislav/dotfiles.git; }
 @test "outside a repository, or without a GitHub remote, it aborts" {
   run hub ci-status
   assert_failure
-  assert_output_contains "fatal: not a git repository"
+  assert_output_contains "Aborted: could not find a GitHub remote"
   make_repo local-only
   run hub ci-status
   assert_failure

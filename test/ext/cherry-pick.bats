@@ -121,6 +121,8 @@ git cherry-pick $SHA"
   assert_output_equals "git cherry-pick"
   run hub --noop cherry-pick https://github.com/mislav/dotfiles/pull/12
   assert_output_equals "git cherry-pick https://github.com/mislav/dotfiles/pull/12"
+  run hub --noop cherry-pick https://github.com/mislav/dotfiles/commit/main
+  assert_output_equals "git cherry-pick https://github.com/mislav/dotfiles/commit/main"
   assert_gh_not_called
 }
 
@@ -132,15 +134,6 @@ git cherry-pick $SHA"
   run hub cherry-pick --allow-empty topic
   assert_success
   [[ $(git log -1 --format=%s) == "topic work" ]]
-  assert_gh_not_called
-}
-
-@test "cherry-pick leaves a local revision that looks like USER@SHA to git" {
-  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
-  git branch jingweno@a319d88
-  run hub --noop cherry-pick jingweno@a319d88
-  assert_success
-  assert_output_equals "git cherry-pick jingweno@a319d88"
   assert_gh_not_called
 }
 

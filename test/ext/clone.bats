@@ -2,19 +2,6 @@
 load ../test_helper
 
 # serve_github OWNER/REPO... : make https://github.com/OWNER/REPO.git resolve to a local bare repo
-# with one commit (git's url.insteadOf), and allow only local transports so nothing reaches the network.
-serve_github() {
-  local repo dir tree
-  git config --global url."$HUB_TEST_TMP/srv/".insteadOf https://github.com/
-  export GIT_ALLOW_PROTOCOL=file
-  for repo in "$@"; do
-    dir=$HUB_TEST_TMP/srv/$repo.git
-    git init -q --bare "$dir"
-    tree=$(git -C "$dir" hash-object -t tree -w --stdin </dev/null)
-    git -C "$dir" update-ref refs/heads/main "$(git -C "$dir" commit-tree -m "initial commit" "$tree")"
-  done
-}
-
 @test "clone OWNER/REPO expands to an HTTPS URL by default" {
   run hub --noop clone rtomayko/ronn
   assert_success
@@ -59,7 +46,7 @@ serve_github() {
   assert_gh_not_called
 }
 
-@test "clone honours hub -c hub.protocol=ssh" {
+@test "clone honors hub -c hub.protocol=ssh" {
   run hub -c hub.protocol=ssh --noop clone mislav/dotfiles
   assert_success
   assert_output_equals "git -c hub.protocol=ssh clone git@github.com:mislav/dotfiles.git"
@@ -75,8 +62,8 @@ serve_github() {
 @test "values of git clone options are never taken for the repository" {
   local opt
   for opt in -b --branch -c --config -j --jobs -o --origin -u --upload-pack --depth --filter \
-             --reference --reference-if-able --revision --separate-git-dir --server-option \
-             --shallow-exclude --shallow-since --template --bundle-uri --ref-format; do
+    --reference --reference-if-able --revision --separate-git-dir --server-option \
+    --shallow-exclude --shallow-since --template --bundle-uri --ref-format; do
     run hub --noop clone "$opt" value mislav/dotfiles
     assert_success
     assert_output_equals "git clone $opt value https://github.com/mislav/dotfiles.git"
@@ -164,7 +151,7 @@ serve_github() {
   assert_output_equals "git clone https://github.com/mislav/dotfiles.git dots"
 }
 
-@test "a host without a dot is only recognised when configured" {
+@test "a host without a dot is only recognized when configured" {
   run hub --noop clone ghe/tools/deploy
   assert_success
   assert_output_equals "git clone ghe/tools/deploy"
@@ -177,8 +164,8 @@ serve_github() {
 @test "URLs pass through untouched" {
   local url
   for url in https://github.com/mislav/dotfiles.git git@github.com:mislav/dotfiles.git \
-             ssh://git@github.com/mislav/dotfiles github.com:mislav/dotfiles file:///srv/dotfiles.git \
-             https://github.com/mislav/dotfiles/tree/main; do
+    ssh://git@github.com/mislav/dotfiles github.com:mislav/dotfiles file:///srv/dotfiles.git \
+    https://github.com/mislav/dotfiles/tree/main; do
     run hub --noop clone "$url"
     assert_success
     assert_output_equals "git clone $url"

@@ -2,19 +2,8 @@
 load test_helper
 
 setup() {
-  # bats calls the helper's setup via load; re-run it explicitly because we override setup here.
+  hub_test_setup
   export HUB_ROOT=$HUB_TEST_ROOT
-  HUB_TEST_TMP=$(mktemp -d "${BATS_TEST_TMPDIR:-${TMPDIR:-/tmp}}/hub-test.XXXXXX"); export HUB_TEST_TMP
-  export HOME=$HUB_TEST_TMP/home; mkdir -p "$HOME"
-  export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=$HUB_TEST_TMP/gitconfig GH_CONFIG_DIR=$HUB_TEST_TMP/gh
-  export PATH=$HUB_TEST_ROOT/test/stubs:$PATH
-  export HUB_TEST_LOG=$HUB_TEST_TMP/gh.log HUB_TEST_GH_STUBS=$HUB_TEST_TMP/gh.stubs
-  : >"$HUB_TEST_LOG"; : >"$HUB_TEST_GH_STUBS"
-  unset GH_HOST GITHUB_HOST GH_REPO
-  git config --global user.name t; git config --global user.email t@example.test; git config --global init.defaultBranch main
-  stub_gh 'config get user -h github.com' 'mislav'
-  stub_gh 'config get git_protocol -h github.com' 'https'
-  cd "$HUB_TEST_TMP"
   # shellcheck source=../lib/hub/core.sh
   source "$HUB_TEST_ROOT/lib/hub/core.sh"
   hub::find_git
@@ -31,9 +20,12 @@ setup() {
   [[ $HUB_URL_OWNER == mislav ]]
   hub::parse_remote_url https://ghe.example.com/org/repo
   [[ $HUB_URL_HOST == ghe.example.com && $HUB_URL_OWNER == org && $HUB_URL_REPO == repo ]]
-  ! hub::parse_remote_url /local/path/repo.git
-  ! hub::parse_remote_url ../relative
-  ! hub::parse_remote_url https://github.com/just-owner
+  run hub::parse_remote_url /local/path/repo.git
+  assert_failure
+  run hub::parse_remote_url ../relative
+  assert_failure
+  run hub::parse_remote_url https://github.com/just-owner
+  assert_failure
 }
 
 @test "parse_github_url classifies web URLs" {
@@ -57,13 +49,25 @@ setup() {
   [[ $HUB_URL_KIND == gist && $HUB_URL_OWNER == mislav && $HUB_URL_NUMBER == abc123 ]]
   hub::parse_github_url https://gist.github.com/abc123
   [[ $HUB_URL_KIND == gist && $HUB_URL_NUMBER == abc123 ]]
-  ! hub::parse_github_url https://gitlab.com/mislav/hub/pull/1
-  ! hub::parse_github_url https://github.com/mislav/hub/pull/not-a-number
-  ! hub::parse_github_url not-a-url
+  run hub::parse_github_url https://gitlab.com/mislav/hub/pull/1
+  assert_failure
+  run hub::parse_github_url https://github.com/mislav/hub/pull/not-a-number
+  assert_failure
+  run hub::parse_github_url https://github.com/mislav/hub/pull/123/commits/main
+  assert_failure
+  run hub::parse_github_url https://github.com/mislav/hub/commit/main
+  assert_failure
+  run hub::parse_github_url https://github.com/mislav/hub/commit/v1.0
+  assert_failure
+  hub::parse_github_url https://github.com/mislav/hub/commit/ABCDEF01
+  [[ $HUB_URL_SHA == ABCDEF01 ]]
+  run hub::parse_github_url not-a-url
+  assert_failure
 }
 
 @test "enterprise hosts come from hub.host, GH_HOST and GITHUB_HOST" {
-  ! hub::is_known_host ghe.example.com
+  run hub::is_known_host ghe.example.com
+  assert_failure
   git config --global --add hub.host ghe.example.com
   hub::is_known_host GHE.Example.com
   GH_HOST=other.example.com hub::is_known_host other.example.com
@@ -78,19 +82,22 @@ setup() {
   git remote add upstream https://github.com/upstream/r.git
   [[ $(hub::main_remote) == upstream ]]
   [[ $(hub::main_project) == upstream/r ]]
-  git remote remove upstream; git remote remove github; git remote remove origin
+  git remote remove upstream
+  git remote remove github
+  git remote remove origin
   [[ -z $(hub::main_remote) ]]
   git remote add fork https://github.com/someone/r.git
   [[ $(hub::main_remote) == fork ]]
 }
 
-@test "main_project honours GH_REPO with and without a host" {
+@test "main_project honors GH_REPO with and without a host" {
   make_repo r
   [[ $(GH_REPO=cli/cli hub::main_project) == cli/cli ]]
   GH_REPO=ghe.example.com/org/repo hub::main_project >/dev/null
   GH_REPO=ghe.example.com/org/repo
   [[ $(hub::main_project) == org/repo ]]
-  hub::main_project >/dev/null; [[ $HUB_PROJECT_HOST == ghe.example.com ]]
+  hub::main_project >/dev/null
+  [[ $HUB_PROJECT_HOST == ghe.example.com ]]
 }
 
 @test "default_branch reads the remote HEAD, then asks gh, then falls back to main" {
@@ -121,11 +128,15 @@ setup() {
   hub::is_shorthand mislav/hub
   hub::is_shorthand dotfiles
   hub::is_shorthand my_org/some.repo-name
-  ! hub::is_shorthand https://github.com/mislav/hub
-  ! hub::is_shorthand git@github.com:mislav/hub.git
-  ! hub::is_shorthand a/b/c
+  run hub::is_shorthand https://github.com/mislav/hub
+  assert_failure
+  run hub::is_shorthand git@github.com:mislav/hub.git
+  assert_failure
+  run hub::is_shorthand a/b/c
+  assert_failure
   mkdir existing-dir
-  ! hub::is_shorthand existing-dir
+  run hub::is_shorthand existing-dir
+  assert_failure
   [[ $(hub::expand_project dotfiles) == mislav/dotfiles ]]
   [[ $(hub::expand_project someone/dotfiles) == someone/dotfiles ]]
 }
@@ -226,7 +237,8 @@ setup() {
 
 @test "hosts gh is logged in to count as GitHub hosts" {
   make_repo r origin=https://enterprise.example/org/canonical.git
-  ! hub::remote_project origin >/dev/null
+  run hub::remote_project origin
+  assert_failure
   mkdir -p "$GH_CONFIG_DIR"
   printf 'enterprise.example:\n    user: me\n' >"$GH_CONFIG_DIR/hosts.yml"
   unset HUB_GH_HOSTS
@@ -235,7 +247,7 @@ setup() {
   [[ $(hub::host) == enterprise.example ]]
 }
 
-@test "hosts with a port are recognised and get sensible URLs" {
+@test "hosts with a port are recognized and get sensible URLs" {
   make_repo r origin=https://enterprise.example:8443/org/repo.git
   GH_HOST=enterprise.example:8443
   hub::is_known_host enterprise.example
@@ -244,4 +256,39 @@ setup() {
   [[ $(hub::git_url org/repo) == https://enterprise.example:8443/org/repo.git ]]
   [[ $(HUB_PROTOCOL=ssh hub::git_url org/repo) == ssh://git@enterprise.example/org/repo.git ]]
   unset GH_HOST
+}
+
+@test "shared helpers: message, url_escape, same_host" {
+  hub::message '' 'Title here' 'Body para'
+  [[ $HUB_MSG_TITLE == "Title here" && $HUB_MSG_BODY == "Body para" ]]
+  printf 'From a file\n\nwith body\n' >msg.txt
+  hub::message msg.txt
+  [[ $HUB_MSG_TITLE == "From a file" && $HUB_MSG_BODY == "with body" ]]
+  run hub::message msg.txt 'also -m'
+  assert_failure
+  run hub::message missing.txt
+  assert_failure
+  [[ $(hub::url_escape 'feat#1 x/y') == 'feat%231%20x/y' ]]
+  hub::same_host A.example:8443 a.example
+  run hub::same_host a.example b.example
+  assert_failure
+}
+
+@test "shared helpers: project variables, remote_for_project, push_target" {
+  make_repo r origin=https://github.com/alice/r.git upstream=git@github.com:ORG/r.git
+  hub::main_project >/dev/null
+  [[ $HUB_PROJECT == ORG/r && $HUB_PROJECT_HOST == github.com ]]
+  hub::remote_project origin >/dev/null
+  [[ $HUB_PROJECT == alice/r ]]
+  [[ $(hub::remote_for_project org/R GitHub.com) == upstream ]]
+  run hub::remote_for_project nobody/r github.com
+  assert_failure
+  git checkout -q -b feat
+  run hub::push_target feat
+  assert_failure
+  git update-ref refs/remotes/origin/feat HEAD
+  git config branch.feat.remote origin
+  git config branch.feat.merge refs/heads/feat
+  hub::push_target feat
+  [[ $HUB_PUSH_REMOTE == origin && $HUB_PUSH_BRANCH == feat ]]
 }

@@ -20,17 +20,17 @@ jobs:
       SHELLCHECK_VERSION: 0.11.0
       SHFMT_VERSION: 3.14.1
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
-      - name: Install bash 5 (macOS ships bash 3.2)
+      - name: Install bash 5.3
         if: runner.os == 'macOS'
         run: |
           brew install bash
           echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
 
-      - name: Install bats-core ${{ env.BATS_VERSION }} and shellcheck ${{ env.SHELLCHECK_VERSION }}
+      - name: Install bats-core and shellcheck
         run: |
           mkdir -p "$HOME/.local/bin"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
@@ -47,7 +47,7 @@ jobs:
             tar -xJf - -C "$RUNNER_TEMP"
           install "$RUNNER_TEMP/shellcheck-v$SHELLCHECK_VERSION/shellcheck" "$HOME/.local/bin/"
 
-      - name: Install shfmt ${{ env.SHFMT_VERSION }}
+      - name: Install shfmt
         run: |
           case "$RUNNER_OS-$RUNNER_ARCH" in
             Linux-X64) target=linux_amd64 ;;
@@ -68,3 +68,16 @@ jobs:
           git --version
 
       - run: make check
+
+  lockfile:
+    name: actions.lock is current
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - run: gh extension install github/gh-actions-lock
+      - run: gh actions-lock --verify
