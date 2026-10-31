@@ -129,7 +129,7 @@ hub::require_gh() {
 # none (hub::gh_line prints a cd), and the pager options export nothing gh reads.
 hub::git_env() {
   local -a g=("${HUB_GIT_GLOBALS[@]}") names=()
-  local i arg kv entry params='' given='' name key var value
+  local i arg kv entry params='' given=0 name key var
   HUB_GIT_ENV=()
   for ((i = 0; i < ${#g[@]}; i++)); do
     arg=${g[i]} name=''
@@ -142,20 +142,19 @@ hub::git_env() {
           entry="$(hub::sq "$kv")="
         fi
         params+="${params:+ }$(hub::dquote_text "$entry")"
-        given+="${given:+ }$entry"
+        ((++given))
         name=GIT_CONFIG_PARAMETERS
         ;;
       --config-env | --config-env=*)
         if [[ $arg == *=* ]]; then kv=${arg#*=}; else kv=${g[++i]-}; fi
         key=${kv%=*} var=${kv##*=} # split at the last =, as git splits it
         if [[ $var =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
-          value=${!var-} var="\$$var"
+          var="\$$var"
         else # a name the shell cannot expand (CONFIG.VAR): printenv reads it, as git did
-          value=$(printenv "$var") || value=''
           var="\$(printenv $(hub::quote "$var"))"
         fi
         params+="${params:+ }$(hub::dquote_text "$(hub::sq "$key")")=\$(git rev-parse --sq-quote \"$var\" | cut -c2-)"
-        given+="${given:+ }$(hub::sq "$key")=$(hub::sq "$value")"
+        ((++given))
         name=GIT_CONFIG_PARAMETERS
         ;;
       -C | --shallow-file | --super-prefix) ((++i)) ;;                  # -C becomes a cd; the others export nothing
@@ -186,15 +185,39 @@ hub::git_env() {
     [[ -z ${seen[$name]-} ]] || continue
     seen[$name]=1
     if [[ $name == GIT_CONFIG_PARAMETERS ]]; then
-      # gh inherited hub's own GIT_CONFIG_PARAMETERS: these entries, as git wrote them, after
-      # whatever stood there before git read the command line, which the line carries along
-      [[ ${GIT_CONFIG_PARAMETERS-} == '' || $GIT_CONFIG_PARAMETERS == "$given" ]] \
+      # gh inherited hub's own GIT_CONFIG_PARAMETERS: whatever stood there before git read the
+      # command line, then the command line's entries; the line carries the former along
+      (($(hub::config_entries "${GIT_CONFIG_PARAMETERS-}") <= given)) \
         || params="\${GIT_CONFIG_PARAMETERS:+\$GIT_CONFIG_PARAMETERS }$params"
       HUB_GIT_ENV+=("GIT_CONFIG_PARAMETERS=\"$params\"")
     elif [[ -n ${!name+x} ]]; then
       HUB_GIT_ENV+=("$(hub::quote "$name=${!name}")")
     fi
   done
+}
+
+# hub::config_entries TEXT : how many entries TEXT holds, GIT_CONFIG_PARAMETERS as git writes it
+# ('key'='value' 'key'= ...): whitespace separates the entries, except inside the quotes, and
+# outside them a backslash quotes one character ('\'' and '\!' stand for a quote and a !).
+hub::config_entries() {
+  local s=$1 i c n=0 quoted=0 entry=0
+  for ((i = 0; i < ${#s}; i++)); do
+    c=${s:i:1}
+    if ((quoted)); then
+      [[ $c != \' ]] || quoted=0
+    elif [[ $c == \' ]]; then
+      quoted=1 entry=1
+    elif [[ $c == \\ ]]; then
+      ((i++)) || true
+      entry=1
+    elif [[ $c == [[:space:]] ]]; then
+      if ((entry)); then n=$((n + 1)) entry=0; fi
+    else
+      entry=1
+    fi
+  done
+  ((entry)) && n=$((n + 1))
+  printf '%s\n' "$n"
 }
 
 # hub::sq TEXT : TEXT in single quotes, as git quotes the entries of GIT_CONFIG_PARAMETERS: a quote

@@ -893,9 +893,21 @@ push_why() {
   GIT_CONFIG_PARAMETERS="'a.b'='c' 'a.b'='d'"
   [[ $(hub::gh_line gh pr list) == "env GIT_CONFIG_PARAMETERS=\"'a.b'='c' 'a.b'='d'\" gh pr list" ]]
   unset GIT_CONFIG_PARAMETERS
-  # a variable the shell cannot expand (git reads any name) is read with printenv
+  # a variable the shell cannot expand (git reads any name) is read with printenv; whether anything
+  # was inherited is told by counting the entries, whatever their values (git may have run hub
+  # through a shell that drops such a variable)
   HUB_GIT_GLOBALS=(--config-env=a.b=CONFIG.VAR)
+  GIT_CONFIG_PARAMETERS="'a.b'='dotted value'"
   [[ $(hub::gh_line gh pr list) == "env GIT_CONFIG_PARAMETERS=\"'a.b'=\$(git rev-parse --sq-quote \"\$(printenv CONFIG.VAR)\" | cut -c2-)\" gh pr list" ]]
+  GIT_CONFIG_PARAMETERS="'x.y'='it'\\''s a b' 'a.b'='dotted value'"
+  [[ $(hub::gh_line gh pr list) == "env GIT_CONFIG_PARAMETERS=\"\${GIT_CONFIG_PARAMETERS:+\$GIT_CONFIG_PARAMETERS }'a.b'=\$(git rev-parse --sq-quote \"\$(printenv CONFIG.VAR)\" | cut -c2-)\" gh pr list" ]]
+  unset GIT_CONFIG_PARAMETERS
+  [[ $(hub::config_entries '') == 0 ]]
+  [[ $(hub::config_entries "'k'=") == 1 ]]
+  [[ $(hub::config_entries "'k'='two words' 'k.sub'='it'\\''s'") == 2 ]]
+  [[ $(hub::config_entries " 'k'='a'\\!'b'  'k'=''  'k'=") == 3 ]]
+  [[ $(hub::config_entries "'k'='a
+b' 'k'='c'") == 2 ]]
   cd ..
   HUB_GIT_GLOBALS=(-C r --no-advice)
   [[ $(GIT_ADVICE=0 hub::gh_line gh pr list) == "(cd $(hub::quote "$PWD") && env GIT_ADVICE=0 gh pr list)" ]]

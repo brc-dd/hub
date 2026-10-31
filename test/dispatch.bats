@@ -318,7 +318,7 @@ make_fakegh() { # SCRIPT-BODY
   run env 'CONFIG.VAR=dotted value' "$HUB_BIN" --noop --config-env=review.value=CONFIG.VAR pr list
   assert_success
   assert_output_equals "env GIT_CONFIG_PARAMETERS=\"'review.value'=\$(git rev-parse --sq-quote \"\$(printenv CONFIG.VAR)\" | cut -c2-)\" gh pr list"
-  [[ $(PATH=$PWD/bin:$PATH env 'CONFIG.VAR=dotted value' sh -c "$output") == 'dotted value' ]]
+  [[ $(PATH=$PWD/bin:$PATH env 'CONFIG.VAR=dotted value' bash -c "$output") == 'dotted value' ]] # not sh: dash drops such a variable
   # what gh inherited in GIT_CONFIG_PARAMETERS before the command line comes along, unprinted and
   # first, as the real gh had it; without it the line still runs
   run env GIT_CONFIG_PARAMETERS="'review.value'='inherited'" "$HUB_BIN" --noop -c review.value=local pr list
