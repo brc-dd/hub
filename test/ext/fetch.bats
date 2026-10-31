@@ -568,3 +568,22 @@ git fetch --multiple --depth=1 carol -j4 alice --recurse-submodules bob --recurs
   assert_success
   assert_output_equals "git fetch --multiple alice,bob"
 }
+
+@test "after a list, an operand that is an existing path is git's, as everywhere on the command line" {
+  serve_github mislav/dotfiles alice/dotfiles bob/dotfiles
+  clone_served mislav/dotfiles
+  mkdir carol
+  git init -q --bare dave.git
+  run hub --noop fetch alice,bob carol
+  assert_success
+  assert_output_equals "git fetch alice,bob carol"
+  run hub --noop fetch alice,bob dave # dave.git holds a repository: git's own suffix rule
+  assert_success
+  assert_output_equals "git fetch alice,bob dave"
+  run hub fetch alice,bob carol
+  assert_failure
+  assert_equals "$(git remote)" origin # nothing added
+  run hub --noop fetch alice,bob erin  # no such path: a user
+  assert_success
+  assert_output_equals $'git remote add alice https://github.com/alice/dotfiles.git\ngit remote add bob https://github.com/bob/dotfiles.git\ngit remote add erin https://github.com/erin/dotfiles.git\ngit fetch --multiple alice bob erin'
+}

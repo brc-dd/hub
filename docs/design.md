@@ -247,6 +247,16 @@ Common rules:
   logged in to, else github.com. hub 2.x's `GITHUB_HOST` is accepted and
   exported to gh as `GH_HOST`, so both tools resolve the same host, and a
   printed gh line carries that `GH_HOST`.
+- **`GIT_CONFIG` is `git config`'s alone.** The variable names the file
+  `git config` reads and writes; every other git command reads the
+  repository's configuration as usual, and under it `git config` ignores `-c`
+  and refuses `--local`. hub's own `git config` calls model those other
+  commands (where a branch pushes, what a boolean value means, which section a
+  deleted branch leaves behind), so core.sh sets the variable aside at startup
+  (`HUB_GIT_CONFIG`) and gives it back to the command lines it hands over to
+  git and gh (`hub::user_env`, `hub::user_run`), which then see what they
+  would see without hub. A `git config` the user runs through hub never enters
+  core.sh, and keeps it.
 - **Your login** comes from gh's cached `gh config get user -h HOST`, else
   `gh api user` (`hub::current_user`). A bare `REPO` argument means
   `LOGIN/REPO`.
@@ -275,34 +285,44 @@ Common rules:
 - **Where a branch pushes** (`hub::push_target`) follows git's own rules:
   `remote.*.push` refspecs when there are any, read as `git push` reads them
   (`hub::push_refspec_dest`: a refspec sends the branch when its source is the
-  branch, in full, short or as `HEAD` while it is checked out, or a pattern it
-  matches; a short destination is a branch; the branch goes to every
-  destination the refspecs give it, less those a negative `^PATTERN` matches,
-  which git applies to destinations, not sources, and the first left, in the
-  refspecs' order, names it; a matching `:` sends it where the remote has it,
-  when nothing else sends it. `%(push:remoteref)` is not consulted: it knows
-  neither short sources nor matching refspecs, and applies negatives to the
-  source), else a mirror remote, else `branch.*.pushRemote`,
-  `remote.pushDefault`, `branch.*.remote` and `push.default`, with the
-  upstream read from `branch.*.remote` and every `branch.*.merge` value
-  (`simple` and `upstream` need exactly one). The remote, when none is
-  configured, is the sole remote when there is exactly one, whatever its name,
-  else `origin`, as git takes it (`hub::push_remote`; `%(push:remotename)` is
-  empty for both). When git would refuse, or would push other branches and
-  leave this one alone (refspecs that send none of it, exclude every
-  destination or send it to something other than a branch; `push.default
-  nothing`; `simple` with a differently named upstream; no upstream, or
-  several; `matching`, by `push.default` or by refspec, when the remote has no
-  branch of that name, as its remote-tracking ref shows, or, for a caller
-  about to push, as every push URL answers `git ls-remote`), hub says why
-  (`HUB_PUSH_WHY`) before pushing anywhere. A caller about to push through
-  `remote.*.push` asks git itself as well (`hub::push_dry_run`: `git push
-  --dry-run --porcelain --verbose` to the remote reads the refspecs and the
-  remote as the push would, and pushes nothing): the branch's own line says
-  what git sends it as, and what git refuses, a short source that names a
-  branch and a tag at once, a source that names nothing, a destination two
-  sources feed, a non-fast-forward, hub refuses with git's words
-  (`HUB_PUSH_ERROR`) rather than push by its own reading. Branch-aware
+  branch, in full, short or as `HEAD` or `@` while it is checked out, or a
+  pattern it matches; a destination outside `refs/` is the remote's branch it
+  abbreviates, as git looks a name up among the remote's refs (`heads/X` is
+  `X` when the remote has `X`, as of the last fetch; `X` and `heads/X` both
+  there is ambiguous, and refused as git refuses it), else a branch of that
+  name; the branch goes to every destination the refspecs give it, less those
+  a negative `^PATTERN` matches, which git applies to destinations, not
+  sources, and the first left, in the refspecs' order, names it; a matching
+  `:` sends it where the remote has it, when nothing else sends it.
+  `%(push:remoteref)` is not consulted: it knows neither short sources nor
+  matching refspecs, and applies negatives to the source), else a mirror
+  remote, else `branch.*.pushRemote`, `remote.pushDefault`, `branch.*.remote`
+  and `push.default` (`tracking` being `upstream`'s old name; with a value git
+  does not know, every git command that reads the configuration dies, and
+  `hub::require_repo` relays git's words instead of reporting no repository),
+  with the upstream read from `branch.*.remote` and every `branch.*.merge`
+  value (an upstream is both settings, as for git, and `simple` and `upstream`
+  need exactly one). The remote, when none is configured, is the sole remote
+  when there is exactly one, whatever its name, else `origin`, as git takes it
+  (`hub::push_remote`; `%(push:remotename)` is empty for both). When git would
+  refuse, or would push other branches and leave this one alone (refspecs that
+  send none of it, exclude every destination or send it to something other
+  than a branch; `push.default nothing`; `simple` with a differently named
+  upstream; no upstream, or several; `matching`, by `push.default` or by
+  refspec, when the remote has no branch of that name, as its remote-tracking
+  ref shows, or, for a caller about to push, as every push URL answers
+  `git ls-remote`), hub says why (`HUB_PUSH_WHY`) before pushing anywhere. A
+  caller about to push through `remote.*.push` asks git itself as well
+  (`hub::push_dry_run`: `git push --dry-run --porcelain --verbose` to the
+  remote reads the refspecs and the remote as the push would, and pushes
+  nothing): the branch's own line says what git sends it as, and what git
+  refuses, a short source that names a branch and a tag at once, a source that
+  names nothing, a destination two sources feed, a non-fast-forward, a push
+  URL git could not reach after one it reported on, hub refuses with git's
+  words (`HUB_PUSH_ERROR`) rather than push by its own reading. A mirror
+  remote (`remote.*.mirror`) pushes, and deletes, every ref, and refuses a
+  refspec: `pull-request -p` pushes HEAD alone there, with the setting aside
+  for that push (`git -c remote.NAME.mirror=false push`). Branch-aware
   commands (browse, compare, pull-request) use it, so a branch that tracks
   your fork is opened in, compared from and published to the fork.
 - **A remote's fetch URL and push URL** may name different repositories. The

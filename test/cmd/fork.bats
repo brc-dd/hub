@@ -235,3 +235,16 @@ SH
   assert_success
   assert_output_contains "Usage: hub fork"
 }
+
+@test "gh runs with the user's GIT_CONFIG, which hub sets aside for its own reads of the configuration" {
+  make_repo dotfiles origin=https://github.com/dotcom/dotfiles.git
+  git config --file "$HUB_TEST_TMP/alternate" test.option from-the-alternate
+  git config test.option from-the-repository
+  export GIT_CONFIG=$HUB_TEST_TMP/alternate
+  fake_gh_fork
+  run hub fork
+  assert_success
+  unset GIT_CONFIG
+  assert_equals "$(git remote get-url mislav)" https://github.com/mislav/dotfiles.git # the project, read from the repository
+  assert_equals "$(cat "$HUB_TEST_TMP/gh.config")" from-the-alternate                 # gh, and its git config, see the user's environment
+}

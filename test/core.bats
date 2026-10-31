@@ -234,6 +234,17 @@ EOF
   git config push.default upstream
   hub::push_target topic
   [[ $HUB_PUSH_BRANCH == main ]]
+  git config push.default tracking # upstream's old name, as git reads it
+  hub::push_target topic
+  [[ $HUB_PUSH_BRANCH == main ]]
+  git config push.default banana # a value git refuses, as it reads the configuration
+  run git push --dry-run origin
+  assert_failure
+  [[ $(push_why topic) == default ]]
+  if hub::push_target topic; then false; fi
+  [[ $HUB_PUSH_ERROR == "malformed value for push.default: banana" ]]
+  git config push.default Upstream # git's values are lowercase
+  [[ $(push_why topic) == default ]]
   git config push.default current
   hub::push_target topic
   [[ $HUB_PUSH_BRANCH == topic ]]
@@ -970,6 +981,144 @@ push_why() {
   [[ $HUB_PUSH_BRANCH == topic ]]
   hub::push_target topic verify # up to date there: git lists it with --verbose alone
   [[ $HUB_PUSH_BRANCH == topic ]]
+}
+
+@test "push_target reads a short destination in remote.*.push as git looks it up among the remote's branches, and @ as HEAD" {
+  serve_github o/r
+  clone_served o/r
+  git checkout -q -b topic
+  git commit -q --allow-empty -m t
+  git config remote.origin.push refs/heads/topic:heads/dest
+  hub::push_target topic # no branch dest there: heads/dest is a branch of that name, as git completes it
+  [[ $HUB_PUSH_BRANCH == heads/dest ]]
+  git push -q origin HEAD:refs/heads/dest
+  git fetch -q origin
+  run git push --dry-run --porcelain origin
+  assert_success
+  assert_output_contains "refs/heads/topic:refs/heads/dest"
+  hub::push_target topic # the remote has dest: heads/dest names it, as for git
+  [[ $HUB_PUSH_BRANCH == dest ]]
+  hub::push_target topic verify
+  [[ $HUB_PUSH_BRANCH == dest ]]
+  git push -q origin HEAD:refs/heads/heads/dest
+  git fetch -q origin
+  run git push --dry-run --porcelain origin
+  assert_failure
+  assert_output_contains "dst refspec heads/dest matches more than one"
+  [[ $(push_why topic) == ambiguous ]]
+  if hub::push_target topic; then false; fi
+  [[ $HUB_PUSH_ERROR == "dst refspec heads/dest matches more than one" ]]
+  [[ $(push_why topic verify) == refused ]]
+  if hub::push_target topic verify; then false; fi
+  [[ $HUB_PUSH_ERROR == "dst refspec heads/dest matches more than one" ]]
+  git push -q origin :refs/heads/heads/dest
+  git fetch -q --prune origin
+  git config remote.origin.push refs/heads/topic:dest # a name without heads/ is that branch either way
+  hub::push_target topic
+  [[ $HUB_PUSH_BRANCH == dest ]]
+  # @ is HEAD: the checked-out branch's refspec
+  git config remote.origin.push '@:refs/heads/publish'
+  hub::push_target topic
+  [[ $HUB_PUSH_BRANCH == publish ]]
+  git push -q origin HEAD:refs/heads/publish
+  hub::push_target topic verify
+  [[ $HUB_PUSH_BRANCH == publish ]]
+  git checkout -q main
+  [[ $(push_why topic) == refspec ]] # @ is main now: nothing sends topic
+}
+
+@test "push_target asks every push URL before a push through remote.*.push: a URL git cannot reach refuses, after one it can" {
+  serve_github o/r
+  clone_served o/r
+  git checkout -q -b topic
+  git commit -q --allow-empty -m t
+  git config remote.origin.push refs/heads/topic:refs/heads/topic
+  git config --add remote.origin.pushurl https://github.com/o/r.git
+  git config --add remote.origin.pushurl https://github.com/o/missing.git
+  run git push --dry-run --porcelain origin
+  assert_failure
+  assert_output_contains "refs/heads/topic:refs/heads/topic" # the first URL reports, then git dies on the second
+  assert_output_contains "nothing is served at https://github.com/o/missing.git"
+  [[ $(push_why topic verify) == refused ]]
+  if hub::push_target topic verify; then false; fi
+  [[ $HUB_PUSH_ERROR == *"nothing is served at https://github.com/o/missing.git"* ]]
+  hub::push_target topic # read here, without the remote, the name is the refspec's
+  [[ $HUB_PUSH_BRANCH == topic ]]
+  # the same URLs the other way round: git dies before any report
+  git config --unset-all remote.origin.pushurl
+  git config --add remote.origin.pushurl https://github.com/o/missing.git
+  git config --add remote.origin.pushurl https://github.com/o/r.git
+  [[ $(push_why topic verify) == refused ]]
+  # two URLs git can reach: the branch goes, beside another branch's rejection on both
+  git config --unset-all remote.origin.pushurl
+  git config --add remote.origin.pushurl https://github.com/o/r.git
+  git config --add remote.origin.pushurl https://github.com/o/r.git
+  hub::push_target topic verify
+  [[ $HUB_PUSH_BRANCH == topic ]]
+  git checkout -q -b other main
+  git commit -q --allow-empty -m o
+  git push -q origin other
+  git reset -q --hard main # behind the remote's other: not a fast-forward
+  git checkout -q topic
+  git config --add remote.origin.push refs/heads/other:refs/heads/other
+  run git push --dry-run --porcelain origin
+  assert_failure
+  assert_output_contains "refs/heads/other:refs/heads/other"
+  hub::push_target topic verify
+  [[ $HUB_PUSH_BRANCH == topic ]]
+  [[ $(server_branches o/r | sort | tr '\n' ' ') == "main other " ]] # nothing pushed
+}
+
+@test "require_repo relays git's words when git cannot read the repository, and git's own outside one" {
+  make_repo r
+  hub::require_repo
+  git config push.default banana # every git command that reads the configuration dies
+  run hub::require_repo
+  assert_failure
+  assert_output_contains "fatal: bad config variable 'push.default' in file"
+  assert_output_lacks "not a git repository"
+  cd "$HUB_TEST_TMP"
+  run hub::require_repo
+  assert_failure
+  assert_output_equals "fatal: not a git repository (or any of the parent directories): .git"
+}
+
+@test "has_upstream is git's upstream: branch.*.remote and branch.*.merge both" {
+  make_repo r origin=https://github.com/o/r.git
+  git checkout -q -b feature
+  run hub::has_upstream feature
+  assert_failure
+  git config branch.feature.merge refs/heads/feature # merge alone: git has no upstream configured
+  run git rev-parse --abbrev-ref 'feature@{upstream}'
+  assert_failure
+  run hub::has_upstream feature
+  assert_failure
+  git config --unset branch.feature.merge
+  git config branch.feature.remote origin # remote alone: none either
+  run hub::has_upstream feature
+  assert_failure
+  git config branch.feature.merge refs/heads/feature
+  hub::has_upstream feature
+}
+
+@test "GIT_CONFIG, which git config alone honors, is set aside for hub's own reads and writes and given back to git and gh" {
+  make_repo r origin=https://github.com/o/r.git
+  git config push.default nothing
+  git config --file "$HUB_TEST_TMP/alternate" push.default current
+  git config --file "$HUB_TEST_TMP/alternate" hub.boolean banana
+  run env GIT_CONFIG="$HUB_TEST_TMP/alternate" bash -c 'source "$HUB_TEST_ROOT/lib/hub/core.sh"; printf "%s|%s|%s\n" "${GIT_CONFIG-unset}" "$HUB_GIT_CONFIG" "$HUB_GIT_CONFIG_SET"; hub::git_query config --get push.default; hub::git_bool yes; hub::user_run env | grep "^GIT_CONFIG="; hub::user_env; printf "%s\n" "$GIT_CONFIG"'
+  assert_success
+  assert_line_equals 0 "unset|$HUB_TEST_TMP/alternate|1"
+  assert_line_equals 1 nothing
+  assert_line_equals 2 true
+  assert_line_equals 3 "GIT_CONFIG=$HUB_TEST_TMP/alternate"
+  assert_line_equals 4 "$HUB_TEST_TMP/alternate"
+  run env GIT_CONFIG= bash -c 'source "$HUB_TEST_ROOT/lib/hub/core.sh"; hub::user_env; printf "[%s]%s\n" "$GIT_CONFIG" "${GIT_CONFIG+set}"' # set, and empty: given back as such
+  assert_success
+  assert_output_equals "[]set"
+  run bash -c 'source "$HUB_TEST_ROOT/lib/hub/core.sh"; hub::user_env; printf "%s|%s\n" "${GIT_CONFIG-unset}" "$HUB_GIT_CONFIG_SET"'
+  assert_success
+  assert_output_equals "unset|0"
 }
 
 @test "push_target asks git itself before a push through remote.*.push, and refuses what git refuses" {

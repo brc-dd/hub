@@ -404,6 +404,34 @@ is not.
   go now. `fetch --multiple alice,bob` passed the list to git as one name;
   under `--multiple`, a comma-separated operand is a list of remotes, groups
   and users, as without it, unless a remote or group of that name exists.
+- Found by the review of the fifteenth round: `GIT_CONFIG` in the environment,
+  which `git config` alone honors (every other git command reads the
+  repository's configuration, and under it `git config` ignores `-c` and
+  refuses `--local`), reached hub's own `git config` calls, so
+  `pull-request -p` judged the push by the alternate file and pushed what
+  `git push` refuses, or refused what it pushes, `sync` could not remove a
+  deleted branch's section and `checkout` read every boolean value as refused;
+  hub sets it aside for its own reads and writes, and gives it back to the
+  command lines it hands to git and gh. `push.default tracking`, upstream's
+  old name, was read as `simple`, so `pull-request -p` pushed a branch git
+  would not push, or refused one it would; it is `upstream` now; with a value
+  git does not know, every git command that reads the configuration dies, and
+  hub relays git's words instead of reporting that there is no repository.
+  `pull-request -p` through `remote.*.push` to a remote with several push URLs
+  pushed to the first when git's dry run had died on a later one; a URL git
+  never reported on refuses now. A destination in `remote.*.push` outside
+  `refs/` (`heads/dest`) was taken as a branch of that name, where git first
+  looks the name up among the remote's refs, so an existing `dest` was not
+  seen as pushed, or `heads/dest` named as the head; it is resolved as git
+  does, among the remote's branches as of the last fetch, and `@` is read as
+  `HEAD`. A branch with `branch.*.merge` alone, or `branch.*.remote` alone,
+  has no upstream for git, yet `pull-request -p` pushed it without
+  `--set-upstream`, or refused it under `push.default simple`; a branch has an
+  upstream when both are set. `pull-request -p` to a mirror remote
+  (`remote.*.mirror`) failed, as git refuses a refspec there; HEAD is pushed
+  alone, with the mirror setting aside for that push. `fetch alice,bob carol`
+  added a remote for an existing path `carol`, which the command line's rules
+  leave to git; it goes to git as given now, as under `--multiple`.
 - The option table and the usage of a git command are read once per run, as
   documented; read through `hub::git_option`, they were asked of git again
   for every option on the command line.

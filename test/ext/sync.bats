@@ -338,6 +338,25 @@ warning: 'x-pushed' seems to contain unpushed commits"
   assert_equals "$(git config --worktree branch.topic.remote)" origin
 }
 
+@test "sync reads and writes the repository's configuration under GIT_CONFIG too, which git config alone honors" {
+  serve_github mislav/dotfiles
+  clone_served mislav/dotfiles work
+  git branch topic
+  git push -q origin topic
+  git -C "$(server_dir mislav/dotfiles)" update-ref -d refs/heads/topic
+  git config branch.topic.remote origin
+  git config branch.topic.merge refs/heads/topic
+  git config --file "$HUB_TEST_TMP/alternate" alternate.only yes
+  export GIT_CONFIG=$HUB_TEST_TMP/alternate
+  run hub sync
+  assert_success
+  assert_output_contains "Deleted branch topic (was "
+  unset GIT_CONFIG
+  [[ -z $(tip topic) ]]
+  [[ -z $(git config --local --get-regexp '^branch\.topic\.') ]]                             # the section went from the repository's file
+  assert_equals "$(git config --file "$HUB_TEST_TMP/alternate" --list)" "alternate.only=yes" # and nothing from the alternate
+}
+
 @test "sync never updates a branch checked out in another work tree" {
   make_file_fixture
   local a

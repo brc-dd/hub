@@ -11,8 +11,9 @@
 # becomes its members in its place, with --multiple put first on the command line (before any
 # `--`), and every other operand is then a remote, a group or a USER, as with --multiple given:
 # `git fetch --multiple` takes no refspecs, so refspecs go with one USER alone (hub fetch USER
-# REFSPEC...), and an operand after a list that is none of the three is refused before anything is
-# added. With --multiple (or -m) in effect, every operand is a remote, a group, a USER, or a
+# REFSPEC...); an operand after a list that git could read as a path is git's, like any other (the
+# command line goes to git as given), and one that is none of the four is refused before anything
+# is added. With --multiple (or -m) in effect, every operand is a remote, a group, a USER, or a
 # comma-separated list of those, which becomes its members (a remote or group named alice,bob is
 # that remote). The last of --multiple and --no-multiple on the command line counts, as in git;
 # when it is --no-multiple, a list is one repository name for git, and goes to it unchanged.
@@ -112,6 +113,7 @@ hub_ext_fetch() {
       for i in "${operands[@]:1}"; do # the rest are git fetch --multiple's: remotes, groups, or users to add
         arg=${args[i]}
         _hub_fetch_is_remote "$arg" && continue
+        hub::local_source "$arg" && hub::exec_git fetch "$@" # a path is git's, after a list too
         _hub_fetch_is_user "$arg" || hub::die "hub fetch: with a list, every other operand is a remote, a remote group or a GitHub user for git fetch --multiple, and '$arg' is none; refspecs go with one user: hub fetch USER REFSPEC..."
         [[ -n ${seen[$arg]-} ]] || missing+=("$arg")
         seen[$arg]=1

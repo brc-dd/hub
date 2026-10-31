@@ -13,28 +13,34 @@
 #
 # The head is the current branch, named for gh as it is where `git push` sends it: on the remote
 # git would push to (remote.*.push, branch.*.pushRemote, remote.pushDefault, branch.*.remote and
-# push.default; with none of them, the sole remote, whatever its name, else origin), under its
-# name there, in the repository that remote's push URL names, written OWNER:BRANCH when that is
-# not the base repository. remote.*.push is read as git reads it: the first refspec whose source
-# is the branch (in full, short, or HEAD while it is checked out) or a pattern it matches names
-# the destination, a matching refspec (`:`) sends it where the remote has it, and a negative one
-# (^PATTERN) excludes a destination, leaving the next. With -p, git's own reading of the refspecs
-# counts (git push --dry-run to the remote): when git would refuse the push, for a source that
-# names a branch and a tag at once, say, hub says what git said and pushes nothing. A branch
-# without an upstream goes to the remote `git push -u` would take; one that `git push` would not
-# push as configured (push.default nothing, refspecs that send other branches, several upstream
-# branches in branch.*.merge) is refused. Without -p, the branch must already be pushed there,
-# which its remote-tracking branch shows: the one the remote's fetch refspecs map its name there
-# to; a remote that fetches from one repository and pushes to another shows nothing, and is
-# refused without -p or -f. -f
-# skips that check. -h BRANCH names a branch on that remote instead, pushed from HEAD with -p; -h
-# OWNER:BRANCH names a branch in OWNER's repository, pushed with -p to the remote here whose push
-# URL names it (owner and repository names compare without regard to case, as on GitHub). That
-# repository is called like the base unless -h OWNER/REPO:BRANCH says otherwise (a renamed fork)
-# or, without -p, the local branch of that name pushes to a repository of OWNER's here. gh pr
-# create cannot open a pull request from a repository owned by an organization; the API that -i
-# uses can, and gets the head repository's name (head_repo) whenever it is known to be another
-# repository than the base, as the API requires within one organization.
+# push.default, tracking being upstream's old name; with none of them, the sole remote, whatever
+# its name, else origin), under its name there, in the repository that remote's push URL names,
+# written OWNER:BRANCH when that is not the base repository. remote.*.push is read as git reads it:
+# the first refspec whose source is the branch (in full, short, or HEAD or @ while it is checked
+# out) or a pattern it matches names the destination (one outside refs/ is the remote's branch it
+# abbreviates, as git looks a name up, heads/X being X when the remote has X as of the last fetch,
+# else a branch of that name), a matching refspec (`:`) sends it where the remote has it, and a
+# negative one (^PATTERN) excludes a destination, leaving the next. With -p, git's own reading of
+# the refspecs counts (git push --dry-run to the remote): when git would refuse the push, for a
+# source that names a branch and a tag at once, say, or a push URL it cannot reach after one it
+# reported on, hub says what git said and pushes nothing. A branch without an upstream
+# (branch.*.remote and branch.*.merge both, as git has one) goes to the remote `git push -u` would
+# take, and -p sets the upstream; one that `git push` would not push as configured (push.default
+# nothing, refspecs that send other branches, several upstream branches in branch.*.merge) is
+# refused; with a push.default value git does not know, git refuses to run at all, and hub relays
+# its words. A mirror remote (remote.*.mirror) pushes, and deletes, every ref and refuses a
+# refspec: -p pushes HEAD alone there, with the setting aside for that push (git -c
+# remote.NAME.mirror=false push). Without -p, the branch must already be pushed there, which its
+# remote-tracking branch shows: the one the remote's fetch refspecs map its name there to; a remote
+# that fetches from one repository and pushes to another shows nothing, and is refused without -p
+# or -f. -f skips that check. -h BRANCH names a branch on that remote instead, pushed from HEAD
+# with -p; -h OWNER:BRANCH names a branch in OWNER's repository, pushed with -p to the remote here
+# whose push URL names it (owner and repository names compare without regard to case, as on
+# GitHub). That repository is called like the base unless -h OWNER/REPO:BRANCH says otherwise (a
+# renamed fork) or, without -p, the local branch of that name pushes to a repository of OWNER's
+# here. gh pr create cannot open a pull request from a repository owned by an organization; the API
+# that -i uses can, and gets the head repository's name (head_repo) whenever it is known to be
+# another repository than the base, as the API requires within one organization.
 #
 # The base defaults to branch.BRANCH.gh-merge-base of the current branch when the pull request is
 # for that branch: nothing named with -h, -p (which pushes HEAD), or -h naming where `git push`
@@ -62,7 +68,8 @@
 #   -b, --base BASE        The branch to merge into: BRANCH, OWNER:BRANCH or OWNER/REPO:BRANCH.
 #   -h, --head HEAD        The branch with the changes: BRANCH, OWNER:BRANCH or OWNER/REPO:BRANCH.
 #   -p, --push             Push HEAD to the head branch first, with --set-upstream when the
-#                          current branch has no upstream, once every check has passed.
+#                          current branch has no upstream (branch.*.remote and branch.*.merge
+#                          both, as git has one), once every check has passed.
 #   -f, --force            Skip the check that the current branch is pushed.
 #   -d, --draft            Open it as a draft.
 #   -r, --reviewer LIST    Request reviews from users or ORG/TEAMs (comma-separated, repeatable).
@@ -225,7 +232,7 @@ hub_cmd_pull_request() {
       ((push)) && verify=(verify) # about to push: what push.default matching would push is the destination's to say
       if hub::push_target "$branch" "${verify[@]}"; then
         remote=$HUB_PUSH_REMOTE head_name=$HUB_PUSH_BRANCH
-      elif [[ $HUB_PUSH_WHY == upstream ]] && ! hub::git_query config --get "branch.$branch.merge" >/dev/null; then
+      elif [[ $HUB_PUSH_WHY == upstream ]] && ! hub::has_upstream "$branch"; then
         remote=$HUB_PUSH_REMOTE # no upstream yet: where `git push -u` would go
       else
         case $HUB_PUSH_WHY in
@@ -235,6 +242,8 @@ hub_cmd_pull_request() {
           negative) hub::die "Aborted: git push would not push $branch: a negative refspec in remote.$HUB_PUSH_REMOTE.push excludes where it would go; push it yourself (git push $HUB_PUSH_REMOTE $branch), or name the head with -h [OWNER:]BRANCH." ;;
           destination) hub::die "Aborted: remote.$HUB_PUSH_REMOTE.push maps $branch to something that is not a branch; name the head with -h [OWNER:]BRANCH." ;;
           matching) hub::die "Aborted: git push would not push $branch: it pushes only branches $HUB_PUSH_REMOTE has (push.default matching, or a matching refspec in remote.$HUB_PUSH_REMOTE.push), and $branch is not among them; push it yourself (git push $HUB_PUSH_REMOTE $branch), or name the head with -h [OWNER:]BRANCH." ;;
+          ambiguous) hub::die "Aborted: git push would refuse to push $branch: remote.$HUB_PUSH_REMOTE.push names a destination that is two of $HUB_PUSH_REMOTE's branches ($HUB_PUSH_ERROR); write it in full (refs/heads/...), push it yourself, or name the head with -h [OWNER:]BRANCH." ;;
+          default) hub::die "Aborted: git push would refuse to push $branch: $HUB_PUSH_ERROR (git takes nothing, matching, simple, upstream, tracking or current); fix it (git config push.default simple), push the branch yourself (git push $HUB_PUSH_REMOTE $branch), or name the head with -h [OWNER:]BRANCH." ;;
           *)
             local -a upstreams
             mapfile -t upstreams < <(hub::git_query config --get-all "branch.$branch.merge")
@@ -256,7 +265,7 @@ hub_cmd_pull_request() {
   elif [[ -n $head && -n $branch ]] && _hub_pull_request_head_is_current "$branch" "$head_proj" "$base_host" "$head_name"; then
     head_is_current=1 # -h named where git pushes the current branch, however it spelled it
   fi
-  [[ -n $branch ]] && ! hub::git_query config --get "branch.$branch.merge" >/dev/null && set_upstream=1
+  [[ -n $branch ]] && ! hub::has_upstream "$branch" && set_upstream=1 # as git has one: remote and merge both
   local label=$head_name
   [[ ${head_proj,,} == "${base_proj,,}" ]] || label=${head_proj%%/*}:$head_name # as the remote spells the owner, when one is known
 
@@ -355,6 +364,8 @@ hub_cmd_pull_request() {
   hub::require_gh # needed right after the push: found out before anything is pushed
   if ((push)); then
     local -a push_cmd=(push)
+    # a mirror remote would push, and delete, every ref, and refuses a refspec: -p pushes HEAD alone
+    hub::remote_is_mirror "$remote" && push_cmd=(-c "remote.$remote.mirror=false" push)
     ((set_upstream)) && push_cmd+=(--set-upstream)
     hub::git "${push_cmd[@]}" "$remote" "HEAD:refs/heads/$head_name" || exit
   fi
@@ -438,7 +449,7 @@ _hub_pull_request_head_is_current() {
   local branch=$1 proj=$2 host=$3 name=$4 remote dest
   if hub::push_target "$branch"; then
     remote=$HUB_PUSH_REMOTE dest=$HUB_PUSH_BRANCH
-  elif [[ $HUB_PUSH_WHY == upstream ]] && ! hub::git_query config --get "branch.$branch.merge" >/dev/null; then
+  elif [[ $HUB_PUSH_WHY == upstream ]] && ! hub::has_upstream "$branch"; then
     remote=$HUB_PUSH_REMOTE dest=$branch # no upstream yet: where `git push -u` would go
   else
     return 1
