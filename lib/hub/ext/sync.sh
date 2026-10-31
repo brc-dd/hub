@@ -225,23 +225,32 @@ _hub_sync_checked_out() {
 }
 
 # _hub_sync_branch_config REMOTES MERGES SECTIONS : REMOTES[NAME] is branch.NAME.remote as git
-# sees it (the last value wins) and MERGES[NAME] the first branch.NAME.merge; SECTIONS[NAME] is set
-# when the repository's own configuration has a branch.NAME section to remove with the branch.
+# sees it (the last value wins) and MERGES[NAME] the first branch.NAME.merge, wherever they are
+# configured; SECTIONS[NAME] is set when the repository's own configuration file has a branch.NAME
+# section, whatever it holds: that is what `git branch -d` removes with the branch, and all it
+# removes (a section in an included file, in the worktree's configuration or in the global one
+# stays). The scope git reports is no guide to the file: an included file's entries are reported
+# with the including file's scope, and a section with only pushRemote or description has no
+# tracking key to report.
 _hub_sync_branch_config() {
   local -n _remotes=$1 _merges=$2 _sections=$3
-  local scope entry key value name
-  while IFS= read -r -d '' scope && IFS= read -r -d '' entry; do
+  local entry key value name
+  while IFS= read -r -d '' entry; do
     key=${entry%%$'\n'*}
     value=''
     [[ $entry == *$'\n'* ]] && value=${entry#*$'\n'}
     name=${key#branch.}
     name=${name%.*}
-    [[ $scope == local ]] && _sections["$name"]=1
     case ${key##*.} in
       remote) _remotes["$name"]=$value ;;
       merge) [[ -n ${_merges[$name]+x} ]] || _merges["$name"]=$value ;;
     esac
-  done < <(hub::git_query config -z --show-scope --get-regexp '^branch\..+\.(remote|merge)$')
+  done < <(hub::git_query config -z --get-regexp '^branch\..+\.(remote|merge)$')
+  while IFS= read -r -d '' key; do
+    [[ $key == branch.*.* ]] || continue
+    name=${key#branch.}
+    _sections["${name%.*}"]=1
+  done < <(hub::git_query config --local --no-includes --name-only -z --list)
 }
 
 # _hub_sync_remote_tips ARRAY REMOTE : ARRAY[refs/remotes/REMOTE/NAME] is the commit it points at.

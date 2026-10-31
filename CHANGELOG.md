@@ -389,6 +389,21 @@ is not.
   which git refuses, reached gh as true, and a longer one wrapped around; the
   value is read by git itself (`git config --type=bool`), bases, `k`, `m` and
   `g` suffixes and int's range included.
+- Found by the review of the fourteenth round: `sync` removed a deleted
+  branch's `branch.NAME` section from the repository's configuration only when
+  git reported the branch's `remote` or `merge` key with local scope, so a
+  section holding only `pushRemote` or `description` stayed behind (a
+  recreated branch pushed to the stale remote), and tracking keys from an
+  included file, which git reports as local, had it try to remove a section
+  the file does not have and fail after deleting the branch; it now removes
+  the section when the repository's own file has one, whatever it holds, as
+  `git branch -d` does, and leaves included, worktree and global settings
+  alone. `pull-request -m` and `-F` stripped every leading whitespace
+  character from the body, so a first body line indented as a Markdown code
+  block lost its indentation; only the blank lines before and after the body
+  go now. `fetch --multiple alice,bob` passed the list to git as one name;
+  under `--multiple`, a comma-separated operand is a list of remotes, groups
+  and users, as without it, unless a remote or group of that name exists.
 - The option table and the usage of a git command are read once per run, as
   documented; read through `hub::git_option`, they were asked of git again
   for every option on the command line.

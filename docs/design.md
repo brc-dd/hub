@@ -421,6 +421,13 @@ alias.
   remote whose `remote.*.fetch` writes inside `refs/remotes/REMOTE/` would
   have its remote-tracking branches overwritten or pruned there, so sync
   refuses REMOTE until they are mapped elsewhere.
+- `sync` deletes a branch as `git branch -d` does: its `branch.NAME` section
+  goes from the repository's configuration file when that file has one,
+  whatever keys it holds, and what an included file, the worktree's
+  configuration or the global one says about the branch stays. The scope git
+  reports is no guide to the file (an included file's entries count as the
+  including file's), so sync reads the file itself (`git config --local
+  --no-includes`).
 - `sync` assumes that nothing else rewrites branches or adds work trees
   while it runs. Each update is conditional on the commit sync saw and
   writes the ref it examined (`update-ref --no-deref`), so a branch that

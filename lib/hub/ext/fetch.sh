@@ -2,7 +2,7 @@
 # Summary: Fetch from GitHub users' forks, adding remotes for them first.
 # Usage: hub fetch [<git-fetch options>] USER [<refspec>...]
 #        hub fetch [<git-fetch options>] USER,USER... [(USER | REMOTE | GROUP)...]
-#        hub fetch --multiple [<git-fetch options>] (USER | REMOTE | GROUP)...
+#        hub fetch --multiple [<git-fetch options>] (USER[,USER...] | REMOTE | GROUP)...
 #
 # A git command hub extends: git fetch's options apply, and hub recognizes one operand, the
 # repository: a GitHub USER, or a comma-separated list of them. For each USER that is not yet a
@@ -12,13 +12,15 @@
 # `--`), and every other operand is then a remote, a group or a USER, as with --multiple given:
 # `git fetch --multiple` takes no refspecs, so refspecs go with one USER alone (hub fetch USER
 # REFSPEC...), and an operand after a list that is none of the three is refused before anything is
-# added. With --multiple (or -m) in effect, every operand is a remote, a group or a USER. The last
-# of --multiple and --no-multiple on the command line counts, as in git; when it is --no-multiple,
-# a list is one repository name for git, and goes to it unchanged. Nothing is looked up on GitHub,
-# and git's --dry-run does not stop hub from adding the remotes. An option that wants a value and
-# ends the command line leaves it to git, which says so, before any remote is added; the value of
-# an option is git's to judge, after the remotes are added, so a remote added before git refuses a
-# value (--depth 0) stays, as one added before a fetch that fails does.
+# added. With --multiple (or -m) in effect, every operand is a remote, a group, a USER, or a
+# comma-separated list of those, which becomes its members (a remote or group named alice,bob is
+# that remote). The last of --multiple and --no-multiple on the command line counts, as in git;
+# when it is --no-multiple, a list is one repository name for git, and goes to it unchanged.
+# Nothing is looked up on GitHub, and git's --dry-run does not stop hub from adding the remotes. An
+# option that wants a value and ends the command line leaves it to git, which says so, before any
+# remote is added; the value of an option is git's to judge, after the remotes are added, so a
+# remote added before git refuses a value (--depth 0) stays, as one added before a fetch that fails
+# does.
 #
 # An operand goes to git unchanged when it is an existing remote or remote group, whatever its
 # name (a remote called `alice,bob` is never split, and one defined in the legacy .git/remotes
@@ -43,8 +45,8 @@
 #   > git fetch --multiple origin jingweno
 
 hub_ext_fetch() {
-  local -a args=("$@") operands=() members=() missing=()
-  local -A seen=()
+  local -a args=("$@") operands=() members=() missing=() expanded=()
+  local -A seen=() lists=()
   local arg i name rest opt value=0 ended=0 multiple=0 negated=0 all=0 host repo proto
   for i in "${!args[@]}"; do
     arg=${args[i]}
@@ -78,25 +80,35 @@ hub_ext_fetch() {
       name=${args[i]}
       _hub_fetch_is_remote "$name" && continue
       hub::local_source "$name" && hub::exec_git fetch "$@" # git's to make what it can of
+      if [[ $name == *,* ]]; then                           # a list, since no remote or group of that name exists
+        _hub_fetch_list "$name"
+        lists[$i]=1
+        continue
+      fi
       _hub_fetch_is_user "$name" || hub::exec_git fetch "$@"
       [[ -n ${seen[$name]-} ]] || missing+=("$name")
       seen[$name]=1
     done
+    if ((${#lists[@]})); then # each list becomes its members, in its place
+      for i in "${!args[@]}"; do
+        if [[ -n ${lists[$i]-} ]]; then
+          rest=${args[i]},
+          while [[ -n $rest ]]; do
+            expanded+=("${rest%%,*}")
+            rest=${rest#*,}
+          done
+        else
+          expanded+=("${args[i]}")
+        fi
+      done
+      args=("${expanded[@]}")
+    fi
   else
     i=${operands[0]} name=${args[i]}
     if _hub_fetch_is_remote "$name" || hub::local_source "$name"; then hub::exec_git fetch "$@"; fi
     if [[ $name == *,* ]]; then
       ((negated)) && hub::exec_git fetch "$@" # --no-multiple: one repository, however it is named
-      rest=$name,
-      while [[ -n $rest ]]; do
-        arg=${rest%%,*} rest=${rest#*,}
-        [[ -n $arg ]] || hub::die "hub fetch: empty name in the list '$name'"
-        members+=("$arg")
-        _hub_fetch_is_remote "$arg" && continue
-        _hub_fetch_is_user "$arg" || hub::die "hub fetch: '$arg' in the list '$name' is neither a remote nor a GitHub user"
-        [[ -n ${seen[$arg]-} ]] || missing+=("$arg")
-        seen[$arg]=1
-      done
+      _hub_fetch_list "$name"
       for i in "${operands[@]:1}"; do # the rest are git fetch --multiple's: remotes, groups, or users to add
         arg=${args[i]}
         _hub_fetch_is_remote "$arg" && continue
@@ -128,3 +140,21 @@ _hub_fetch_is_remote() { hub::remote_exists "$1" || hub::git_query config --get 
 
 # _hub_fetch_is_user NAME : lexically a GitHub login.
 _hub_fetch_is_user() { [[ $1 =~ ^[A-Za-z0-9_][A-Za-z0-9_-]*$ ]]; }
+
+# _hub_fetch_list LIST : LIST's comma-separated members, in the caller's `members`: each an existing
+# remote or group, or a GitHub user, whose fork goes on `missing` once (`seen`). Dies on an empty
+# member, or one that is neither, before anything is added.
+_hub_fetch_list() {
+  local rest member
+  rest=$1,
+  members=()
+  while [[ -n $rest ]]; do
+    member=${rest%%,*} rest=${rest#*,}
+    [[ -n $member ]] || hub::die "hub fetch: empty name in the list '$1'"
+    members+=("$member")
+    _hub_fetch_is_remote "$member" && continue
+    _hub_fetch_is_user "$member" || hub::die "hub fetch: '$member' in the list '$1' is neither a remote nor a GitHub user"
+    [[ -n ${seen[$member]-} ]] || missing+=("$member")
+    seen[$member]=1
+  done
+}

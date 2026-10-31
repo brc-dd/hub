@@ -285,6 +285,59 @@ warning: 'x-pushed' seems to contain unpushed commits"
   [[ $(git symbolic-ref refs/heads/alias) == refs/heads/main && -n $(tip main) ]]
 }
 
+@test "sync removes the deleted branch's section from the repository's configuration, whatever it holds, as git branch -d does" {
+  serve_github mislav/dotfiles alice/dotfiles
+  clone_served mislav/dotfiles work
+  git remote add old https://github.com/alice/dotfiles.git
+  git branch topic
+  git push -q origin topic
+  git -C "$(server_dir mislav/dotfiles)" update-ref -d refs/heads/topic # merged, and deleted on github.com
+  git config --global branch.topic.remote origin                        # tracking configured globally; a push remote and a description locally
+  git config --global branch.topic.merge refs/heads/topic
+  git config branch.topic.pushRemote old
+  git config branch.topic.description 'some words'
+  run hub sync
+  assert_success
+  assert_output_contains "Deleted branch topic (was "
+  [[ -z $(tip topic) ]]
+  [[ -z $(git config --local --get-regexp '^branch\.topic\.') ]]    # the whole local section is gone
+  assert_equals "$(git config --global branch.topic.remote)" origin # global settings stay, as with git
+  git branch topic                                                  # recreated, it pushes where its tracking says, not to the stale push remote
+  assert_equals "$(git for-each-ref --format='%(push:remotename)' refs/heads/topic)" origin
+  assert_gh_not_called
+}
+
+@test "sync deletes a branch whose tracking an included file or the worktree's configuration holds, and leaves them alone, as git branch -d does" {
+  serve_github mislav/dotfiles
+  clone_served mislav/dotfiles work
+  git branch topic
+  git push -q origin topic
+  git -C "$(server_dir mislav/dotfiles)" update-ref -d refs/heads/topic
+  git config --file "$HUB_TEST_TMP/included" branch.topic.remote origin
+  git config --file "$HUB_TEST_TMP/included" branch.topic.merge refs/heads/topic
+  git config include.path "$HUB_TEST_TMP/included"
+  [[ $(git config --show-scope --get branch.topic.remote) == local* ]] # git reports the included entries as local
+  run hub sync
+  assert_success
+  assert_output_contains "Deleted branch topic (was "
+  assert_output_lacks "no such section"
+  [[ -z $(tip topic) ]]
+  assert_equals "$(git config --file "$HUB_TEST_TMP/included" branch.topic.merge)" refs/heads/topic
+  # the worktree's own configuration is not the repository's file either
+  git branch topic
+  git push -q origin topic
+  git -C "$(server_dir mislav/dotfiles)" update-ref -d refs/heads/topic
+  git config --unset include.path
+  git config extensions.worktreeConfig true
+  git config --worktree branch.topic.remote origin
+  git config --worktree branch.topic.merge refs/heads/topic
+  run hub sync
+  assert_success
+  assert_output_contains "Deleted branch topic (was "
+  [[ -z $(tip topic) ]]
+  assert_equals "$(git config --worktree branch.topic.remote)" origin
+}
+
 @test "sync never updates a branch checked out in another work tree" {
   make_file_fixture
   local a

@@ -538,3 +538,33 @@ git fetch --multiple --depth=1 carol -j4 alice --recurse-submodules bob --recurs
   assert_success
   assert_output_equals $'git remote add alice https://github.com/alice/dotfiles.git\ngit fetch --recurse-submodules=no alice'
 }
+
+@test "under --multiple, a comma-separated operand is a list too, unless a remote or group of that name exists" {
+  serve_github mislav/dotfiles alice/dotfiles bob/dotfiles
+  clone_served mislav/dotfiles
+  run hub --noop fetch --multiple alice,bob
+  assert_success
+  assert_output_equals $'git remote add alice https://github.com/alice/dotfiles.git\ngit remote add bob https://github.com/bob/dotfiles.git\ngit fetch --multiple alice bob'
+  run hub --noop fetch -m origin alice,bob carol --prune
+  assert_success
+  assert_output_equals $'git remote add alice https://github.com/alice/dotfiles.git\ngit remote add bob https://github.com/bob/dotfiles.git\ngit remote add carol https://github.com/carol/dotfiles.git\ngit fetch -m origin alice bob carol --prune'
+  run hub --noop fetch --multiple alice,bob --no-multiple # the last counts: one repository, however it is named
+  assert_success
+  assert_output_equals "git fetch --multiple alice,bob --no-multiple"
+  local list
+  for list in 'alice,' 'alice,,bob' 'alice,not.a.login'; do
+    run hub fetch --multiple origin "$list"
+    assert_failure
+    assert_output_contains "in the list '$list'"
+    assert_equals "$(git remote)" origin
+  done
+  run hub fetch --multiple alice,bob
+  assert_success
+  assert_equals "$(git rev-parse refs/remotes/alice/main)" "$(server_ref alice/dotfiles main)"
+  assert_equals "$(git rev-parse refs/remotes/bob/main)" "$(server_ref bob/dotfiles main)"
+  # a remote of that very name is fetched as it is, as without --multiple
+  git remote add alice,bob https://github.com/alice/dotfiles.git
+  run hub --noop fetch --multiple alice,bob
+  assert_success
+  assert_output_equals "git fetch --multiple alice,bob"
+}

@@ -359,6 +359,13 @@ EOF
   [[ $HUB_MSG_TITLE == "Two line title" && $HUB_MSG_BODY == body ]]
   hub::split_message 'only a title'
   [[ $HUB_MSG_TITLE == "only a title" && -z $HUB_MSG_BODY ]]
+  # the body's lines are kept as written: indentation is Markdown (a code block); the blank lines around it go
+  hub::split_message $'Fix\n\n    code one\n    code two\n'
+  [[ $HUB_MSG_TITLE == Fix && $HUB_MSG_BODY == $'    code one\n    code two' ]]
+  hub::split_message $'Fix\n\n\n  \n    code\n\nText  \n\n   \n'
+  [[ $HUB_MSG_BODY == $'    code\n\nText  ' ]]
+  hub::split_message $'Fix\n\nText one\n    code two'
+  [[ $HUB_MSG_BODY == $'Text one\n    code two' ]]
   hub::split_message ''
   [[ -z $HUB_MSG_TITLE && -z $HUB_MSG_BODY ]]
 }
@@ -366,6 +373,8 @@ EOF
 @test "message reads -m paragraphs or a file, and fails when the read does" {
   hub::message '' 'Title here' 'Body para'
   [[ $HUB_MSG_TITLE == "Title here" && $HUB_MSG_BODY == "Body para" ]]
+  hub::message '' 'Fix' '    code one' # paragraphs; the second keeps its indentation
+  [[ $HUB_MSG_TITLE == Fix && $HUB_MSG_BODY == '    code one' ]]
   printf 'From a file\n\nwith body\n' >msg.txt
   hub::message msg.txt
   [[ $HUB_MSG_TITLE == "From a file" && $HUB_MSG_BODY == "with body" ]]

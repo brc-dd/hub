@@ -1246,3 +1246,27 @@ no_gh_path() {
   assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --base main --head feature --title -fix\\ this --body '' --draft"
   assert_gh_not_called
 }
+
+@test "the body keeps its lines as written: an indented first line is a Markdown code block, not spare whitespace" {
+  feature_repo
+  local body
+  body=$'    code one\n    code two'
+  run hub --noop pull-request -f -m $'Fix\n\n    code one\n    code two'
+  assert_success
+  assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --base main --head feature --title Fix --body $(printf '%q' "$body")"
+  run hub --noop pull-request -f -m Fix -m '    code one' -m '    code two' # paragraphs
+  assert_success
+  assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --base main --head feature --title Fix --body $(printf '%q' $'    code one\n\n    code two')"
+  printf 'Fix\n\n\n    code one\n    code two\n\n' >message.txt
+  run hub --noop pull-request -f -F message.txt
+  assert_success
+  assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --base main --head feature --title Fix --body $(printf '%q' "$body")"
+  run hub --noop pull-request -f -F - <message.txt
+  assert_success
+  assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --base main --head feature --title Fix --body $(printf '%q' "$body")"
+  # the bytes gh gets
+  stub_gh 'pr create *' 'https://github.com/mislav/dotfiles/pull/1'
+  run hub pull-request -f -F message.txt
+  assert_success
+  [[ $(gh_calls) == *"--title Fix --body     code one"$'\n'"    code two" ]]
+}

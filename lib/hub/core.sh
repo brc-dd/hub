@@ -1356,9 +1356,11 @@ hub::expand_project() {
 # ---------------------------------------------------------------------------
 # Text, browser, clipboard, prompts
 # ---------------------------------------------------------------------------
-# hub::split_message TEXT : sets HUB_MSG_TITLE (first paragraph, lines joined by spaces) and HUB_MSG_BODY (the rest, trimmed).
+# hub::split_message TEXT : sets HUB_MSG_TITLE (the first paragraph, its lines joined by spaces) and
+# HUB_MSG_BODY (the rest, less the blank lines before and after it; its lines are kept as written,
+# indentation included, since four leading spaces are a code block in Markdown).
 hub::split_message() {
-  local text=$1 line in_title=1 title='' body=''
+  local text=$1 line in_title=1 title='' body='' last
   while IFS= read -r line || [[ -n $line ]]; do
     if ((in_title)); then
       if [[ -z ${line//[[:space:]]/} ]]; then
@@ -1366,12 +1368,17 @@ hub::split_message() {
         continue
       fi
       title+="${title:+ }${line}"
-    else
+    elif [[ -n $body || -n ${line//[[:space:]]/} ]]; then # the body starts at its first line with text
       body+="${line}"$'\n'
     fi
   done <<<"$text"
-  body=${body#"${body%%[![:space:]]*}"}
-  body=${body%"${body##*[![:space:]]}"}
+  while [[ -n $body ]]; do # and ends at its last
+    last=${body%$'\n'}
+    last=${last##*$'\n'}
+    [[ -z ${last//[[:space:]]/} ]] || break
+    body=${body%"$last"$'\n'}
+  done
+  body=${body%$'\n'}
   HUB_MSG_TITLE=$title
   HUB_MSG_BODY=$body
 }
