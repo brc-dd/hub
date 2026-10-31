@@ -14,8 +14,24 @@ load ../test_helper
   assert_equals "$(server_ref me/r2 cool-feature)" "$(git rev-parse HEAD)"
   run hub --noop push origin,staging,qa
   assert_success
-  assert_output_equals $'git push origin cool-feature\ngit push staging cool-feature\ngit push qa cool-feature'
+  assert_output_equals $'git push origin refs/heads/cool-feature\ngit push staging refs/heads/cool-feature\ngit push qa refs/heads/cool-feature'
   assert_gh_not_called
+}
+
+@test "push to multiple remotes pushes the current branch when a tag has its name" {
+  serve_github me/r me/r2
+  clone_served me/r
+  git remote add two https://github.com/me/r2.git
+  git checkout -q -b topic && git commit -q --allow-empty -m work
+  git tag topic HEAD~1 # the short name topic is ambiguous for git
+  run hub push origin,two
+  assert_success
+  assert_equals "$(server_ref me/r refs/heads/topic)" "$(git rev-parse HEAD)"
+  assert_equals "$(server_ref me/r2 refs/heads/topic)" "$(git rev-parse HEAD)"
+  [[ -z $(server_ref me/r refs/tags/topic) && -z $(server_ref me/r2 refs/tags/topic) ]]
+  run hub --noop push origin,two
+  assert_success
+  assert_output_equals $'git push origin refs/heads/topic\ngit push two refs/heads/topic'
 }
 
 @test "push to multiple remotes with a refspec, and with options before and after the list" {

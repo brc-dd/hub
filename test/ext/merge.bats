@@ -67,7 +67,7 @@ assert_no_leftovers() {
   run hub --noop merge "$PR"
   assert_success
   [[ ${#lines[@]} -eq 3 ]]
-  [[ ${lines[0]} =~ ^git\ fetch\ --refmap=\ origin\ \+refs/pull/12/head:(refs/hub/merge/12-[0-9]+)$ ]]
+  [[ ${lines[0]} =~ ^git\ fetch\ --no-tags\ --refmap=\ origin\ \+refs/pull/12/head:(refs/hub/merge/12-[0-9]+)$ ]]
   local ref=${BASH_REMATCH[1]}
   assert_line_equals 1 "git merge --no-ff -m $(printf '%q' "$MSG") $ref"
   assert_line_equals 2 "git update-ref -d $ref"
@@ -89,7 +89,7 @@ assert_no_leftovers() {
   git remote set-url upstream git@github.com:Mislav/DotFiles.git
   run hub --noop merge "$PR"
   assert_success
-  [[ ${lines[0]} == "git fetch --refmap= upstream +refs/pull/12/head:refs/hub/merge/12-"* ]]
+  [[ ${lines[0]} == "git fetch --no-tags --refmap= upstream +refs/pull/12/head:refs/hub/merge/12-"* ]]
 }
 
 @test "merge fetches from the repository's URL when no remote points at it" {
@@ -103,7 +103,7 @@ assert_no_leftovers() {
   git config --global hub.protocol ssh
   run hub --noop merge "$PR"
   assert_success
-  [[ ${lines[0]} == "git fetch --refmap= git@github.com:mislav/dotfiles.git +refs/pull/12/head:refs/hub/merge/12-"* ]]
+  [[ ${lines[0]} == "git fetch --no-tags --refmap= git@github.com:mislav/dotfiles.git +refs/pull/12/head:refs/hub/merge/12-"* ]]
 }
 
 @test "merge matches remotes by host too" {
@@ -112,11 +112,11 @@ assert_no_leftovers() {
   stub_pr_message https://ghe.example.com/team/app/pull/7
   run hub --noop merge https://ghe.example.com/team/app/pull/7
   assert_success
-  [[ ${lines[0]} == "git fetch --refmap= work +refs/pull/7/head:refs/hub/merge/7-"* ]]
+  [[ ${lines[0]} == "git fetch --no-tags --refmap= work +refs/pull/7/head:refs/hub/merge/7-"* ]]
   git remote remove work
   run hub --noop merge https://ghe.example.com/team/app/pull/7
   assert_success
-  [[ ${lines[0]} == "git fetch --refmap= https://ghe.example.com/team/app.git +refs/pull/7/head:refs/hub/merge/7-"* ]]
+  [[ ${lines[0]} == "git fetch --no-tags --refmap= https://ghe.example.com/team/app.git +refs/pull/7/head:refs/hub/merge/7-"* ]]
 }
 
 @test "merge merges the commit it fetched, not what another fetch left in FETCH_HEAD meanwhile" {
@@ -344,4 +344,19 @@ assert_no_leftovers() {
   # the mapping is git's, for git's own fetches
   git fetch -q origin
   [[ $(tip pull-12) == "$PR_HEAD" ]]
+}
+
+@test "merge follows no tags into the repository" {
+  make_pr_fixture
+  git -C "$(server_dir mislav/dotfiles)" tag imported "$PR_HEAD" # a tag on the pull request's commit, in the base repository
+  [[ -z $(git tag -l) ]]
+  stub_pr_message
+  run hub merge "$PR"
+  assert_success
+  [[ $(parents HEAD) == *" $PR_HEAD" ]]
+  [[ -z $(git for-each-ref refs/tags) ]]
+  assert_no_leftovers
+  # git's own fetch follows it, as configured
+  git fetch -q origin
+  [[ $(git tag -l) == imported ]]
 }

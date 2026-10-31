@@ -965,3 +965,73 @@ no_gh_path() {
   assert_failure
   assert_output_equals "Aborted: no commits between origin/main and origin/other to take the message from."
 }
+
+@test "the spellings of one explicit head agree: it is the current branch only where git pushes that branch" {
+  pushed_repo
+  serve_github bob/renamed
+  git remote add fork https://github.com/bob/renamed.git
+  git config branch.feature.pushRemote fork
+  git config remote.fork.push refs/heads/feature:refs/heads/other # feature goes to the fork as other
+  git checkout -q -b other main
+  git commit -q --allow-empty -m "Remote feature title" -m "Remote body."
+  git push -q fork HEAD:refs/heads/feature # the fork's feature holds other commits than the local feature
+  git checkout -q feature
+  git config branch.feature.gh-merge-base develop
+  git update-ref refs/remotes/origin/develop main
+  stub_gh 'api --hostname github.com users/bob -q .type' 'User'
+  # bob:feature, bob/renamed:feature and feature (on the remote feature pushes to) name the fork's
+  # feature, which is not where feature goes: its own commits, and the base repository's default branch
+  run hub --noop pull-request --no-edit -h bob:feature
+  assert_success
+  assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --base main --head bob:feature --title Remote\\ feature\\ title --body Remote\\ body."
+  run hub --noop pull-request --no-edit -h bob/renamed:feature
+  assert_success
+  assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --base main --head bob:feature --title Remote\\ feature\\ title --body Remote\\ body."
+  run hub --noop pull-request --no-edit -h feature
+  assert_success
+  assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --base main --head bob:feature --title Remote\\ feature\\ title --body Remote\\ body."
+  # bob/renamed:other is where feature pushes: HEAD's commits and feature's merge base
+  run hub --noop pull-request --no-edit -h bob/renamed:other
+  assert_success
+  assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --base develop --head bob:other --title Fix\\ the\\ bug --body It\\ was\\ broken."
+  # with -p, HEAD is pushed as the head named, and is the head
+  run hub --noop pull-request --no-edit -h bob:feature -p
+  assert_success
+  assert_output_equals $'git push fork HEAD:refs/heads/feature\ngh pr create --repo github.com/mislav/dotfiles --base develop --head bob:feature --title Fix\\ the\\ bug --body It\\ was\\ broken.'
+}
+
+@test "--no-edit reads the remote-tracking branches the remote's fetch refspecs map the head and the base to" {
+  pushed_repo
+  git checkout -q -b other main
+  git commit -q --allow-empty -m "Other work"
+  git push -q -u origin other
+  git checkout -q feature
+  # the remote's branches are fetched under refs/remotes/origin/mirror/
+  git config --unset-all remote.origin.fetch
+  git config --add remote.origin.fetch '+refs/heads/*:refs/remotes/origin/mirror/*'
+  git fetch -q origin
+  run hub --noop pull-request --no-edit -h other
+  assert_success
+  assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --base main --head other --title Other\\ work --body ''"
+  # the ref of the conventional name is not the remote's branch under that mapping, whatever it holds
+  git update-ref refs/remotes/origin/other "$(git commit-tree -p main -m "WRONG title" "main^{tree}")"
+  git update-ref refs/remotes/origin/main feature
+  run hub --noop pull-request --no-edit -h other
+  assert_success
+  assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --base main --head other --title Other\\ work --body ''"
+  # a mapping that fetches release into refs/remotes/origin/main makes that ref another branch's: main is unmapped
+  git config --unset-all remote.origin.fetch
+  git config --add remote.origin.fetch '+refs/heads/release:refs/remotes/origin/main'
+  git update-ref refs/remotes/origin/main feature
+  run hub --noop pull-request --no-edit -f -b main
+  assert_failure
+  assert_output_equals "Aborted: --no-edit takes the message from the commits since main, but remote.origin.fetch maps no remote-tracking branch to main of origin to compare with; give the message with -m or -F."
+  # a negative refspec keeps the head's branch from being fetched
+  git config --unset-all remote.origin.fetch
+  git config --add remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
+  git config --add remote.origin.fetch '^refs/heads/other'
+  run hub --noop pull-request --no-edit -h other
+  assert_failure
+  assert_output_equals "Aborted: --no-edit takes the message from the commits of other, but remote.origin.fetch maps no remote-tracking branch to other of origin; give the message with -m or -F."
+  assert_gh_not_called
+}

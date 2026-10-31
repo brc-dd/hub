@@ -118,14 +118,18 @@ hub::require_gh() {
 # hub::git_env : the environment git exported for the global options hub was given
 # (HUB_GIT_GLOBALS), as NAME=VALUE words quoted for a shell, in HUB_GIT_ENV, so that a printed gh
 # line runs with the context the real one had: GIT_CONFIG_PARAMETERS for -c and --config-env, in
-# git's own quoting ('key'='value'), with a --config-env value written as the variable it came
-# from, never as its value, since the user kept it off the command line; GIT_DIR, GIT_WORK_TREE,
-# GIT_NAMESPACE, GIT_ATTR_SOURCE and GIT_EXEC_PATH as gh has them; and the switches
+# git's own quoting ('key'='value'), after whatever GIT_CONFIG_PARAMETERS gh inherited from before
+# the command line (the user's, or an outer git's), carried along as
+# "${GIT_CONFIG_PARAMETERS:+$GIT_CONFIG_PARAMETERS }" when there was one, never printed; a
+# --config-env value as the variable it came from, quoted the way git quotes it when the line runs
+# ($(git rev-parse --sq-quote "$VAR" | cut -c2-), through printenv for a name the shell cannot
+# expand), never as its value, since the user kept it off the command line; GIT_DIR,
+# GIT_WORK_TREE, GIT_NAMESPACE, GIT_ATTR_SOURCE and GIT_EXEC_PATH as gh has them; and the switches
 # (--literal-pathspecs, --no-replace-objects, --no-optional-locks, ...) as git sets them. -C needs
 # none (hub::gh_line prints a cd), and the pager options export nothing gh reads.
 hub::git_env() {
   local -a g=("${HUB_GIT_GLOBALS[@]}") names=()
-  local i arg kv params='' name
+  local i arg kv entry params='' given='' name key var value
   HUB_GIT_ENV=()
   for ((i = 0; i < ${#g[@]}; i++)); do
     arg=${g[i]} name=''
@@ -133,15 +137,25 @@ hub::git_env() {
       -c)
         kv=${g[++i]-} # key=value, split at the first =, as git splits it; a key alone is 'key'= (true)
         if [[ $kv == *=* ]]; then
-          params+="${params:+ }$(hub::dquote_text "$(hub::sq "${kv%%=*}")=$(hub::sq "${kv#*=}")")"
+          entry="$(hub::sq "${kv%%=*}")=$(hub::sq "${kv#*=}")"
         else
-          params+="${params:+ }$(hub::dquote_text "$(hub::sq "$kv")")="
+          entry="$(hub::sq "$kv")="
         fi
+        params+="${params:+ }$(hub::dquote_text "$entry")"
+        given+="${given:+ }$entry"
         name=GIT_CONFIG_PARAMETERS
         ;;
       --config-env | --config-env=*)
         if [[ $arg == *=* ]]; then kv=${arg#*=}; else kv=${g[++i]-}; fi
-        params+="${params:+ }$(hub::dquote_text "$(hub::sq "${kv%=*}")=")'\${${kv##*=}}'" # split at the last =, as git splits it
+        key=${kv%=*} var=${kv##*=} # split at the last =, as git splits it
+        if [[ $var =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+          value=${!var-} var="\$$var"
+        else # a name the shell cannot expand (CONFIG.VAR): printenv reads it, as git did
+          value=$(printenv "$var") || value=''
+          var="\$(printenv $(hub::quote "$var"))"
+        fi
+        params+="${params:+ }$(hub::dquote_text "$(hub::sq "$key")")=\$(git rev-parse --sq-quote \"$var\" | cut -c2-)"
+        given+="${given:+ }$(hub::sq "$key")=$(hub::sq "$value")"
         name=GIT_CONFIG_PARAMETERS
         ;;
       -C | --shallow-file | --super-prefix) ((++i)) ;;                  # -C becomes a cd; the others export nothing
@@ -172,6 +186,10 @@ hub::git_env() {
     [[ -z ${seen[$name]-} ]] || continue
     seen[$name]=1
     if [[ $name == GIT_CONFIG_PARAMETERS ]]; then
+      # gh inherited hub's own GIT_CONFIG_PARAMETERS: these entries, as git wrote them, after
+      # whatever stood there before git read the command line, which the line carries along
+      [[ ${GIT_CONFIG_PARAMETERS-} == '' || $GIT_CONFIG_PARAMETERS == "$given" ]] \
+        || params="\${GIT_CONFIG_PARAMETERS:+\$GIT_CONFIG_PARAMETERS }$params"
       HUB_GIT_ENV+=("GIT_CONFIG_PARAMETERS=\"$params\"")
     elif [[ -n ${!name+x} ]]; then
       HUB_GIT_ENV+=("$(hub::quote "$name=${!name}")")
@@ -179,10 +197,13 @@ hub::git_env() {
   done
 }
 
-# hub::sq TEXT : TEXT in single quotes, as git quotes the entries of GIT_CONFIG_PARAMETERS.
+# hub::sq TEXT : TEXT in single quotes, as git quotes the entries of GIT_CONFIG_PARAMETERS: a quote
+# and a ! stand outside the quotes, as '\'' and '\!'.
 hub::sq() {
-  local q=\'
-  printf "'%s'\n" "${1//$q/$q\\$q$q}"
+  local s=$1 q=\'
+  s=${s//$q/$q\\$q$q}
+  s=${s//!/$q\\!$q}
+  printf "'%s'\n" "$s"
 }
 
 # hub::dquote_text TEXT : TEXT escaped for the inside of a double-quoted shell word.
@@ -782,12 +803,17 @@ hub::remote_for_project() {
 # name: it pushes only branches both sides have). Whether the remote has the branch is read from
 # its remote-tracking ref here, as of the last fetch, or, with VERIFY, asked of every URL git
 # pushes the remote to (git ls-remote), as git asks at push time; a caller about to push verifies.
+# The upstream is read as git push reads it, from branch.*.remote and branch.*.merge: %(upstream)
+# has nothing to say when the remote's fetch refspecs map the upstream branch to no
+# remote-tracking ref, and git pushes by the names all the same.
 hub::push_target() {
   local branch=$1 verify=${2-} push_remote push_ref push_track up_remote up_ref mode
   HUB_PUSH_REMOTE='' HUB_PUSH_BRANCH='' HUB_PUSH_WHY=''
-  IFS=$'\x1f' read -r push_remote push_ref push_track up_remote up_ref < <(hub::git_query for-each-ref \
-    --format='%(push:remotename)%1f%(push:remoteref)%1f%(push)%1f%(upstream:remotename)%1f%(upstream:remoteref)' \
-    -- "refs/heads/$branch")
+  IFS=$'\x1f' read -r push_remote push_ref push_track < <(hub::git_query for-each-ref \
+    --format='%(push:remotename)%1f%(push:remoteref)%1f%(push)' -- "refs/heads/$branch")
+  up_remote=$(hub::git_query config --get "branch.$branch.remote") || up_remote=''
+  up_ref=$(hub::git_query config --get "branch.$branch.merge") || up_ref=''
+  [[ -n $up_remote && -n $up_ref ]] || up_ref='' # an upstream is both settings, or none
   [[ -n $up_remote ]] || up_remote=origin
   [[ -n $push_remote ]] || push_remote=$up_remote
   hub::remote_exists "$push_remote" || {
@@ -872,6 +898,51 @@ hub::default_branch() {
     fi
   fi
   return 1
+}
+
+# hub::tracking_ref REMOTE BRANCH : the remote-tracking ref that git fetch writes REMOTE's branch
+# BRANCH to, as REMOTE's fetch refspecs (remote.REMOTE.fetch) map refs/heads/BRANCH: a negative
+# refspec (^refs/heads/wip-*) that matches it keeps it from being fetched at all; else it goes to
+# the destination of the first refspec whose source matches it, exactly or by its one *
+# (+refs/heads/*:refs/remotes/REMOTE/* puts it at refs/remotes/REMOTE/BRANCH;
+# +refs/heads/release:refs/remotes/REMOTE/next puts release at refs/remotes/REMOTE/next). A source
+# git resolves against the remote at fetch time (release, without refs/heads/) matches nothing
+# here, as it matches nothing for git's own %(upstream). Returns 1 when no refspec maps the branch,
+# so that a ref of the conventional name is never read for it: under a custom mapping it holds
+# another branch of the remote, or whatever else put it there.
+hub::tracking_ref() {
+  local src=refs/heads/$2 spec lhs rhs mid
+  local -a specs
+  mapfile -t specs < <(hub::git_query config --get-all "remote.$1.fetch")
+  for spec in "${specs[@]}"; do
+    [[ $spec == ^?* ]] && hub::ref_matches "${spec#^}" "$src" && return 1
+  done
+  for spec in "${specs[@]}"; do
+    spec=${spec#+}
+    [[ $spec != ^* && $spec == ?*:?* ]] || continue # without a destination, a refspec writes FETCH_HEAD alone
+    lhs=${spec%%:*} rhs=${spec#*:}
+    hub::ref_matches "$lhs" "$src" || continue
+    if [[ $lhs == *'*'* ]]; then
+      [[ $rhs == *'*'* ]] || return 1 # git refuses a * on one side alone
+      mid=${src#"${lhs%%\**}"}
+      mid=${mid%"${lhs#*\*}"}
+      printf '%s\n' "${rhs%%\**}$mid${rhs#*\*}"
+    else
+      printf '%s\n' "$rhs"
+    fi
+    return 0
+  done
+  return 1
+}
+
+# hub::ref_matches PATTERN REF : REF is PATTERN, or matches it with its one * standing for any part
+# of the name, the empty one included, as git matches the sides of a refspec.
+hub::ref_matches() {
+  if [[ $1 == *'*'* ]]; then
+    [[ $2 == "${1%%\**}"*"${1#*\*}" ]]
+  else
+    [[ $2 == "$1" ]]
+  fi
 }
 
 # hub::parse_github_url URL : sets HUB_URL_HOST, HUB_URL_OWNER, HUB_URL_REPO, HUB_URL_KIND, HUB_URL_NUMBER,

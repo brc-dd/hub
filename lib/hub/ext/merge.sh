@@ -4,8 +4,9 @@
 #
 # A git command hub extends: git merge's options apply, and hub recognizes one operand, a pull
 # request URL. Its head (refs/pull/N/head) is fetched from the base repository, through a remote
-# that points at it if there is one, into a private ref of this run, and the commit fetched is
-# merged into the current branch with --no-ff and the message "Merge pull request #N from
+# that points at it if there is one, into a private ref of this run and nothing else (no tag the
+# fetch would otherwise follow into the repository), and the commit fetched is merged into the
+# current branch with --no-ff and the message "Merge pull request #N from
 # OWNER/BRANCH" followed by the pull request's title. The pull request is the only revision
 # merged; every other argument is git's and reaches it in place: --ff, --ff-only or --no-ff set
 # the fast-forward behavior instead of hub's --no-ff; -m or -F give the message instead of
@@ -20,7 +21,7 @@
 # command line to git.
 #
 #   $ hub merge https://github.com/jingweno/gh/pull/73
-#   > git fetch --refmap= origin +refs/pull/73/head:refs/hub/merge/73-PID
+#   > git fetch --no-tags --refmap= origin +refs/pull/73/head:refs/hub/merge/73-PID
 #   > git merge --no-ff -m 'Merge pull request #73 from jingweno/feature ...' SHA
 #   > git update-ref -d refs/hub/merge/73-PID
 
@@ -76,11 +77,12 @@ hub_ext_merge() {
   # remote-tracking ref with any other fetch of the same remote. The commit fetched is merged by
   # its hash, and the ref goes on every way out. --refmap= keeps git from also writing what the
   # remote's configured refspecs map the pull request to (a +refs/pull/*/head:refs/heads/pull-*
-  # refspec would force-update a local branch).
+  # refspec would force-update a local branch), and --no-tags from creating the tags that point
+  # into the history fetched, which git follows by default.
   tmp=refs/hub/merge/$number-$$
   if ((HUB_NOOP)); then
     args[url_i]=$tmp
-    hub::git fetch --refmap= "$src" "+refs/pull/$number/head:$tmp"
+    hub::git fetch --no-tags --refmap= "$src" "+refs/pull/$number/head:$tmp"
     hub::git merge "${opts[@]}" "${args[@]}"
     hub::git update-ref -d "$tmp"
     exit 0
@@ -90,7 +92,7 @@ hub_ext_merge() {
   trap 'exit 129' HUP
   trap 'exit 130' INT
   trap 'exit 143' TERM
-  hub::git fetch --refmap= "$src" "+refs/pull/$number/head:$tmp" || exit
+  hub::git fetch --no-tags --refmap= "$src" "+refs/pull/$number/head:$tmp" || exit
   oid=$(hub::git_query rev-parse --verify --quiet "$tmp^{commit}") || hub::die "Aborted: could not fetch refs/pull/$number/head from $src"
   args[url_i]=$oid
   hub::git merge "${opts[@]}" "${args[@]}"

@@ -5,8 +5,9 @@
 # A git command hub extends: git push's options apply, and hub recognizes one operand, the
 # repository, when it is a comma-separated list of remotes. It runs git push once per remote, in
 # the list's order, with every other argument in place, and stops at the first failure. When the
-# list is the whole command line, the current branch is pushed; otherwise the arguments go as
-# given, so without a refspec git's push.default decides what each push sends.
+# list is the whole command line, the current branch is pushed, as refs/heads/BRANCH, so that a tag
+# of the same name cannot make git refuse the short name as ambiguous; otherwise the arguments go
+# as given, so without a refspec git's push.default decides what each push sends.
 #
 # The list is split only when it names no existing remote (a remote called `one,two` is pushed
 # to as such), git could not read it as a local path, and it has no colon (URLs are never lists);
@@ -19,8 +20,8 @@
 # for (--rec check). An option git would refuse leaves the command line to git.
 #
 #   $ hub push origin,staging
-#   > git push origin CURRENT-BRANCH
-#   > git push staging CURRENT-BRANCH
+#   > git push origin refs/heads/CURRENT-BRANCH
+#   > git push staging refs/heads/CURRENT-BRANCH
 #
 #   $ hub push --tags origin,staging
 #   > git push --tags origin
@@ -58,7 +59,7 @@ hub_ext_push() {
   done
   if ((${#args[@]} == 1)); then
     branch=$(hub::current_branch) || hub::die "Aborted: not currently on any branch."
-    args+=("$branch")
+    args+=("refs/heads/$branch") # the full name: a tag called like the branch makes the short one ambiguous
   fi
   for remote in "${remotes[@]}"; do
     hub::git push "${args[@]:0:pos}" "$remote" "${args[@]:pos+1}" || exit

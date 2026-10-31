@@ -686,6 +686,80 @@ EOF
 }
 
 # push_why BRANCH [verify] : why hub::push_target would not push BRANCH (empty when git would push it).
+@test "push_target reads the upstream as git push does, mapped to a remote-tracking ref or not" {
+  make_repo r origin=https://github.com/o/r.git
+  git checkout -q -b feature
+  git update-ref refs/remotes/origin/feature HEAD
+  git branch -q --set-upstream-to=origin/feature
+  git config --unset-all remote.origin.fetch
+  git config --add remote.origin.fetch '+refs/heads/release:refs/remotes/origin/main' # feature's upstream has no remote-tracking ref now
+  [[ -z $(git for-each-ref --format='%(upstream)' refs/heads/feature) ]]
+  hub::push_target feature # push.default simple: the names match, as git push checks
+  [[ $HUB_PUSH_REMOTE == origin && $HUB_PUSH_BRANCH == feature ]]
+  git config push.default upstream
+  hub::push_target feature
+  [[ $HUB_PUSH_REMOTE == origin && $HUB_PUSH_BRANCH == feature ]]
+  git config branch.feature.merge refs/heads/main # an upstream of another name: upstream pushes to it, simple refuses
+  hub::push_target feature
+  [[ $HUB_PUSH_REMOTE == origin && $HUB_PUSH_BRANCH == main ]]
+  git config push.default simple
+  if hub::push_target feature; then false; fi
+  [[ $HUB_PUSH_WHY == upstream ]]
+  # an upstream is branch.*.remote and branch.*.merge together, as for git push
+  git config branch.feature.merge refs/heads/feature
+  git config --unset branch.feature.remote
+  if hub::push_target feature; then false; fi
+  [[ $HUB_PUSH_WHY == upstream && $HUB_PUSH_REMOTE == origin ]]
+  git config branch.feature.remote origin
+  hub::push_target feature
+  [[ $HUB_PUSH_REMOTE == origin && $HUB_PUSH_BRANCH == feature ]]
+}
+
+@test "tracking_ref maps a branch through the remote's fetch refspecs, as git fetch does" {
+  make_repo r origin=https://github.com/o/r.git
+  [[ $(hub::tracking_ref origin feature) == refs/remotes/origin/feature ]]
+  [[ $(hub::tracking_ref origin topic/sub) == refs/remotes/origin/topic/sub ]]
+  # another namespace, a renamed branch, and the first matching refspec
+  git config --unset-all remote.origin.fetch
+  git config --add remote.origin.fetch '+refs/heads/release:refs/remotes/origin/next'
+  git config --add remote.origin.fetch '+refs/heads/*:refs/remotes/origin/mirror/*'
+  git config --add remote.origin.fetch '+refs/heads/release:refs/remotes/origin/again'
+  [[ $(hub::tracking_ref origin release) == refs/remotes/origin/next ]]
+  [[ $(hub::tracking_ref origin feature) == refs/remotes/origin/mirror/feature ]]
+  [[ $(hub::tracking_ref origin next) == refs/remotes/origin/mirror/next ]] # the remote's next, not release
+  # a refspec with a * in the middle of a name, and a * standing for nothing
+  git config --unset-all remote.origin.fetch
+  git config --add remote.origin.fetch '+refs/heads/qa-*-done:refs/remotes/origin/done/*'
+  [[ $(hub::tracking_ref origin qa-1-done) == refs/remotes/origin/done/1 ]]
+  [[ $(hub::tracking_ref origin qa--done) == refs/remotes/origin/done/ ]]
+  run hub::tracking_ref origin qa-1
+  assert_failure
+  # a negative refspec keeps a branch from being fetched, wherever it stands and whatever maps it
+  git config --unset-all remote.origin.fetch
+  git config --add remote.origin.fetch '^refs/heads/wip-*'
+  git config --add remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
+  git config --add remote.origin.fetch '^refs/heads/secret'
+  [[ $(hub::tracking_ref origin feature) == refs/remotes/origin/feature ]]
+  run hub::tracking_ref origin wip-1
+  assert_failure
+  run hub::tracking_ref origin secret
+  assert_failure
+  # a source without refs/heads/, which git resolves at fetch time, maps nothing here (as for %(upstream));
+  # nor does a refspec without a destination, or a remote without fetch refspecs
+  git config --unset-all remote.origin.fetch
+  git config --add remote.origin.fetch '+main:refs/remotes/origin/main'
+  git config --add remote.origin.fetch 'refs/heads/feature'
+  run hub::tracking_ref origin main
+  assert_failure
+  run hub::tracking_ref origin feature
+  assert_failure
+  git config --unset-all remote.origin.fetch
+  run hub::tracking_ref origin main
+  assert_failure
+  run hub::tracking_ref nosuch main
+  assert_failure
+}
+
 push_why() {
   hub::push_target "$@" || true
   printf '%s\n' "$HUB_PUSH_WHY"
@@ -794,16 +868,17 @@ push_why() {
   # -c and --config-env: GIT_CONFIG_PARAMETERS, quoted as git quotes it
   HUB_GIT_GLOBALS=(-c user.name=Mislav -c 'alias.st=status -sb' -c core.quotepath -c "x.y=it's" --config-env=http.extraheader=HUB_TEST_AUTH)
   line=$(hub::gh_line gh pr list)
-  [[ $line == "env GIT_CONFIG_PARAMETERS=\"'user.name'='Mislav' 'alias.st'='status -sb' 'core.quotepath'= 'x.y'='it'\\\\''s' 'http.extraheader'='\${HUB_TEST_AUTH}'\" gh pr list" ]]
+  [[ $line == "env GIT_CONFIG_PARAMETERS=\"'user.name'='Mislav' 'alias.st'='status -sb' 'core.quotepath'= 'x.y'='it'\\\\''s' 'http.extraheader'=\$(git rev-parse --sq-quote \"\$HUB_TEST_AUTH\" | cut -c2-)\" gh pr list" ]]
   [[ $line != *secret* ]]
-  # run, the line gives gh exactly what git gave it
+  # run, the line gives gh exactly what git gave it, whatever the variable holds (git quotes ' and !)
   mkdir bin
   printf '#!/bin/sh\nprintf "%%s" "$GIT_CONFIG_PARAMETERS"\n' >bin/gh
   chmod +x bin/gh
-  expected=$(HUB_TEST_AUTH='Authorization: secret' git -c user.name=Mislav -c 'alias.st=status -sb' -c core.quotepath -c "x.y=it's" --config-env=http.extraheader=HUB_TEST_AUTH -c 'alias.hubtest=!printf "%s" "$GIT_CONFIG_PARAMETERS"' hubtest)
+  expected=$(HUB_TEST_AUTH="Authorization: it's secret!" git -c user.name=Mislav -c 'alias.st=status -sb' -c core.quotepath -c "x.y=it's" --config-env=http.extraheader=HUB_TEST_AUTH -c 'alias.hubtest=!printf "%s" "$GIT_CONFIG_PARAMETERS"' hubtest)
   expected=${expected% \'alias.hubtest\'=*}
-  [[ $expected == *secret* ]]
-  [[ $(PATH=$PWD/bin:$PATH HUB_TEST_AUTH='Authorization: secret' bash -c "$line") == "$expected" ]]
+  [[ $expected == *"'Authorization: it'\\''s secret'\\!''"* ]]
+  [[ $(PATH=$PWD/bin:$PATH HUB_TEST_AUTH="Authorization: it's secret!" bash -c "$line") == "$expected" ]]
+  [[ $(PATH=$PWD/bin:$PATH HUB_TEST_AUTH="Authorization: it's secret!" sh -c "$line") == "$expected" ]]
   # the other options, as gh has them in the environment; merged with the caller's env words and the cd
   HUB_GIT_GLOBALS=(--git-dir .git --work-tree . --no-optional-locks --literal-pathspecs --no-replace-objects -C .)
   [[ $(GIT_DIR=.git GIT_WORK_TREE=. GIT_OPTIONAL_LOCKS=0 GIT_LITERAL_PATHSPECS=1 GIT_NO_REPLACE_OBJECTS=1 hub::gh_line env GH_HOST=ghe.example.com gh pr list) == "env GIT_DIR=.git GIT_WORK_TREE=. GIT_OPTIONAL_LOCKS=0 GIT_LITERAL_PATHSPECS=1 GIT_NO_REPLACE_OBJECTS=1 GH_HOST=ghe.example.com gh pr list" ]]
@@ -811,6 +886,16 @@ push_why() {
   [[ $(GIT_DIR=$PWD GIT_IMPLICIT_WORK_TREE=0 hub::gh_line gh pr list) == "env GIT_DIR=$(hub::quote "$PWD") GIT_IMPLICIT_WORK_TREE=0 GIT_CONFIG_PARAMETERS=\"'a.b'='c'\" gh pr list" ]]
   HUB_GIT_GLOBALS=(-c a.b=c -c a.b=d) # repeated: one variable, both entries, in order
   [[ $(hub::gh_line gh pr list) == "env GIT_CONFIG_PARAMETERS=\"'a.b'='c' 'a.b'='d'\" gh pr list" ]]
+  # what gh inherited before the command line (hub's own GIT_CONFIG_PARAMETERS has it in front of
+  # the command line's entries) comes along by reference, unprinted; the entries alone do not
+  GIT_CONFIG_PARAMETERS="'a.b'='inherited' 'a.b'='c' 'a.b'='d'"
+  [[ $(hub::gh_line gh pr list) == "env GIT_CONFIG_PARAMETERS=\"\${GIT_CONFIG_PARAMETERS:+\$GIT_CONFIG_PARAMETERS }'a.b'='c' 'a.b'='d'\" gh pr list" ]]
+  GIT_CONFIG_PARAMETERS="'a.b'='c' 'a.b'='d'"
+  [[ $(hub::gh_line gh pr list) == "env GIT_CONFIG_PARAMETERS=\"'a.b'='c' 'a.b'='d'\" gh pr list" ]]
+  unset GIT_CONFIG_PARAMETERS
+  # a variable the shell cannot expand (git reads any name) is read with printenv
+  HUB_GIT_GLOBALS=(--config-env=a.b=CONFIG.VAR)
+  [[ $(hub::gh_line gh pr list) == "env GIT_CONFIG_PARAMETERS=\"'a.b'=\$(git rev-parse --sq-quote \"\$(printenv CONFIG.VAR)\" | cut -c2-)\" gh pr list" ]]
   cd ..
   HUB_GIT_GLOBALS=(-C r --no-advice)
   [[ $(GIT_ADVICE=0 hub::gh_line gh pr list) == "(cd $(hub::quote "$PWD") && env GIT_ADVICE=0 gh pr list)" ]]

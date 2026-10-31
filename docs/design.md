@@ -126,9 +126,11 @@ test/                   bats tests, the gh stub and the test helper
    in `GIT_WORK_TREE` mean what the user meant; the directory hub was started
    in travels along as `HUB_INVOKED_PWD`, for `--noop`'s gh lines, which also
    carry what the global options put in the environment, as an `env` prefix
-   (`hub::git_env`: `GIT_CONFIG_PARAMETERS` for `-c` and `--config-env`, a
-   `--config-env` value named by its variable, `GIT_DIR`, `GIT_WORK_TREE` and
-   the switches, as gh and its git children inherit them). It unsets
+   (`hub::git_env`: `GIT_CONFIG_PARAMETERS` for `-c` and `--config-env` after
+   whatever gh inherited there, carried along by reference, a `--config-env`
+   value as git's quoting of its variable, computed when the line runs,
+   `GIT_DIR`, `GIT_WORK_TREE` and the switches, as gh and its git children
+   inherit them). It unsets
    `GIT_DIR` when neither the user's environment nor the command line set it:
    git exports the directory it discovered, but a `GIT_DIR` without
    `GIT_WORK_TREE` would make the user's subdirectory the work tree. With
@@ -253,7 +255,14 @@ Common rules:
 - **Branches** are read as full refs (`refs/heads/NAME`,
   `refs/remotes/REMOTE/NAME`) and the namespace is stripped; abbreviations
   that git disambiguates (`heads/topic` next to a tag `topic`) never leak
-  into pushes or URLs.
+  into pushes or URLs; `push` sends the current branch as `refs/heads/BRANCH`.
+- **A remote-tracking ref is where the remote's fetch refspecs put the
+  branch.** `hub::tracking_ref` applies `remote.*.fetch` as `git fetch` does
+  (a negative refspec excludes the branch; the first refspec whose source
+  matches maps it), never `refs/remotes/REMOTE/BRANCH` by name, which under a
+  custom mapping holds another branch or nothing. A remote whose refspecs do
+  not fetch the branch shows nothing about it: `compare` asks for the head,
+  `pull-request --no-edit` for the message.
 - **The default branch** is `refs/remotes/REMOTE/HEAD` when it points at a
   branch that still exists, else gh's answer, else `main`.
 - **Where a branch pushes** (`hub::push_target`) follows git's own rules:
@@ -278,7 +287,8 @@ Common rules:
 - **hub's own fetches write one ref.** `merge` and `cherry-pick` fetch a pull
   request into a private ref of the run with `--refmap=`, so the remote's
   configured refspecs (a `+refs/pull/*/head:refs/heads/pull-*` mapping, say)
-  update nothing on the side.
+  update nothing on the side, and with `--no-tags`, so no tag that points
+  into the history fetched is created.
 - **The default branch is known or unknown, never assumed** where something
   changes: `hub::default_branch` reads `refs/remotes/REMOTE/HEAD`, else asks
   gh, else fails. `pull-request` then requires `-b`, and `sync` leaves a
@@ -397,7 +407,7 @@ subcommand scan of gh-backed ones (`hub::gh_subcommand_args`),
 repository and host resolution (`hub::main_project`, `hub::parse_project`,
 `hub::remote_project`, `hub::remote_for_project`, `hub::project_or_dir`,
 `hub::push_target`, `hub::remote_has_branch`, `hub::default_branch`,
-`hub::current_branch`,
+`hub::tracking_ref`, `hub::current_branch`,
 `hub::toplevel`, `hub::gh_hosts`, `hub::host`, `hub::same_host`), shorthand
 rules (`hub::is_project_name`, `hub::local_source`, `hub::expand_project`),
 identity and URLs (`hub::current_user`, `hub::git_url`,

@@ -245,6 +245,36 @@ failing_tools() {
   assert_gh_not_called
 }
 
+@test "compare reads the remote-tracking branch the remote's fetch refspecs map the branch to" {
+  make_repo project origin=https://github.com/alice/project.git
+  set_remote_head origin main
+  git checkout -q -b feature
+  git config push.default current
+  # a mapping that fetches another branch into refs/remotes/origin/feature: that ref says nothing about feature
+  git config --unset-all remote.origin.fetch
+  git config --add remote.origin.fetch '+refs/heads/release:refs/remotes/origin/feature'
+  git update-ref refs/remotes/origin/feature HEAD
+  run hub compare -u
+  assert_failure
+  assert_output_equals "Aborted: remote.origin.fetch maps no remote-tracking branch to 'feature' of origin, so nothing here shows whether 'feature' is pushed there; name the head yourself: hub compare [BASE...]OWNER:feature"
+  # branches fetched into another namespace are read there, and nowhere else
+  git config --unset-all remote.origin.fetch
+  git config --add remote.origin.fetch '+refs/heads/*:refs/remotes/origin/mirror/*'
+  run hub compare -u
+  assert_failure
+  assert_output_equals "Aborted: the branch 'feature' is not pushed to any GitHub remote; push it first or name a range"
+  git update-ref refs/remotes/origin/mirror/feature HEAD
+  run hub compare -u
+  assert_success
+  assert_output_equals "https://github.com/alice/project/compare/feature"
+  # a negative refspec keeps the branch from being fetched: no ref here can be current for it
+  git config --add remote.origin.fetch '^refs/heads/feature'
+  run hub compare -u
+  assert_failure
+  assert_output_contains "remote.origin.fetch maps no remote-tracking branch to 'feature' of origin"
+  assert_gh_not_called
+}
+
 @test "compare writes FORKOWNER:FORKREPO:BRANCH for a fork of another name, even under the same owner" {
   make_repo repo origin=https://github.com/org/repo.git fork=https://github.com/org/renamed.git
   set_remote_head origin main

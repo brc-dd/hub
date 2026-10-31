@@ -12,11 +12,14 @@
 # BASE. The branch must be pushed: hub looks for its remote-tracking ref on the remote it pushes
 # to (the one `git push` would use: remote.*.push, branch.*.pushRemote, remote.pushDefault,
 # branch.*.remote, else origin), then on the main remote (fetch first if it was pushed from
-# elsewhere). The push URL of that remote names the repository the branch is in, which must be
-# on the compare page's host. A branch in another repository is written FORKOWNER:BRANCH, or
-# FORKOWNER:FORKREPO:BRANCH when that repository has another name. A remote that pushes to one
-# repository and fetches from another cannot show that the branch is in the one it pushes to;
-# hub then asks you to name the head yourself. The branch is refused only when it is the
+# elsewhere). The remote-tracking ref is the one the remote's fetch refspecs (remote.REMOTE.fetch)
+# map the branch to, as `git fetch` writes it, not refs/remotes/REMOTE/BRANCH by name; a remote
+# whose refspecs do not fetch the branch shows nothing about it. The push URL of that remote names
+# the repository the branch is in, which must be on the compare page's host. A branch in another
+# repository is written FORKOWNER:BRANCH, or FORKOWNER:FORKREPO:BRANCH when that repository has
+# another name. A remote that pushes to one repository and fetches from another cannot show that
+# the branch is in the one it pushes to; like one whose refspecs do not fetch the branch, it makes
+# hub ask you to name the head yourself. The branch is refused only when it is the
 # compared repository's own default branch; a fork's main compares as FORKOWNER:main. The
 # default branch is the one refs/remotes/REMOTE/HEAD names; when it is unknown, hub asks gh for
 # it, and assumes main when gh cannot answer.
@@ -71,9 +74,10 @@ hub_cmd_compare() {
   if [[ -z $range ]]; then
     branch=$(hub::current_branch) \
       || hub::die "Aborted: not currently on any branch; name a branch or a BASE...HEAD range to compare."
-    HUB_COMPARE_SPLIT=''
+    HUB_COMPARE_SPLIT='' HUB_COMPARE_UNMAPPED=''
     _hub_compare_head "$branch" "$host" "$proj" || {
       [[ -z $HUB_COMPARE_SPLIT ]] || hub::die "Aborted: $HUB_COMPARE_SPLIT fetches from one repository and pushes to another, so its remote-tracking branches cannot show whether '$branch' is pushed; name the head yourself: hub compare [BASE...]OWNER:$branch"
+      [[ -z $HUB_COMPARE_UNMAPPED ]] || hub::die "Aborted: remote.$HUB_COMPARE_UNMAPPED.fetch maps no remote-tracking branch to '$branch' of $HUB_COMPARE_UNMAPPED, so nothing here shows whether '$branch' is pushed there; name the head yourself: hub compare [BASE...]OWNER:$branch"
       hub::die "Aborted: the branch '$branch' is not pushed to any GitHub remote; push it first or name a range"
     }
     if [[ -z $base && ${HUB_COMPARE_PROJECT,,} == "${proj,,}" ]] \
@@ -131,14 +135,20 @@ _hub_compare_push_remote() {
 
 # _hub_compare_head_in REMOTE BRANCH HOST OWNER/REPO : REMOTE's remote-tracking ref shows BRANCH,
 # and the repository REMOTE pushes to is on HOST; sets the HUB_COMPARE_* variables. The
-# remote-tracking ref came from REMOTE's fetch URL: when that is another repository than the one
-# REMOTE pushes to, it shows nothing about the latter, and HUB_COMPARE_SPLIT names REMOTE.
+# remote-tracking ref is the one REMOTE's fetch refspecs map BRANCH to (hub::tracking_ref); when
+# they map it to none, HUB_COMPARE_UNMAPPED names REMOTE. It came from REMOTE's fetch URL: when
+# that is another repository than the one REMOTE pushes to, it shows nothing about the latter, and
+# HUB_COMPARE_SPLIT names REMOTE.
 _hub_compare_head_in() {
-  local remote=$1 branch=$2 host=$3 base=$4 proj phost
-  hub::git_query show-ref --verify --quiet -- "refs/remotes/$remote/$branch" || return 1
+  local remote=$1 branch=$2 host=$3 base=$4 proj phost track
   hub::remote_project "$remote" push >/dev/null || return 1
   proj=$HUB_PROJECT phost=$HUB_PROJECT_HOST
   hub::same_host "$phost" "$host" || return 1
+  track=$(hub::tracking_ref "$remote" "$branch") || {
+    HUB_COMPARE_UNMAPPED=$remote
+    return 1
+  }
+  hub::git_query show-ref --verify --quiet -- "$track" || return 1
   if ! hub::remote_project "$remote" >/dev/null || [[ ${HUB_PROJECT,,} != "${proj,,}" ]] || ! hub::same_host "$HUB_PROJECT_HOST" "$phost"; then
     HUB_COMPARE_SPLIT=$remote
     return 1

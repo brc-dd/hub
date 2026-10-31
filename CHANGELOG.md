@@ -50,11 +50,13 @@ is not.
   of `--multiple`/`--no-multiple` counts); a list member that is empty or not a
   login is an error before any remote is added; a remote whose name contains a
   comma is fetched as it is. `push` accepts options before the remote list,
-  checks every member before the first push, and never splits an existing
-  remote, a path or a URL.
-- `merge` fetches the pull request into a private ref and merges that commit,
-  takes the last of `--squash`/`--no-squash`, adds `--no-ff` only when no
-  fast-forward option was given, and refuses a second revision. `cherry-pick`
+  checks every member before the first push, pushes the current branch as
+  `refs/heads/BRANCH` (a tag of the same name cannot make git refuse it), and
+  never splits an existing remote, a path or a URL.
+- `merge` fetches the pull request into a private ref, with `--no-tags`, and
+  merges that commit, takes the last of `--squash`/`--no-squash`, adds
+  `--no-ff` only when no fast-forward option was given, and refuses a second
+  revision. `cherry-pick`
   resolves every URL or `USER@SHA` operand, prefers a local revision of that
   name, and finds a pull request's commit by id in its history. `am` and
   `apply` download pull-request, commit and compare URLs (also `.patch` and
@@ -67,11 +69,13 @@ is not.
   `HEAD:refs/heads/BRANCH`; under `push.default matching`, `-p` pushes only a
   branch the destination already has, asked with `git ls-remote` as `git
   push` asks; the current branch's `gh-merge-base` is the default base
-  whenever the pull request is for that branch (no `-h`, `-h` naming it, or
-  `-p`); `--no-edit` takes the first commit of the head branch (HEAD's when
-  the pull request is for the current branch, else its remote-tracking
-  branch's); `-i` converts an issue through the API with string fields; `-o`
-  and `-c` leave gh's prompts alone and look the URL up afterwards.
+  whenever the pull request is for that branch (no `-h`, `-p`, or `-h` naming
+  the repository and branch `git push` sends it to, however spelled);
+  `--no-edit` takes the first commit of the head branch (HEAD's when the pull
+  request is for the current branch, else its remote-tracking branch's, the
+  one the remote's fetch refspecs map it to); `-i` converts an issue through
+  the API with string fields; `-o` and `-c` leave gh's prompts alone and look
+  the URL up afterwards.
 - `create` runs `gh repo create HOST/OWNER/NAME --source=TOP --remote=REMOTE`
   without changing directory, takes `OWNER/NAME`, `HOST/OWNER/NAME` or a URL,
   gains `--push`, and no longer accepts gh's other options. `fork` runs
@@ -120,7 +124,9 @@ is not.
   fetches from one repository and pushes to another, passes `head_repo` to
   the API when `-i` converts an issue for a head in another repository, and
   compares owner and repository names without regard to case. `compare`
-  refuses the same split remote and asks for the head by name.
+  refuses the same split remote and asks for the head by name. Both read a
+  branch's remote-tracking ref where the remote's fetch refspecs put it, and
+  ask for the head or the message when the refspecs map the branch to none.
 - `ci-status` marks every page of check runs it reads: a refusal (403, 404,
   422) leaves the statuses to decide only on the first page, and a page that
   fails after an empty one is an error.
@@ -128,7 +134,9 @@ is not.
   another directory, as `env GH_HOST=HOST gh …` where hub sets one, and with
   an `env` prefix for what git's other global options put in the environment
   gh inherits: `-c` and `--config-env` as `GIT_CONFIG_PARAMETERS` in git's own
-  quoting (a `--config-env` value as its variable, never its value), and
+  quoting, after whatever gh inherited there before the command line (carried
+  along by reference, unprinted), a `--config-env` value as git's quoting of
+  its variable, computed when the line runs, never its value, and
   `--git-dir`, `--work-tree`, `--namespace`, `--bare` and the switches
   (`--no-optional-locks`, `--literal-pathspecs`, ...) as the variables git
   sets. gh's `hosts.yml` is read in flow style too.
@@ -278,6 +286,24 @@ is not.
   `-c`, `--config-env`, `--git-dir` and the other global options put in the
   environment; `script/release` could publish to a fork and point the
   formula at `brc-dd/hub`.
+- Found by the review of the ninth round: `compare` and `pull-request
+  --no-edit` read `refs/remotes/REMOTE/BRANCH` by name, which under a custom
+  `remote.*.fetch` mapping holds another branch or nothing, so `compare` could
+  link an unpushed branch or refuse a pushed one, and `--no-edit` could take
+  the wrong title or abort; the spellings of one explicit head (`-h
+  bob:feature`, `-h bob/renamed:feature`) were classified differently, so
+  `--no-edit` and the `gh-merge-base` rule could follow HEAD for a head the
+  current branch does not push to; `merge` let git follow tags into the
+  repository while fetching the pull request; `hub push one,two` pushed the
+  current branch by its short name, which a tag of the same name makes
+  ambiguous, so neither remote got it; `--noop` gh lines could not be replayed
+  with a `--config-env` value holding an apostrophe or a variable name the
+  shell cannot expand, and dropped the `GIT_CONFIG_PARAMETERS` gh had
+  inherited before the command line. Found along the way: `hub::push_target`
+  read the upstream from `%(upstream)`, which is empty when the fetch
+  refspecs map it to no remote-tracking ref, and said `git push` would refuse
+  where git pushes by the configured names (`branch.*.remote`,
+  `branch.*.merge`).
 - The option table and the usage of a git command are read once per run, as
   documented; read through `hub::git_option`, they were asked of git again
   for every option on the command line.

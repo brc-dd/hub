@@ -268,7 +268,7 @@ make_fakegh() { # SCRIPT-BODY
   assert_success
   assert_equals "$(git remote get-url bob)" https://github.com/bob/r1.git
   run hub --noop push origin,bob
-  assert_output_equals $'git push origin topic\ngit push bob topic'
+  assert_output_equals $'git push origin refs/heads/topic\ngit push bob refs/heads/topic'
   # relative --git-dir and --work-tree keep their meaning, as for plain git
   cd "$HUB_TEST_TMP/r1/sub/deep"
   run hub --git-dir=../../.git --work-tree=../.. remote add carol
@@ -304,13 +304,30 @@ make_fakegh() { # SCRIPT-BODY
   assert_output_equals "env GIT_CONFIG_PARAMETERS=\"'review.value'='example'\" gh pr list"
   HUB_TEST_SECRET=s3cret run hub --noop --config-env=review.token=HUB_TEST_SECRET -c 'review.value=two words' pr list
   assert_success
-  assert_output_equals "env GIT_CONFIG_PARAMETERS=\"'review.token'='\${HUB_TEST_SECRET}' 'review.value'='two words'\" gh pr list"
+  assert_output_equals "env GIT_CONFIG_PARAMETERS=\"'review.token'=\$(git rev-parse --sq-quote \"\$HUB_TEST_SECRET\" | cut -c2-) 'review.value'='two words'\" gh pr list"
   assert_output_lacks s3cret
-  # run in the same shell, the printed line gives gh the configuration the real one had
+  # run in the same shell, the printed line gives gh the configuration the real one had, whatever
+  # the variable holds then
   mkdir bin
   printf '#!/bin/sh\ngit config --get review.token\ngit config --get review.value\n' >bin/gh
   chmod +x bin/gh
   [[ $(PATH=$PWD/bin:$PATH HUB_TEST_SECRET=s3cret bash -c "$output") == $'s3cret\ntwo words' ]]
+  [[ $(PATH=$PWD/bin:$PATH HUB_TEST_SECRET="it's a secret!" sh -c "$output") == $'it\'s a secret!\ntwo words' ]]
+  # a variable the shell cannot expand (git reads any name) is read with printenv
+  printf '#!/bin/sh\ngit config --get-all review.value\n' >bin/gh
+  run env 'CONFIG.VAR=dotted value' "$HUB_BIN" --noop --config-env=review.value=CONFIG.VAR pr list
+  assert_success
+  assert_output_equals "env GIT_CONFIG_PARAMETERS=\"'review.value'=\$(git rev-parse --sq-quote \"\$(printenv CONFIG.VAR)\" | cut -c2-)\" gh pr list"
+  [[ $(PATH=$PWD/bin:$PATH env 'CONFIG.VAR=dotted value' sh -c "$output") == 'dotted value' ]]
+  # what gh inherited in GIT_CONFIG_PARAMETERS before the command line comes along, unprinted and
+  # first, as the real gh had it; without it the line still runs
+  run env GIT_CONFIG_PARAMETERS="'review.value'='inherited'" "$HUB_BIN" --noop -c review.value=local pr list
+  assert_success
+  assert_output_equals "env GIT_CONFIG_PARAMETERS=\"\${GIT_CONFIG_PARAMETERS:+\$GIT_CONFIG_PARAMETERS }'review.value'='local'\" gh pr list"
+  [[ $(PATH=$PWD/bin:$PATH GIT_CONFIG_PARAMETERS="'review.value'='inherited'" sh -c "$output") == $'inherited\nlocal' ]]
+  [[ $(PATH=$PWD/bin:$PATH sh -c "$output") == local ]]
+  PATH=$PWD/bin:$PATH run env GIT_CONFIG_PARAMETERS="'review.value'='inherited'" "$HUB_BIN" -c review.value=local pr list
+  assert_output_equals $'inherited\nlocal'
   run hub --noop --no-optional-locks --literal-pathspecs pr list
   assert_success
   assert_output_equals "env GIT_OPTIONAL_LOCKS=0 GIT_LITERAL_PATHSPECS=1 gh pr list"
