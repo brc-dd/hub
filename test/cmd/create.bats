@@ -307,7 +307,7 @@ SH
   assert_output_contains "Aborted: gh repo create --source takes a work tree"
   run hub --noop --git-dir=.git --work-tree=. create # here git itself says .git, as gh needs
   assert_success
-  assert_output_equals "gh repo create github.com/mislav/dotfiles --source=$(git rev-parse --show-toplevel) --remote=origin --private"
+  assert_output_equals "env GIT_DIR=.git GIT_WORK_TREE=. gh repo create github.com/mislav/dotfiles --source=$(git rev-parse --show-toplevel) --remote=origin --private"
   run env GIT_DIR="$PWD/.git" "$HUB_BIN" --noop create
   assert_failure
   assert_output_contains "Aborted: gh repo create --source takes a work tree"

@@ -7,7 +7,10 @@
 # pre-releases). The release goes to the repository that origin names, which
 # its URL and every URL it pushes to must agree on; an SSH alias in a URL is
 # resolved the way ssh does (ssh -G), and gh must see that repository before
-# anything is pushed.
+# anything is pushed. A stable release must come from a checkout of the
+# repository Formula/hub.rb is for (its REPO), since the formula downloads the
+# tag from there; a pre-release from another repository, a fork, is allowed and
+# leaves the formula alone.
 #
 # Without VERSION, the release named by the VERSION file is resumed: HEAD must
 # be at its tag, or one "Formula: hub vX.Y.Z" commit past it that changes only
@@ -121,6 +124,17 @@ else
   name=$(gh repo view "$repo" --json nameWithOwner -q .nameWithOwner) \
     || die "gh cannot see $repo (is gh logged in to ${repo%%/*}?)"
   repo=${repo%%/*}/$name
+fi
+
+# The formula downloads the release from the repository it names, so the release must go there.
+formula_repo=$(sed -n 's/^ *REPO = "\([^"]*\)".*/\1/p' Formula/hub.rb)
+[[ -n $formula_repo ]] || die "Formula/hub.rb does not set REPO"
+if [[ ${repo,,} != "github.com/${formula_repo,,}" ]]; then
+  if [[ ${version:-$(<VERSION)} == *-* ]]; then
+    echo "note: origin is $repo, not github.com/$formula_repo, which Formula/hub.rb is for; a pre-release leaves the formula alone" >&2
+  else
+    die "origin is $repo, but Formula/hub.rb is for github.com/$formula_repo: the release would go to one repository and the formula point at the other. Release from a checkout of $formula_repo, or change REPO in the formula."
+  fi
 fi
 
 step "Checking"

@@ -832,3 +832,136 @@ SH
   assert_success
   assert_output_equals "gh api --hostname github.com -X POST repos/mislav/dotfiles/pulls -F issue=12 -f head=feature -f base=trunk --jq .html_url"
 }
+
+@test "push.default matching pushes only a branch the remote has, as git does" {
+  feature_repo
+  git config push.default matching
+  stub_gh 'pr create *' ''
+  run hub pull-request -p -m Fix
+  assert_failure
+  assert_output_equals "Aborted: git push would not push feature: push.default is matching, and origin has no branch feature; push it yourself (git push origin feature), or name the head with -h [OWNER:]BRANCH."
+  assert_equals "$(branches mislav/dotfiles)" "main "
+  [[ -z $(git config branch.feature.merge) ]]
+  # without -p the branch has to be there too
+  run hub pull-request -m Fix
+  assert_failure
+  assert_output_contains "push.default is matching, and origin has no branch feature"
+  assert_gh_not_called
+  git push -q origin feature
+  git commit -q --allow-empty -m More
+  run hub pull-request -p -m Fix
+  assert_success
+  assert_equals "$(server_ref mislav/dotfiles refs/heads/feature)" "$(git rev-parse HEAD)"
+  assert_gh_called 'pr create --repo github.com/mislav/dotfiles --base main --head feature --title Fix --body '
+  # -p asks the remote, as git does at push time: a branch deleted there since the last fetch is not pushed
+  git -C "$(server_dir mislav/dotfiles)" update-ref -d refs/heads/feature
+  git commit -q --allow-empty -m "Even more"
+  run hub pull-request -p -m Fix
+  assert_failure
+  assert_output_contains "origin has no branch feature"
+  assert_equals "$(branches mislav/dotfiles)" "main "
+}
+
+# no_gh_path : a PATH with everything hub needs but gh, to run hub where the GitHub CLI is not installed.
+no_gh_path() {
+  local dir=$HUB_TEST_TMP/no-gh tool
+  mkdir -p "$dir"
+  for tool in bash git ssh readlink sed awk head tail cat tr cut sort uniq grep mktemp env uname dirname basename; do
+    ln -sf "$(command -v "$tool")" "$dir/$tool" 2>/dev/null || true
+  done
+  printf '%s\n' "$dir"
+}
+
+@test "without gh, -p pushes nothing: the GitHub CLI is required before the push" {
+  feature_repo
+  local path
+  path=$(no_gh_path)
+  PATH=$path run hub pull-request -p -b main -m Fix
+  assert_failure
+  assert_output_equals "hub: this command needs the GitHub CLI (gh): https://cli.github.com"
+  assert_equals "$(branches mislav/dotfiles)" "main "
+  [[ -z $(git config branch.feature.merge) ]]
+  PATH=$path run hub pull-request -p -b main -i 12
+  assert_failure
+  assert_output_equals "hub: this command needs the GitHub CLI (gh): https://cli.github.com"
+  assert_equals "$(branches mislav/dotfiles)" "main "
+  [[ -z $(git config branch.feature.merge) ]]
+  # with gh, the same command pushes
+  stub_gh 'pr create *' ''
+  run hub pull-request -p -b main -m Fix
+  assert_success
+  assert_equals "$(server_ref mislav/dotfiles refs/heads/feature)" "$(git rev-parse HEAD)"
+}
+
+@test "-h naming the current branch, or -p pushing it, keeps the current branch's gh-merge-base" {
+  pushed_repo
+  git update-ref refs/remotes/origin/develop main
+  git update-ref refs/remotes/origin/other main
+  git config branch.feature.gh-merge-base develop
+  run hub --noop pull-request -m Fix -h feature
+  assert_success
+  assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --base develop --head feature --title Fix --body ''"
+  run hub --noop pull-request -m Fix -h mislav:feature # the repository feature pushes to: the same branch
+  assert_success
+  assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --base develop --head feature --title Fix --body ''"
+  run hub --noop pull-request -m Fix -h feature -b main # -b wins
+  assert_success
+  assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --base main --head feature --title Fix --body ''"
+  # another branch as the head is not the current branch: the base repository's default branch
+  run hub --noop pull-request -m Fix -h other
+  assert_success
+  assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --base main --head other --title Fix --body ''"
+  # -p pushes HEAD as the head, whatever its name: the current branch's merge base
+  run hub --noop pull-request -m Fix -h other -p
+  assert_success
+  assert_output_equals $'git push origin HEAD:refs/heads/other\ngh pr create --repo github.com/mislav/dotfiles --base develop --head other --title Fix --body \'\''
+  stub_gh 'pr create *' ''
+  run hub pull-request -m Fix -h feature
+  assert_success
+  assert_gh_called 'pr create --repo github.com/mislav/dotfiles --base develop --head feature --title Fix --body '
+}
+
+@test "--no-edit reads the first commit of the head branch: HEAD's for the current branch, the remote-tracking branch's for another" {
+  pushed_repo
+  git checkout -q -b other main
+  git commit -q --allow-empty -m "Other work" -m "Details."
+  git commit -q --allow-empty -m "More other work"
+  git push -q -u origin other
+  git checkout -q feature
+  run hub --noop pull-request --no-edit -h other
+  assert_success
+  assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --base main --head other --title Other\\ work --body Details."
+  run hub --noop pull-request --no-edit -h feature
+  assert_success
+  assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --base main --head feature --title Fix\\ the\\ bug --body It\\ was\\ broken."
+  # with -p, HEAD is pushed as the head: its commits
+  run hub --noop pull-request --no-edit -h other -p
+  assert_success
+  assert_output_equals $'git push origin HEAD:refs/heads/other\ngh pr create --repo github.com/mislav/dotfiles --base main --head other --title Fix\\ the\\ bug --body It\\ was\\ broken.'
+  # a local branch of the head's name with other commits changes nothing: the remote-tracking branch is read
+  git update-ref refs/heads/other "$(git commit-tree -p main -m "WRONG local other title" "main^{tree}")"
+  run hub --noop pull-request --no-edit -h other
+  assert_success
+  assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --base main --head other --title Other\\ work --body Details."
+  # a fork's branch: through the remote that points at the fork
+  serve_github alice/dotfiles
+  git remote add alice https://github.com/alice/dotfiles.git
+  git push -q alice refs/remotes/origin/other:refs/heads/other
+  stub_gh 'api --hostname github.com users/alice -q .type' 'User'
+  run hub --noop pull-request --no-edit -h alice:other
+  assert_success
+  assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --base main --head alice:other --title Other\\ work --body Details."
+  # a head not fetched here, or in a repository no remote points at, cannot give a message
+  git update-ref -d refs/remotes/alice/other
+  run hub --noop pull-request --no-edit -h alice:other
+  assert_failure
+  assert_output_equals "Aborted: --no-edit needs alice/other locally; run git fetch alice first."
+  run hub --noop pull-request --no-edit -h bob:other
+  assert_failure
+  assert_output_equals "Aborted: --no-edit takes the message from the commits of bob:other, but no remote here points at github.com/bob/dotfiles to read them from; give the message with -m or -F."
+  # no commits of the head beyond the base
+  git update-ref refs/remotes/origin/other main
+  run hub --noop pull-request --no-edit -h other
+  assert_failure
+  assert_output_equals "Aborted: no commits between origin/main and origin/other to take the message from."
+}

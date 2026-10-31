@@ -296,3 +296,35 @@ make_fakegh() { # SCRIPT-BODY
   assert_output_equals "git -C inner status"
   assert_gh_not_called
 }
+
+@test "--noop gh lines carry what git's global options put in the environment; a --config-env value stays in its variable" {
+  make_repo r origin=https://github.com/o/r.git
+  run hub --noop -c review.value=example pr list
+  assert_success
+  assert_output_equals "env GIT_CONFIG_PARAMETERS=\"'review.value'='example'\" gh pr list"
+  HUB_TEST_SECRET=s3cret run hub --noop --config-env=review.token=HUB_TEST_SECRET -c 'review.value=two words' pr list
+  assert_success
+  assert_output_equals "env GIT_CONFIG_PARAMETERS=\"'review.token'='\${HUB_TEST_SECRET}' 'review.value'='two words'\" gh pr list"
+  assert_output_lacks s3cret
+  # run in the same shell, the printed line gives gh the configuration the real one had
+  mkdir bin
+  printf '#!/bin/sh\ngit config --get review.token\ngit config --get review.value\n' >bin/gh
+  chmod +x bin/gh
+  [[ $(PATH=$PWD/bin:$PATH HUB_TEST_SECRET=s3cret bash -c "$output") == $'s3cret\ntwo words' ]]
+  run hub --noop --no-optional-locks --literal-pathspecs pr list
+  assert_success
+  assert_output_equals "env GIT_OPTIONAL_LOCKS=0 GIT_LITERAL_PATHSPECS=1 gh pr list"
+  cd ..
+  run hub --noop --git-dir r/.git --work-tree r pr list
+  assert_success
+  assert_output_equals "env GIT_DIR=r/.git GIT_WORK_TREE=r gh pr list"
+  run hub --noop -C r -c review.value=example pr list
+  assert_success
+  assert_output_equals "(cd $(cd r && pwd -P) && env GIT_CONFIG_PARAMETERS=\"'review.value'='example'\" gh pr list)"
+  run hub --noop -c review.value=example -C r checkout https://github.com/o/r/pull/1
+  assert_success
+  assert_output_equals "(cd $(cd r && pwd -P) && env GIT_CONFIG_PARAMETERS=\"'review.value'='example'\" GH_HOST=github.com gh pr checkout https://github.com/o/r/pull/1)"
+  run hub --noop -C r pr list # no configuration: no env prefix
+  assert_success
+  assert_output_equals "(cd $(cd r && pwd -P) && gh pr list)"
+}

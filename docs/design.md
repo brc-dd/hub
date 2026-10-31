@@ -124,7 +124,11 @@ test/                   bats tests, the gh stub and the test helper
 6. **The re-entered hub** (`hub --run ...`) goes back to the user's directory
    (`cd -P -- "./${GIT_PREFIX:-.}"`), so relative paths in the arguments and
    in `GIT_WORK_TREE` mean what the user meant; the directory hub was started
-   in travels along as `HUB_INVOKED_PWD`, for `--noop`'s gh lines. It unsets
+   in travels along as `HUB_INVOKED_PWD`, for `--noop`'s gh lines, which also
+   carry what the global options put in the environment, as an `env` prefix
+   (`hub::git_env`: `GIT_CONFIG_PARAMETERS` for `-c` and `--config-env`, a
+   `--config-env` value named by its variable, `GIT_DIR`, `GIT_WORK_TREE` and
+   the switches, as gh and its git children inherit them). It unsets
    `GIT_DIR` when neither the user's environment nor the command line set it:
    git exports the directory it discovered, but a `GIT_DIR` without
    `GIT_WORK_TREE` would make the user's subdirectory the work tree. With
@@ -257,8 +261,11 @@ Common rules:
   `branch.*.remote` and `push.default`. When git would refuse, or would push
   other branches and leave this one alone (`remote.*.push` refspecs that map
   none of it, or map it to something other than a branch; `push.default
-  nothing`; `simple` with a differently named upstream; no upstream), hub
-  says why (`HUB_PUSH_WHY`) before pushing anywhere. Branch-aware commands
+  nothing`; `simple` with a differently named upstream; no upstream;
+  `matching` when the remote has no branch of that name, as its
+  remote-tracking ref shows, or, for a caller about to push, as every push
+  URL answers `git ls-remote`), hub says why (`HUB_PUSH_WHY`) before pushing
+  anywhere. Branch-aware commands
   (browse, compare, pull-request) use it, so a branch that tracks your fork
   is opened in, compared from and published to the fork.
 - **A remote's fetch URL and push URL** may name different repositories. The
@@ -353,7 +360,10 @@ work) and add hub's own commands without replacing what the user configured.
   --file`, which takes the next argument, and `remote add --mirror`, which
   takes only an attached value) are special-cased. A short option that git's
   usage (`git CMD -h`) does not list leaves the whole command line to git,
-  before hub adds a remote or fetches anything. An option value that looks
+  before hub adds a remote or fetches anything, and so does a value attached
+  to a switch (`--detach=1`); the usage says which options take one attached,
+  optional (`--recurse-submodules=no`) or read by the option itself
+  (`--file=F`). An option value that looks
   like a URL (`--pathspec-from-file=https://...`) is a value, never an
   operand. Outside a repository a command that needs one has no option table
   (nor, for a subcommand, a usage); hub then hands the command line to git,
@@ -379,13 +389,15 @@ work) and add hub's own commands without replacing what the user configured.
 
 `lib/hub/core.sh` holds what more than one module needs: running git and gh
 (`hub::git`, `hub::gh`, `hub::exec_git`, `hub::exec_gh`, the `_query`
-variants, `hub::gh_line`), option parsing for hub-owned commands
-(`hub::normalize_opts`), git's own option tables for the commands hub extends
-(`hub::git_options`, `hub::git_short_options`, `hub::git_option`) and the
+variants, `hub::gh_line`, `hub::git_env`), option parsing for hub-owned
+commands (`hub::normalize_opts`), git's own option tables for the commands hub
+extends (`hub::git_options`, `hub::git_usage`, `hub::git_short_options`,
+`hub::git_valued_options`, `hub::git_option`) and the
 subcommand scan of gh-backed ones (`hub::gh_subcommand_args`),
 repository and host resolution (`hub::main_project`, `hub::parse_project`,
 `hub::remote_project`, `hub::remote_for_project`, `hub::project_or_dir`,
-`hub::push_target`, `hub::default_branch`, `hub::current_branch`,
+`hub::push_target`, `hub::remote_has_branch`, `hub::default_branch`,
+`hub::current_branch`,
 `hub::toplevel`, `hub::gh_hosts`, `hub::host`, `hub::same_host`), shorthand
 rules (`hub::is_project_name`, `hub::local_source`, `hub::expand_project`),
 identity and URLs (`hub::current_user`, `hub::git_url`,

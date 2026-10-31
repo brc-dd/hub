@@ -237,3 +237,50 @@ setup() {
   run hub --noop checkout -h
   assert_output_equals "git checkout -h"
 }
+
+@test "checkout keeps git's reading of --detach and --recurse-submodules: negations and git's boolean values" {
+  local v
+  for v in yes true on 1 YES True 2; do
+    run hub --noop checkout "--recurse-submodules=$v" "$PR"
+    assert_success
+    assert_output_equals "$CHECKOUT $PR --recurse-submodules"
+  done
+  for v in no false off 0 NO False -0 ''; do
+    run hub --noop checkout "--recurse-submodules=$v" "$PR"
+    assert_success
+    assert_output_equals "$CHECKOUT $PR"
+  done
+  run hub --noop checkout --recurse=no "$PR" -d
+  assert_success
+  assert_output_equals "$CHECKOUT $PR --detach"
+  # the last of an option and its negation counts, as in git
+  run hub --noop checkout --recurse-submodules --no-recurse-submodules "$PR"
+  assert_success
+  assert_output_equals "$CHECKOUT $PR"
+  run hub --noop checkout --no-recurse-submodules "$PR" --recurse-submodules
+  assert_success
+  assert_output_equals "$CHECKOUT $PR --recurse-submodules"
+  run hub --noop checkout -d --no-detach "$PR"
+  assert_success
+  assert_output_equals "$CHECKOUT $PR"
+  run hub --noop checkout --no-detach -db fix "$PR"
+  assert_success
+  assert_output_equals "$CHECKOUT $PR --detach -b fix"
+  # a value git refuses leaves the command line to git, which refuses it
+  run hub --noop checkout --recurse-submodules=banana "$PR"
+  assert_success
+  assert_output_equals "git checkout --recurse-submodules=banana $PR"
+  run hub checkout --recurse-submodules=banana "$PR"
+  assert_failure
+  assert_output_contains "bad recurse-submodules argument: banana"
+  run hub --noop checkout --detach=oops "$PR"
+  assert_success
+  assert_output_equals "git checkout --detach=oops $PR"
+  run hub checkout --detach=oops "$PR"
+  assert_failure
+  assert_output_contains "takes no value"
+  run hub checkout --no-recurse-submodules=no "$PR"
+  assert_failure
+  assert_output_contains "takes no value"
+  assert_gh_not_called
+}

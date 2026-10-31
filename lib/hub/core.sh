@@ -115,14 +115,109 @@ hub::require_gh() {
   command -v gh >/dev/null 2>&1 || hub::die "hub: this command needs the GitHub CLI (gh): https://cli.github.com"
 }
 
+# hub::git_env : the environment git exported for the global options hub was given
+# (HUB_GIT_GLOBALS), as NAME=VALUE words quoted for a shell, in HUB_GIT_ENV, so that a printed gh
+# line runs with the context the real one had: GIT_CONFIG_PARAMETERS for -c and --config-env, in
+# git's own quoting ('key'='value'), with a --config-env value written as the variable it came
+# from, never as its value, since the user kept it off the command line; GIT_DIR, GIT_WORK_TREE,
+# GIT_NAMESPACE, GIT_ATTR_SOURCE and GIT_EXEC_PATH as gh has them; and the switches
+# (--literal-pathspecs, --no-replace-objects, --no-optional-locks, ...) as git sets them. -C needs
+# none (hub::gh_line prints a cd), and the pager options export nothing gh reads.
+hub::git_env() {
+  local -a g=("${HUB_GIT_GLOBALS[@]}") names=()
+  local i arg kv params='' name
+  HUB_GIT_ENV=()
+  for ((i = 0; i < ${#g[@]}; i++)); do
+    arg=${g[i]} name=''
+    case $arg in
+      -c)
+        kv=${g[++i]-} # key=value, split at the first =, as git splits it; a key alone is 'key'= (true)
+        if [[ $kv == *=* ]]; then
+          params+="${params:+ }$(hub::dquote_text "$(hub::sq "${kv%%=*}")=$(hub::sq "${kv#*=}")")"
+        else
+          params+="${params:+ }$(hub::dquote_text "$(hub::sq "$kv")")="
+        fi
+        name=GIT_CONFIG_PARAMETERS
+        ;;
+      --config-env | --config-env=*)
+        if [[ $arg == *=* ]]; then kv=${arg#*=}; else kv=${g[++i]-}; fi
+        params+="${params:+ }$(hub::dquote_text "$(hub::sq "${kv%=*}")=")'\${${kv##*=}}'" # split at the last =, as git splits it
+        name=GIT_CONFIG_PARAMETERS
+        ;;
+      -C | --shallow-file | --super-prefix) ((++i)) ;;                  # -C becomes a cd; the others export nothing
+      --git-dir | --work-tree | --namespace | --attr-source) ((++i)) ;& # the value is the next argument
+      --git-dir=* | --work-tree=* | --namespace=* | --attr-source=*)
+        case ${arg%%=*} in
+          --git-dir) name=GIT_DIR ;;
+          --work-tree) name=GIT_WORK_TREE ;;
+          --namespace) name=GIT_NAMESPACE ;;
+          --attr-source) name=GIT_ATTR_SOURCE ;;
+        esac
+        ;;
+      --bare) names+=(GIT_DIR) name=GIT_IMPLICIT_WORK_TREE ;;
+      --exec-path=*) name=GIT_EXEC_PATH ;;
+      --literal-pathspecs | --no-literal-pathspecs) name=GIT_LITERAL_PATHSPECS ;;
+      --glob-pathspecs) name=GIT_GLOB_PATHSPECS ;;
+      --noglob-pathspecs) name=GIT_NOGLOB_PATHSPECS ;;
+      --icase-pathspecs) name=GIT_ICASE_PATHSPECS ;;
+      --no-replace-objects) name=GIT_NO_REPLACE_OBJECTS ;;
+      --no-lazy-fetch) name=GIT_NO_LAZY_FETCH ;;
+      --no-optional-locks) name=GIT_OPTIONAL_LOCKS ;;
+      --no-advice) name=GIT_ADVICE ;;
+    esac
+    [[ -z $name ]] || names+=("$name")
+  done
+  local -A seen=()
+  for name in "${names[@]}"; do
+    [[ -z ${seen[$name]-} ]] || continue
+    seen[$name]=1
+    if [[ $name == GIT_CONFIG_PARAMETERS ]]; then
+      HUB_GIT_ENV+=("GIT_CONFIG_PARAMETERS=\"$params\"")
+    elif [[ -n ${!name+x} ]]; then
+      HUB_GIT_ENV+=("$(hub::quote "$name=${!name}")")
+    fi
+  done
+}
+
+# hub::sq TEXT : TEXT in single quotes, as git quotes the entries of GIT_CONFIG_PARAMETERS.
+hub::sq() {
+  local q=\'
+  printf "'%s'\n" "${1//$q/$q\\$q$q}"
+}
+
+# hub::dquote_text TEXT : TEXT escaped for the inside of a double-quoted shell word.
+hub::dquote_text() {
+  local s=$1
+  s=${s//\\/\\\\}
+  s=${s//\"/\\\"}
+  s=${s//\$/\\\$}
+  s=${s//\`/\\\`}
+  printf '%s\n' "$s"
+}
+
 # hub::gh_line WORDS... : a gh command line as the user could run it (for --noop and debug output):
-# WORDS is `gh ...`, or `env VAR=VALUE gh ...`. gh has no -C: when git's -C made hub run in another
-# directory than the one it was started in, the line is `(cd DIR && gh ...)`.
+# WORDS is `gh ...`, or `env VAR=VALUE gh ...`. gh takes none of git's global options; what they
+# put in the environment, which gh and its git children inherit, is printed as an env prefix
+# (hub::git_env). gh has no -C: when git's -C made hub run in another directory than the one it
+# was started in, the line is `(cd DIR && gh ...)`.
 hub::gh_line() {
+  local -a words
+  local line
+  hub::git_env
+  words=("${HUB_GIT_ENV[@]}")
+  if [[ $1 == env ]]; then
+    shift
+    while [[ ${1-} == [A-Za-z_]*=* ]]; do
+      words+=("$(hub::quote "$1")")
+      shift
+    done
+  fi
+  line=$(hub::quote "$@")
+  ((${#words[@]} == 0)) || line="env ${words[*]} $line"
   if [[ -n ${HUB_INVOKED_PWD-} && ! $PWD -ef $HUB_INVOKED_PWD ]]; then
-    printf '(cd %s && %s)\n' "$(hub::quote "$PWD")" "$(hub::quote "$@")"
+    printf '(cd %s && %s)\n' "$(hub::quote "$PWD")" "$line"
   else
-    hub::quote "$@"
+    printf '%s\n' "$line"
   fi
 }
 
@@ -244,8 +339,10 @@ hub::normalize_opts() {
 # line, as the installed git lists them for its own completion (--git-completion-helper-all), so
 # that hub reads a command line the way this git does: an option listed with a trailing = takes a
 # value, which is the next argument when it is not attached; the others take none, or only an
-# attached one (--log=5). Asked once per run. Fails when git cannot answer, as outside a
-# repository for a command that needs one; git then fails the same way on the command itself.
+# attached one (--log=5). Asked once per run; the answer is also left in HUB_GIT_OPTIONS, for a
+# caller that must not read it through a subshell (which would lose the cache). Fails when git
+# cannot answer, as outside a repository for a command that needs one; git then fails the same
+# way on the command itself.
 hub::git_options() {
   local out
   if [[ ${HUB_GIT_OPTIONS_FOR-} != "$*" ]]; then
@@ -257,20 +354,43 @@ hub::git_options() {
   printf '%s\n' "$HUB_GIT_OPTIONS"
 }
 
-# hub::git_short_options CMD... : the short options of git CMD, as a string of their letters, from
-# the usage git prints for `CMD -h` (the completion table lists long options only). Asked once per
-# run. Fails when git prints no usage, as for a subcommand outside a repository.
-hub::git_short_options() {
-  local out line set=''
-  if [[ ${HUB_GIT_SHORTS_FOR-} != "$*" ]]; then
+# hub::git_usage CMD... : the usage git prints for `CMD -h`, asked once per run (also left in
+# HUB_GIT_USAGE). Fails when git prints none, as for a subcommand outside a repository.
+hub::git_usage() {
+  local out
+  if [[ ${HUB_GIT_USAGE_FOR-} != "$*" ]]; then
     out=$(git "$@" -h 2>/dev/null) || true # the usage goes to standard output, with status 129
     [[ $out == usage:* ]] || return 1
-    while IFS= read -r line; do
-      [[ $line =~ ^[[:space:]]+-([^-[:space:],]) ]] && set+=${BASH_REMATCH[1]}
-    done <<<"$out"
-    HUB_GIT_SHORTS_FOR=$* HUB_GIT_SHORTS=$set
+    HUB_GIT_USAGE_FOR=$* HUB_GIT_USAGE=$out
   fi
+  printf '%s\n' "$HUB_GIT_USAGE"
+}
+
+# hub::git_short_options CMD... : the short options of git CMD, as a string of their letters, from
+# its usage (the completion table lists long options only); also left in HUB_GIT_SHORTS.
+hub::git_short_options() {
+  local line
+  HUB_GIT_SHORTS=''
+  hub::git_usage "$@" >/dev/null || return 1
+  while IFS= read -r line; do
+    [[ $line =~ ^[[:space:]]+-([^-[:space:],]) ]] && HUB_GIT_SHORTS+=${BASH_REMATCH[1]}
+  done <<<"$HUB_GIT_USAGE"
   printf '%s\n' "$HUB_GIT_SHORTS"
+}
+
+# hub::git_valued_options CMD... : the long options of git CMD that take a value, required
+# (--file <file>) or optional (--log[=<n>]), one name per line without the dashes, from its usage.
+# The completion table lists an optional value, and the value an option reads by itself (merge
+# --file), as no value at all; the usage tells those from the switches, which refuse --switch=VALUE.
+# Also left in HUB_GIT_VALUED.
+hub::git_valued_options() {
+  local line re='^[[:space:]]+(-[^-[:space:],],[[:space:]])?--(\[no-\])?([A-Za-z0-9-]+)(\[=|[[:space:]][<(.])'
+  HUB_GIT_VALUED=''
+  hub::git_usage "$@" >/dev/null || return 1
+  while IFS= read -r line; do
+    [[ $line =~ $re ]] && HUB_GIT_VALUED+=${BASH_REMATCH[3]}$'\n'
+  done <<<"$HUB_GIT_USAGE"
+  printf '%s' "$HUB_GIT_VALUED"
 }
 
 # hub::git_option CMD SHORTS OPTIONAL ARG : how git CMD reads the option ARG (-x, a cluster -xyz,
@@ -279,17 +399,20 @@ hub::git_short_options() {
 # or every short option of a cluster up to the first that takes a value (-qj3 is -q -j); and
 # HUB_OPT_NEXT to 1 when the last of them takes the next argument as its value. SHORTS lists CMD's
 # short options whose value is required ("jo"), OPTIONAL those whose value is optional, which git
-# reads only attached ("S", for -S[<key-id>]). Returns 1 when git would not know ARG: an unknown
-# or ambiguous long option, or a short one that CMD's usage does not list, which git refuses, so
-# callers leave the command line to it. For cherry-pick and revert git keeps unknown long options
-# for its revision parser and takes no abbreviation, so only a spelled-out option is known.
+# reads only attached ("S", for -S[<key-id>]). Returns 1 when git would not take ARG: an unknown
+# or ambiguous long option, a value attached to a switch (--detach=1; one attached to an option
+# whose usage shows a value, --log=5 or --file=F, is its value), or a short option that CMD's
+# usage does not list; git refuses each, so callers leave the command line to it. For cherry-pick
+# and revert git keeps unknown long options for its revision parser and takes no abbreviation, so
+# only a spelled-out option is known.
 hub::git_option() {
-  local cmd=$1 shorts=$2 optional=$3 arg=$4 name entry found='' n=0 c i table known
+  local cmd=$1 shorts=$2 optional=$3 arg=$4 name entry found='' n=0 c i table
   HUB_OPTS=() HUB_OPT_NEXT=0
   if [[ $arg == --* ]]; then
     name=${arg%%=*}
     # shellcheck disable=SC2086  # CMD may be two words
-    table=$(hub::git_options $cmd) || return 1
+    hub::git_options $cmd >/dev/null || return 1 # not through a subshell: the cache would be lost
+    table=$HUB_GIT_OPTIONS
     while IFS= read -r entry; do
       [[ -n $entry && $entry != -- ]] || continue
       if [[ ${entry%=} == "$name" ]]; then
@@ -304,14 +427,20 @@ hub::git_option() {
     done <<<"$table"
     ((n == 1)) || return 1
     HUB_OPTS=("${found%=}")
-    [[ $found == *= && $arg != *=* ]] && HUB_OPT_NEXT=1
+    if [[ $found == *= ]]; then
+      [[ $arg == *=* ]] || HUB_OPT_NEXT=1
+    elif [[ $arg == *=* ]]; then
+      # shellcheck disable=SC2086  # CMD may be two words
+      hub::git_valued_options $cmd >/dev/null || return 1
+      [[ $'\n'$HUB_GIT_VALUED == *$'\n'"${found#--}"$'\n'* ]] || return 1 # a switch: git refuses the value
+    fi
     return 0
   fi
   # shellcheck disable=SC2086  # CMD may be two words
-  known=$(hub::git_short_options $cmd) || return 1
+  hub::git_short_options $cmd >/dev/null || return 1
   for ((i = 1; i < ${#arg}; i++)); do
     c=${arg:i:1}
-    [[ $known == *"$c"* ]] || return 1 # an unknown switch, which git refuses
+    [[ $HUB_GIT_SHORTS == *"$c"* ]] || return 1 # an unknown switch, which git refuses
     HUB_OPTS+=("-$c")
     if [[ -n $shorts && $shorts == *"$c"* ]]; then
       ((i + 1 < ${#arg})) || HUB_OPT_NEXT=1
@@ -647,14 +776,17 @@ hub::remote_for_project() {
 # would not push BRANCH there, so that callers fail before pushing anywhere, with the reason in
 # HUB_PUSH_WHY: remote (no such remote), refspec (remote.*.push is configured and none of its
 # refspecs maps BRANCH, so `git push` would push other branches and leave this one alone),
-# destination (a refspec maps it to something other than a branch), nothing (push.default) or
+# destination (a refspec maps it to something other than a branch), nothing (push.default),
 # upstream (push.default simple or upstream without an upstream on that remote, or, for simple,
-# one of another name).
+# one of another name) or matching (push.default matching, and the remote has no branch of that
+# name: it pushes only branches both sides have). Whether the remote has the branch is read from
+# its remote-tracking ref here, as of the last fetch, or, with VERIFY, asked of every URL git
+# pushes the remote to (git ls-remote), as git asks at push time; a caller about to push verifies.
 hub::push_target() {
-  local branch=$1 push_remote push_ref up_remote up_ref mode
+  local branch=$1 verify=${2-} push_remote push_ref push_track up_remote up_ref mode
   HUB_PUSH_REMOTE='' HUB_PUSH_BRANCH='' HUB_PUSH_WHY=''
-  IFS=$'\x1f' read -r push_remote push_ref up_remote up_ref < <(hub::git_query for-each-ref \
-    --format='%(push:remotename)%1f%(push:remoteref)%1f%(upstream:remotename)%1f%(upstream:remoteref)' \
+  IFS=$'\x1f' read -r push_remote push_ref push_track up_remote up_ref < <(hub::git_query for-each-ref \
+    --format='%(push:remotename)%1f%(push:remoteref)%1f%(push)%1f%(upstream:remotename)%1f%(upstream:remoteref)' \
     -- "refs/heads/$branch")
   [[ -n $up_remote ]] || up_remote=origin
   [[ -n $push_remote ]] || push_remote=$up_remote
@@ -681,7 +813,18 @@ hub::push_target() {
       HUB_PUSH_WHY=nothing
       return 1
       ;;
-    current | matching) HUB_PUSH_BRANCH=$branch ;;
+    current) HUB_PUSH_BRANCH=$branch ;;
+    matching)
+      HUB_PUSH_BRANCH=$branch
+      if [[ -n $verify ]]; then
+        hub::remote_has_branch "$push_remote" "$branch"
+      else # %(push) is the remote-tracking ref of the branch's name on the remote
+        [[ -n $push_track ]] && hub::git_query show-ref --verify --quiet -- "$push_track"
+      fi || {
+        HUB_PUSH_WHY=matching
+        return 1
+      }
+      ;;
     upstream)
       [[ $up_remote == "$push_remote" && $up_ref == refs/heads/?* ]] || {
         HUB_PUSH_WHY=upstream
@@ -697,6 +840,17 @@ hub::push_target() {
       HUB_PUSH_BRANCH=$branch
       ;;
   esac
+}
+
+# hub::remote_has_branch REMOTE BRANCH : every URL git pushes REMOTE to has a branch BRANCH right
+# now (git ls-remote), as push.default matching requires to push it. Dies when a URL cannot be asked.
+hub::remote_has_branch() {
+  local url out
+  while IFS= read -r url; do
+    out=$(git ls-remote --heads --exit-code "$url" "refs/heads/$2" 2>&1) && continue
+    (($? != 2)) || return 1 # no such branch
+    hub::die "Aborted: could not list the branches of $url, to tell whether git push would push $2 (push.default matching):"$'\n'"$out"
+  done < <(hub::git_query remote get-url --push --all "$1")
 }
 
 # hub::default_branch [REMOTE] : from refs/remotes/REMOTE/HEAD when it points at a branch that still

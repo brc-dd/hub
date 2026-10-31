@@ -472,3 +472,21 @@ git fetch --multiple --depth=1 carol -j4 alice --recurse-submodules bob --recurs
   assert_success
   assert_output_equals $'git remote add alice https://github.com/alice/dotfiles.git\ngit fetch -pq alice'
 }
+
+@test "a value attached to a switch (--multiple=oops) leaves the command line to git, before any remote is added" {
+  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
+  run hub --noop fetch --multiple=oops alice
+  assert_success
+  assert_output_equals "git fetch --multiple=oops alice"
+  run hub fetch --multiple=oops alice
+  assert_failure
+  assert_output_contains "takes no value"
+  [[ -z $(git config remote.alice.url) ]]
+  run hub fetch --dry-run=1 alice
+  assert_failure
+  [[ -z $(git config remote.alice.url) ]]
+  # an optional value, attached, is the option's, and the user's remote is added
+  run hub --noop fetch --recurse-submodules=no alice
+  assert_success
+  assert_output_equals $'git remote add alice https://github.com/alice/dotfiles.git\ngit fetch --recurse-submodules=no alice'
+}

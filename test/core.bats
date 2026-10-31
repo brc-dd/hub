@@ -611,14 +611,27 @@ EOF
   [[ ${HUB_OPTS[*]} == -3 && $HUB_OPT_NEXT == 0 ]]
   run hub::git_option cherry-pick mX S -h
   assert_failure
-  local c
+  local c shorts valued
   hub::git_short_options remote add >/dev/null
-  [[ $HUB_GIT_SHORTS_FOR == "remote add" ]]
-  for c in f t m; do [[ $HUB_GIT_SHORTS == *"$c"* ]]; done
+  [[ $HUB_GIT_USAGE_FOR == "remote add" ]] # the usage is read once per command
+  shorts=$(hub::git_short_options remote add)
+  for c in f t m; do [[ $shorts == *"$c"* ]]; done
   hub::git_short_options fetch >/dev/null
-  [[ $HUB_GIT_SHORTS_FOR == fetch && $HUB_GIT_SHORTS != *z* ]]
-  for c in j o p q 4 6; do [[ $HUB_GIT_SHORTS == *"$c"* ]]; done
-  # the table of a command is read once, and another command's replaces it
+  [[ $HUB_GIT_USAGE_FOR == fetch ]]
+  shorts=$(hub::git_short_options fetch)
+  [[ $shorts != *z* ]]
+  for c in j o p q 4 6; do [[ $shorts == *"$c"* ]]; done
+  # the usage also says which long options take a value, optional (--log[=<n>]) or read by the
+  # option itself (--file <file>), which the completion table lists as switches
+  valued=$'\n'$(hub::git_valued_options merge)$'\n'
+  [[ $valued == *$'\nlog\n'* && $valued == *$'\nfile\n'* && $valued == *$'\nstrategy\n'* && $valued != *$'\nsquash\n'* && $valued != *$'\nno-\n'* ]]
+  valued=$'\n'$(hub::git_valued_options checkout)$'\n'
+  [[ $valued == *$'\nrecurse-submodules\n'* && $valued == *$'\ntrack\n'* && $valued != *$'\ndetach\n'* ]]
+  # the table of a command is read once, through git_option too, and another command's replaces it
+  hub::git_option fetch jo '' -q
+  [[ $HUB_GIT_USAGE_FOR == fetch && $HUB_GIT_SHORTS == *q* ]]
+  hub::git_option fetch jo '' --jobs
+  [[ $HUB_GIT_OPTIONS_FOR == fetch ]]
   hub::git_options clone >/dev/null
   [[ $HUB_GIT_OPTIONS_FOR == clone && $'\n'$HUB_GIT_OPTIONS$'\n' == *$'\n--depth=\n'* ]]
   HUB_GIT_OPTIONS=cached
@@ -638,10 +651,84 @@ EOF
   assert_failure
 }
 
-# push_why BRANCH : why hub::push_target would not push BRANCH (empty when git would push it).
+@test "git_option takes an attached value only where git does: never on a switch" {
+  make_repo r
+  hub::git_option checkout bBU '' --recurse-submodules=no # an optional value, which only comes attached
+  [[ ${HUB_OPTS[*]} == --recurse-submodules && $HUB_OPT_NEXT == 0 ]]
+  hub::git_option checkout bBU '' --recurse=yes # abbreviated too
+  [[ ${HUB_OPTS[*]} == --recurse-submodules && $HUB_OPT_NEXT == 0 ]]
+  hub::git_option merge sXmF S --log=5
+  [[ ${HUB_OPTS[*]} == --log && $HUB_OPT_NEXT == 0 ]]
+  hub::git_option merge sXmF S --file=msg.txt # a value the option reads by itself, attached
+  [[ ${HUB_OPTS[*]} == --file && $HUB_OPT_NEXT == 0 ]]
+  hub::git_option fetch jo '' --jobs=3 # a required value, attached
+  [[ ${HUB_OPTS[*]} == --jobs && $HUB_OPT_NEXT == 0 ]]
+  hub::git_option fetch jo '' --recurse-submodules=on-demand
+  [[ ${HUB_OPTS[*]} == --recurse-submodules && $HUB_OPT_NEXT == 0 ]]
+  # a switch refuses a value ("option `detach' takes no value"), and so does hub, for git to say so
+  run hub::git_option checkout bBU '' --detach=1
+  assert_failure
+  run hub::git_option checkout bBU '' --det=1
+  assert_failure
+  run hub::git_option fetch jo '' --multiple=oops
+  assert_failure
+  run hub::git_option merge sXmF S --squash=1
+  assert_failure
+  # a negation never takes one, optional value or not
+  run hub::git_option checkout bBU '' --no-recurse-submodules=no
+  assert_failure
+  run hub::git_option merge sXmF S --no-log=1
+  assert_failure
+  # outside a repository the usage of a subcommand is missing, so the value cannot be judged: git's
+  cd ..
+  run hub::git_option 'remote add' tm '' --fetch=1
+  assert_failure
+}
+
+# push_why BRANCH [verify] : why hub::push_target would not push BRANCH (empty when git would push it).
 push_why() {
-  hub::push_target "$1" || true
+  hub::push_target "$@" || true
   printf '%s\n' "$HUB_PUSH_WHY"
+}
+
+@test "push_target under push.default matching pushes only a branch the remote has" {
+  serve_github o/r o/fork
+  clone_served o/r
+  git config push.default matching
+  git checkout -q -b topic
+  git commit -q --allow-empty -m t
+  [[ $(push_why topic) == matching ]]        # the remote-tracking ref shows no branch of that name there
+  [[ $(push_why topic verify) == matching ]] # nor does the remote itself
+  hub::push_target topic verify || [[ $HUB_PUSH_WHY == matching && $HUB_PUSH_REMOTE == origin && $HUB_PUSH_BRANCH == topic ]]
+  git push -q origin topic
+  [[ -z $(push_why topic) && -z $(push_why topic verify) ]]
+  hub::push_target topic verify
+  [[ $HUB_PUSH_REMOTE == origin && $HUB_PUSH_BRANCH == topic ]]
+  # deleted on the remote since the last fetch: the remote-tracking ref still says yes, the remote says no
+  git -C "$(server_dir o/r)" update-ref -d refs/heads/topic
+  [[ -z $(push_why topic) && $(push_why topic verify) == matching ]]
+  # the push URL is what git pushes to: it is asked, whatever the fetch URL has
+  git remote set-url --push origin https://github.com/o/fork.git
+  git -C "$(server_dir o/r)" update-ref refs/heads/topic HEAD
+  git fetch -q origin
+  [[ -z $(push_why topic) && $(push_why topic verify) == matching ]]
+  git -C "$(server_dir o/fork)" fetch -q "$(server_dir o/r)" refs/heads/topic:refs/heads/topic
+  [[ -z $(push_why topic verify) ]]
+  # every push URL must have it
+  git remote set-url --add --push origin https://github.com/o/r.git
+  [[ -z $(push_why topic verify) ]]
+  git -C "$(server_dir o/r)" update-ref -d refs/heads/topic
+  [[ $(push_why topic verify) == matching ]]
+  # a remote-tracking ref is needed only under matching; current and upstream push as before
+  git config push.default current
+  [[ -z $(push_why topic verify) ]]
+  # a destination that cannot be asked is an error, not a guess
+  git config --unset-all remote.origin.pushurl
+  git remote set-url --push origin https://github.com/o/none.git
+  git config push.default matching
+  run hub::push_target topic verify
+  assert_failure
+  assert_output_contains "Aborted: could not list the branches of https://github.com/o/none.git, to tell whether git push would push topic (push.default matching):"
 }
 
 @test "push_target says why git would not push a branch" {
@@ -698,4 +785,36 @@ push_why() {
   [[ $(hub::gh_line gh pr list) == "gh pr list" ]]
   unset HUB_INVOKED_PWD
   [[ $(hub::gh_line gh pr list) == "gh pr list" ]]
+}
+
+@test "gh_line prints what git's global options put in the environment, a --config-env value by its variable" {
+  make_repo r
+  HUB_INVOKED_PWD=$PWD
+  local line expected
+  # -c and --config-env: GIT_CONFIG_PARAMETERS, quoted as git quotes it
+  HUB_GIT_GLOBALS=(-c user.name=Mislav -c 'alias.st=status -sb' -c core.quotepath -c "x.y=it's" --config-env=http.extraheader=HUB_TEST_AUTH)
+  line=$(hub::gh_line gh pr list)
+  [[ $line == "env GIT_CONFIG_PARAMETERS=\"'user.name'='Mislav' 'alias.st'='status -sb' 'core.quotepath'= 'x.y'='it'\\\\''s' 'http.extraheader'='\${HUB_TEST_AUTH}'\" gh pr list" ]]
+  [[ $line != *secret* ]]
+  # run, the line gives gh exactly what git gave it
+  mkdir bin
+  printf '#!/bin/sh\nprintf "%%s" "$GIT_CONFIG_PARAMETERS"\n' >bin/gh
+  chmod +x bin/gh
+  expected=$(HUB_TEST_AUTH='Authorization: secret' git -c user.name=Mislav -c 'alias.st=status -sb' -c core.quotepath -c "x.y=it's" --config-env=http.extraheader=HUB_TEST_AUTH -c 'alias.hubtest=!printf "%s" "$GIT_CONFIG_PARAMETERS"' hubtest)
+  expected=${expected% \'alias.hubtest\'=*}
+  [[ $expected == *secret* ]]
+  [[ $(PATH=$PWD/bin:$PATH HUB_TEST_AUTH='Authorization: secret' bash -c "$line") == "$expected" ]]
+  # the other options, as gh has them in the environment; merged with the caller's env words and the cd
+  HUB_GIT_GLOBALS=(--git-dir .git --work-tree . --no-optional-locks --literal-pathspecs --no-replace-objects -C .)
+  [[ $(GIT_DIR=.git GIT_WORK_TREE=. GIT_OPTIONAL_LOCKS=0 GIT_LITERAL_PATHSPECS=1 GIT_NO_REPLACE_OBJECTS=1 hub::gh_line env GH_HOST=ghe.example.com gh pr list) == "env GIT_DIR=.git GIT_WORK_TREE=. GIT_OPTIONAL_LOCKS=0 GIT_LITERAL_PATHSPECS=1 GIT_NO_REPLACE_OBJECTS=1 GH_HOST=ghe.example.com gh pr list" ]]
+  HUB_GIT_GLOBALS=(--bare -c a.b=c)
+  [[ $(GIT_DIR=$PWD GIT_IMPLICIT_WORK_TREE=0 hub::gh_line gh pr list) == "env GIT_DIR=$(hub::quote "$PWD") GIT_IMPLICIT_WORK_TREE=0 GIT_CONFIG_PARAMETERS=\"'a.b'='c'\" gh pr list" ]]
+  HUB_GIT_GLOBALS=(-c a.b=c -c a.b=d) # repeated: one variable, both entries, in order
+  [[ $(hub::gh_line gh pr list) == "env GIT_CONFIG_PARAMETERS=\"'a.b'='c' 'a.b'='d'\" gh pr list" ]]
+  cd ..
+  HUB_GIT_GLOBALS=(-C r --no-advice)
+  [[ $(GIT_ADVICE=0 hub::gh_line gh pr list) == "(cd $(hub::quote "$PWD") && env GIT_ADVICE=0 gh pr list)" ]]
+  HUB_GIT_GLOBALS=(-C r -p --no-pager) # options that export nothing gh reads print nothing
+  [[ $(hub::gh_line gh pr list) == "(cd $(hub::quote "$PWD") && gh pr list)" ]]
+  HUB_GIT_GLOBALS=()
 }

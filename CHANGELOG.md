@@ -63,10 +63,15 @@ is not.
   passthrough are gone): the head is named from where `git push` sends the
   branch and from that remote's push URL; without `-p` the branch must be
   pushed, which `-f` skips; `-p` checks everything, including what gh would
-  refuse without a terminal, before pushing `HEAD:refs/heads/BRANCH`;
-  `--no-edit` takes the first commit's message; `-i` converts an issue through
-  the API with string fields; `-o` and `-c` leave gh's prompts alone and look
-  the URL up afterwards.
+  refuse without a terminal, and that gh is installed, before pushing
+  `HEAD:refs/heads/BRANCH`; under `push.default matching`, `-p` pushes only a
+  branch the destination already has, asked with `git ls-remote` as `git
+  push` asks; the current branch's `gh-merge-base` is the default base
+  whenever the pull request is for that branch (no `-h`, `-h` naming it, or
+  `-p`); `--no-edit` takes the first commit of the head branch (HEAD's when
+  the pull request is for the current branch, else its remote-tracking
+  branch's); `-i` converts an issue through the API with string fields; `-o`
+  and `-c` leave gh's prompts alone and look the URL up afterwards.
 - `create` runs `gh repo create HOST/OWNER/NAME --source=TOP --remote=REMOTE`
   without changing directory, takes `OWNER/NAME`, `HOST/OWNER/NAME` or a URL,
   gains `--push`, and no longer accepts gh's other options. `fork` runs
@@ -89,13 +94,22 @@ is not.
   `--bra main`, `--tra main`); short options with values are read in clusters
   (`-qj3`, `-3p`) and an attached optional value stops the cluster (`-Skey`).
   An option git would refuse, unknown or ambiguous, leaves the whole command
-  line to git. `merge --file` and `remote add --mirror`, which git lists
-  otherwise than it reads them, are the two exceptions hub keeps by hand.
+  line to git, and so does a value attached to a switch (`--detach=1`,
+  `--multiple=oops`); the usage (`git CMD -h`) says which options take an
+  attached value, optional (`--recurse-submodules=no`, `--log=5`) or read by
+  the option itself (`--file=F`). `merge --file` and `remote add --mirror`,
+  which git lists otherwise than it reads them, are the two exceptions hub
+  keeps by hand.
 - `checkout` runs `gh pr checkout` with `GH_HOST` set to the pull request
-  URL's host, so that gh fetches from a remote of that host. `cherry-pick`
+  URL's host, so that gh fetches from a remote of that host, and passes
+  `--detach` and `--recurse-submodules` as git reads them: the last of an
+  option and its negation counts, and `--recurse-submodules=VALUE` takes
+  git's booleans (`=no` is `--no-recurse-submodules`). `cherry-pick`
   fetches a pull request's head into a private ref of the run
   (`refs/hub/cherry-pick/N-PID`, deleted at once, also when interrupted), as
-  `merge` does. `sync` writes exactly the ref it examined (`git update-ref
+  `merge` does, and reads the values of git's revision options (`--grep
+  PATTERN`, `--author NAME`, `--since DATE`, ...) as values, never as
+  commits. `sync` writes exactly the ref it examined (`git update-ref
   --no-deref`), never another branch through a symbolic ref.
 - `fetch` puts `--multiple` first on the command line when it expands a
   list, so a list after `--` or before `--no-multiple` works, and leaves a
@@ -111,8 +125,13 @@ is not.
   422) leaves the statuses to decide only on the first page, and a page that
   fails after an empty one is an error.
 - `--noop` prints a gh line as `(cd DIR && gh …)` when `-C` moved hub to
-  another directory, and as `env GH_HOST=HOST gh …` where hub sets one.
-  gh's `hosts.yml` is read in flow style too.
+  another directory, as `env GH_HOST=HOST gh …` where hub sets one, and with
+  an `env` prefix for what git's other global options put in the environment
+  gh inherits: `-c` and `--config-env` as `GIT_CONFIG_PARAMETERS` in git's own
+  quoting (a `--config-env` value as its variable, never its value), and
+  `--git-dir`, `--work-tree`, `--namespace`, `--bare` and the switches
+  (`--no-optional-locks`, `--literal-pathspecs`, ...) as the variables git
+  sets. gh's `hosts.yml` is read in flow style too.
 - Remote identity: a remote's URL is read as git uses it; SSH hosts are
   resolved through the ssh git would run (`GIT_SSH_COMMAND`, `core.sshCommand`,
   `GIT_SSH`, then `ssh`), with the user and port, so `Match` blocks and
@@ -149,6 +168,10 @@ is not.
   git commands hub extends are read from `git CMD -h`, so an unknown one
   leaves the command line to git. `script/stable-tag` picks the release the
   formula follows, and fails when gh's list may be incomplete.
+  `script/release` refuses a stable release from a checkout whose origin is
+  not the repository `Formula/hub.rb` names (`REPO`), since the formula
+  downloads the tag from there; a pre-release from a fork is allowed and
+  leaves the formula alone.
 
 ### Fixed
 
@@ -243,6 +266,21 @@ is not.
   without a `check_runs` array counted as an empty page; the formula job
   listed at most 1000 releases and could miss the highest version
   (`script/stable-tag` now fails when the list may be incomplete).
+- Found by the review of the eighth round: `pull-request -p` under
+  `push.default matching` pushed a branch git would not have (the destination
+  had no branch of that name), and pushed before finding out that gh is not
+  installed; `-h` naming the current branch skipped its `gh-merge-base`;
+  `--no-edit` read HEAD's commits when `-h` named another branch; `checkout
+  --recurse-submodules=no` became gh's `--recurse-submodules`, and a value on
+  a switch (`checkout --detach=oops`, `fetch --multiple=oops`) was dropped
+  instead of left to git, after `fetch` had added the remote; `cherry-pick
+  --grep URL` took the pattern for a commit; `--noop` gh lines left out what
+  `-c`, `--config-env`, `--git-dir` and the other global options put in the
+  environment; `script/release` could publish to a fork and point the
+  formula at `brc-dd/hub`.
+- The option table and the usage of a git command are read once per run, as
+  documented; read through `hub::git_option`, they were asked of git again
+  for every option on the command line.
 
 ## v0.1.0 — 2026-10-29
 

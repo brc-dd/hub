@@ -30,16 +30,18 @@ through `hub::git`, `hub::gh`, `hub::exec_git` and `hub::exec_gh` so that
 Releases: `script/release X.Y.Z` runs the checks, bumps `VERSION` and
 `CHANGELOG.md`, tags, pushes exactly `main` and the new tag (never other local
 tags), publishes the GitHub release and updates the Homebrew formula's URL and
-checksum. The release targets the repository `origin` names: an SSH alias in
-its URL is resolved with `ssh -G`, and `gh repo view` must see the repository
-before anything is pushed. An existing draft release for the tag is published,
-not taken for a published one. After a failure, fix the cause and run
-`script/release` without a version: it resumes the release named by `VERSION`,
-with HEAD at its tag or at the formula commit that follows it, and skips the
-steps that are done. `script/release --dry-run` checks the local state and
-prints the commands instead of running them; `make check` is printed, not run.
-See `script/bump`, `script/release` and `script/update-formula` for the
-individual steps.
+checksum. The release targets the repository `origin` names: an SSH alias in its
+URL is resolved with `ssh -G`, and `gh repo view` must see the repository before
+anything is pushed. A stable release must come from a checkout of the repository
+`Formula/hub.rb` names (its `REPO`), since the formula downloads the tag from
+there; a pre-release from another repository, a fork, is allowed and leaves the
+formula alone. An existing draft release for the tag is published, not taken for
+a published one. After a failure, fix the cause and run `script/release` without
+a version: it resumes the release named by `VERSION`, with HEAD at its tag or at
+the formula commit that follows it, and skips the steps that are done.
+`script/release --dry-run` checks the local state and prints the commands
+instead of running them; `make check` is printed, not run. See `script/bump`,
+`script/release` and `script/update-formula` for the individual steps.
 
 ## Testing approach
 

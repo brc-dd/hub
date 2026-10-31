@@ -11,7 +11,7 @@ release_checkout() {
   printf '#!/usr/bin/env bash\nexit 0\n' >script/bump
   chmod +x script/bump
   printf '0.1.0\n' >VERSION
-  : >Formula/hub.rb
+  printf 'class Hub < Formula\n  REPO = "brc-dd/hub".freeze\nend\n' >Formula/hub.rb
   git add -A && git commit -q -m "initial commit"
   git remote add origin https://github.com/brc-dd/hub.git
   git update-ref refs/remotes/origin/main HEAD
@@ -59,4 +59,33 @@ release_checkout() {
   run script/release --dry-run 0.2.0
   assert_failure
   assert_output_equals "script/release: no origin remote"
+}
+
+@test "a stable release comes from a checkout of the formula's repository; a pre-release from a fork leaves the formula alone" {
+  release_checkout
+  git remote set-url origin https://github.com/alice/fork.git
+  run script/release --dry-run 0.2.0
+  assert_failure
+  assert_line_equals -1 "script/release: origin is github.com/alice/fork, but Formula/hub.rb is for github.com/brc-dd/hub: the release would go to one repository and the formula point at the other. Release from a checkout of brc-dd/hub, or change REPO in the formula."
+  assert_output_lacks "Checking" # before make check, the bump and any push
+  assert_output_lacks "git push"
+  [[ -z $(git tag) ]]
+  run script/release --dry-run 0.2.0-rc.1
+  assert_success
+  assert_output_contains "note: origin is github.com/alice/fork, not github.com/brc-dd/hub, which Formula/hub.rb is for; a pre-release leaves the formula alone"
+  assert_output_contains "[dry-run] gh release create v0.2.0-rc.1 --repo github.com/alice/fork --verify-tag --generate-notes --title hub\\ 0.2.0-rc.1 --prerelease"
+  assert_output_contains "==> Leaving Formula/hub.rb alone: v0.2.0-rc.1 is a pre-release"
+  # the formula's spelling of the repository is compared without regard to case
+  git remote set-url origin https://github.com/BRC-DD/Hub.git
+  run script/release --dry-run 0.2.0
+  assert_success
+  assert_output_lacks "but Formula/hub.rb is for"
+  # a formula that names no repository stops the release
+  : >Formula/hub.rb
+  git commit -q -am "formula without REPO"
+  run script/release --dry-run 0.2.0
+  assert_failure
+  assert_line_equals -1 "script/release: Formula/hub.rb does not set REPO"
+  assert_output_lacks "git push"
+  assert_gh_not_called
 }

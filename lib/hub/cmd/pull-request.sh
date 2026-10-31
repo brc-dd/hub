@@ -28,17 +28,20 @@
 # uses can, and gets the head repository's name (head_repo) whenever it is known to be another
 # repository than the base, as the API requires within one organization.
 #
-# The base defaults to branch.BRANCH.gh-merge-base of the current branch, else the default branch
-# of the base repository (refs/remotes/REMOTE/HEAD when it points at a branch that still exists,
-# else gh's answer). Without -m, -F, -e or --no-edit, gh asks for the title and body, which needs a
-# terminal; -o and -c leave the prompts alone and look the URL up afterwards.
+# The base defaults to branch.BRANCH.gh-merge-base of the current branch when the pull request is
+# for that branch (nothing named with -h, -h naming it, or -p, which pushes HEAD), else the default
+# branch of the base repository (refs/remotes/REMOTE/HEAD when it points at a branch that still
+# exists, else gh's answer). Without -m, -F, -e or --no-edit, gh asks for the title and body, which
+# needs a terminal; -o and -c leave the prompts alone and look the URL up afterwards. --no-edit
+# reads the first commit of the head that is not on the base: HEAD's when the pull request is for
+# the current branch, else those of the head's remote-tracking branch here, which must be fetched.
 #
 # Options:
 #   -m, --message MESSAGE  The title (the text up to the first blank line) and the body; repeated
 #                          MESSAGEs are joined as paragraphs.
 #   -F, --file FILE        Read the title and body from FILE ("-" for standard input).
 #   -e, --edit             Open gh's editor for the title and body, filled from -m or -F if given.
-#       --no-edit          Use the message of the first commit on the branch, without an editor.
+#       --no-edit          Use the message of the first commit on the head branch, without an editor.
 #   -i, --issue ISSUE      Convert an issue (a number or URL) into the pull request through the
 #                          API, which keeps its title and body; takes only -b, -h, -p, -f, -d,
 #                          --no-maintainer-edits, -o and -c.
@@ -166,12 +169,14 @@ hub_cmd_pull_request() {
   [[ -z $base ]] || _hub_pull_request_branch_name "$base" -b
 
   # The head branch, and the remote it is (or with -p will be) on.
-  local branch head_owner='' head_repo='' head_name='' remote='' head_proj='' head_known=0 set_upstream=0
+  # head_is_current: the pull request is for the current branch's commits (nothing named, -h naming
+  # it, or -p, which pushes HEAD), so its gh-merge-base and, for --no-edit, HEAD apply.
+  local branch head_owner='' head_repo='' head_name='' remote='' head_proj='' head_known=0 set_upstream=0 head_is_current=0
   branch=$(hub::current_branch) || branch=''
   case $head in
     '')
       [[ -n $branch ]] || hub::die "Aborted: not currently on any branch; name the head with -h [OWNER:]BRANCH."
-      head_name=$branch
+      head_name=$branch head_is_current=1
       ;;
     *:*)
       head_owner=${head%%:*} head_name=${head#*:}
@@ -198,10 +203,13 @@ hub_cmd_pull_request() {
       # the local branch of the head's name pushes to a repository of OWNER's: the head is there
       hub::remote_project "$remote" push >/dev/null
       head_proj=$HUB_PROJECT head_known=1
+      [[ $head_name != "$branch" ]] || head_is_current=1
     fi
   else
     if [[ -z $head ]]; then
-      if hub::push_target "$branch"; then
+      local -a verify=()
+      ((push)) && verify=(verify) # about to push: what push.default matching would push is the destination's to say
+      if hub::push_target "$branch" "${verify[@]}"; then
         remote=$HUB_PUSH_REMOTE head_name=$HUB_PUSH_BRANCH
       elif [[ $HUB_PUSH_WHY == upstream ]] && ! hub::git_query config --get "branch.$branch.merge" >/dev/null; then
         remote=$HUB_PUSH_REMOTE # no upstream yet: where `git push -u` would go
@@ -210,24 +218,28 @@ hub_cmd_pull_request() {
           remote) hub::die "Aborted: there is no remote $(_hub_pull_request_push_remote "$branch") to push $branch to; add one, or name the head with -h [OWNER:]BRANCH." ;;
           refspec) hub::die "Aborted: git push would not push $branch: remote.$HUB_PUSH_REMOTE.push is configured, and none of its refspecs maps $branch; push it yourself (git push $HUB_PUSH_REMOTE $branch), or name the head with -h [OWNER:]BRANCH." ;;
           destination) hub::die "Aborted: remote.$HUB_PUSH_REMOTE.push maps $branch to something that is not a branch; name the head with -h [OWNER:]BRANCH." ;;
+          matching) hub::die "Aborted: git push would not push $branch: push.default is matching, and $HUB_PUSH_REMOTE has no branch $branch; push it yourself (git push $HUB_PUSH_REMOTE $branch), or name the head with -h [OWNER:]BRANCH." ;;
           *) hub::die "Aborted: git push would refuse to push $branch as configured (push.default, branch.$branch.remote and branch.$branch.merge); push it yourself, e.g. git push -u $HUB_PUSH_REMOTE $branch, or name the head with -h [OWNER:]BRANCH." ;;
         esac
       fi
     else
       remote=$(_hub_pull_request_push_remote "$branch")
       hub::remote_exists "$remote" || hub::die "Aborted: there is no remote $remote to find $head_name on; name the head with -h OWNER:BRANCH."
+      [[ $head_name != "$branch" ]] || head_is_current=1
     fi
     hub::remote_project "$remote" push >/dev/null || hub::die "Aborted: remote $remote does not push to a GitHub repository hub knows (git remote get-url --push $remote; see hub.host)."
     hub::same_host "$HUB_PROJECT_HOST" "$base_host" || hub::die "Aborted: remote $remote pushes to $HUB_PROJECT_HOST, but the pull request is for $base_host/$base_proj."
     head_proj=$HUB_PROJECT head_known=1
   fi
+  ((push)) && head_is_current=1 # HEAD is pushed as the head, whatever it is named
   [[ -n $branch ]] && ! hub::git_query config --get "branch.$branch.merge" >/dev/null && set_upstream=1
   local label=$head_name
   [[ ${head_proj,,} == "${base_proj,,}" ]] || label=${head_proj%%/*}:$head_name # as the remote spells the owner, when one is known
 
-  # The base branch: -b, the current branch's gh-merge-base, else the base repository's default.
+  # The base branch: -b, the current branch's gh-merge-base when it is the head, else the base
+  # repository's default.
   local r
-  if [[ -z $base && -z $head && -n $branch ]]; then
+  if [[ -z $base && -n $branch ]] && ((head_is_current)); then
     base=$(hub::git_query config --get "branch.$branch.gh-merge-base") || base=''
   fi
   if [[ -z $base ]]; then # known from the remote or from gh, never assumed: a pull request against the wrong base is wrong
@@ -266,7 +278,15 @@ hub_cmd_pull_request() {
     ((have_message || no_edit || edit || can_prompt)) || hub::die "Aborted: give the title and body with -m or -F (gh asks for them only in interactive mode); not pushing."
   fi
   if ((no_edit)); then
-    _hub_pull_request_first_commit "$base_proj" "$base_host" "$base"
+    local msg_ref=HEAD msg_head=HEAD
+    if ((! head_is_current)); then # another branch is the head: its commits are its remote-tracking ref's
+      local head_remote=$remote
+      [[ -n $head_remote ]] || head_remote=$(hub::remote_for_project "$head_proj" "$base_host") \
+        || hub::die "Aborted: --no-edit takes the message from the commits of $label, but no remote here points at $base_host/$head_proj to read them from; give the message with -m or -F."
+      msg_ref=refs/remotes/$head_remote/$head_name msg_head=$head_remote/$head_name
+      hub::git_query show-ref --verify --quiet -- "$msg_ref" || hub::die "Aborted: --no-edit needs $msg_head locally; run git fetch $head_remote first."
+    fi
+    _hub_pull_request_first_commit "$base_proj" "$base_host" "$base" "$msg_ref" "$msg_head"
     title=$HUB_MSG_TITLE body=$HUB_MSG_BODY have_message=1
   fi
   if [[ $label == *:* && -z $issue ]]; then
@@ -297,6 +317,7 @@ hub_cmd_pull_request() {
   fi
 
   # Side effects, in order: the push, the pull request, the URL, the browser and the clipboard.
+  hub::require_gh # needed right after the push: found out before anything is pushed
   if ((push)); then
     local -a push_cmd=(push)
     ((set_upstream)) && push_cmd+=(--set-upstream)
@@ -379,17 +400,18 @@ _hub_pull_request_branch_remote_of() {
 ' "$r"
 }
 
-# _hub_pull_request_first_commit OWNER/REPO HOST BASE : HUB_MSG_TITLE and HUB_MSG_BODY from the first
-# commit of HEAD that is not on BASE as fetched from the remote here that points at the base
+# _hub_pull_request_first_commit OWNER/REPO HOST BASE HEADREF HEAD : HUB_MSG_TITLE and HUB_MSG_BODY
+# from the first commit of HEADREF (HEAD, or the remote-tracking ref of the head branch, called HEAD
+# in messages) that is not on BASE as fetched from the remote here that points at the base
 # repository (for --no-edit; gh's --fill-first would read a local branch named like the head).
 _hub_pull_request_first_commit() {
-  local r ref
+  local r ref head_ref=$4 head=$5
   local -a commits
   r=$(hub::remote_for_project "$1" "$2") || hub::die "Aborted: --no-edit takes the message from the commits since $3, but no remote here points at $2/$1 to compare with."
   ref=refs/remotes/$r/$3
   hub::git_query show-ref --verify --quiet -- "$ref" || hub::die "Aborted: --no-edit needs $r/$3 locally; run git fetch $r first."
-  mapfile -t commits < <(hub::git_query rev-list --reverse "$ref..HEAD")
-  ((${#commits[@]})) || hub::die "Aborted: no commits between $r/$3 and HEAD to take the message from."
+  mapfile -t commits < <(hub::git_query rev-list --reverse "$ref..$head_ref")
+  ((${#commits[@]})) || hub::die "Aborted: no commits between $r/$3 and $head to take the message from."
   HUB_MSG_TITLE=$(hub::git_query log -1 --format=%s "${commits[0]}")
   HUB_MSG_BODY=$(hub::git_query log -1 --format=%b "${commits[0]}")
   HUB_MSG_BODY=${HUB_MSG_BODY%"${HUB_MSG_BODY##*[![:space:]]}"}

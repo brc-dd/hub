@@ -371,3 +371,32 @@ git cherry-pick $SHA"
   [[ -f fix-build.txt && $(git log -1 --format=%s) == fix-build ]]
   assert_no_private_refs
 }
+
+@test "the value of a revision option is never taken for a commit: --grep URL is git's pattern" {
+  serve_github mislav/dotfiles
+  clone_served mislav/dotfiles
+  local url=https://github.com/mislav/dotfiles/commit/0123456789012345678901234567890123456789
+  git checkout -q -b feature
+  echo file >file.txt
+  git add file.txt
+  git commit -q -m "$url"
+  git checkout -q main
+  run hub --noop cherry-pick --no-commit --grep "$url" feature
+  assert_success
+  assert_output_equals "git cherry-pick --no-commit --grep $url feature"
+  run hub cherry-pick --no-commit --grep "$url" feature
+  assert_success
+  [[ $(git diff --cached --name-only) == file.txt ]]
+  git reset -q --hard
+  run hub --noop cherry-pick --author "jingweno@$SHA" --since 2.weeks --max-count 1 --skip 0 feature
+  assert_success
+  assert_output_equals "git cherry-pick --author jingweno@$SHA --since 2.weeks --max-count 1 --skip 0 feature"
+  run hub --noop cherry-pick --grep="$url" feature # attached, the value was never an operand
+  assert_success
+  assert_output_equals "git cherry-pick --grep=$url feature"
+  # a switch of the revision parser takes none: the URL after it is a commit
+  run hub --noop cherry-pick --first-parent "https://github.com/mislav/dotfiles/commit/$(git rev-parse feature)"
+  assert_success
+  assert_line_equals 1 "git cherry-pick --first-parent $(git rev-parse feature)"
+  assert_gh_not_called
+}

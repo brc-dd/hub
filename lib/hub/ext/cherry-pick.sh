@@ -18,7 +18,9 @@
 #
 # hub reads git cherry-pick's options as the installed git does, from the option table git keeps
 # for its completion: -m 1, -X ours and -Skey take their values, in clusters too. git keeps an
-# option it does not know for its revision parser, and so does hub.
+# option it does not know for its revision parser, and so does hub, which knows the revision
+# options that read the next argument as their value (--grep PATTERN, --author NAME, --since DATE,
+# --max-count N, ...) so that the value is never taken for a commit.
 #
 #   $ hub cherry-pick https://github.com/jingweno/gh/commit/a319d88
 #   > git fetch --no-tags --refmap= https://github.com/jingweno/gh.git a319d88...
@@ -28,6 +30,12 @@
 #   > git fetch --no-tags --refmap= origin +refs/pull/73/head:refs/hub/cherry-pick/73-PID
 #   > git update-ref -d refs/hub/cherry-pick/73-PID
 #   > git cherry-pick a319d88...
+
+# The long options of git's revision parser that take the next argument as their value when it is
+# not attached (revision.c and diff-merges.c read these with parse_long_opt). Its other options
+# take none, or only an attached one, except the diff options with a value (--stat-width N), which
+# cherry-pick accepts without effect and hub does not list: write those as --option=value.
+HUB_REVISION_VALUE_OPTIONS=$'\n--after\n--author\n--before\n--committer\n--date\n--diff-merges\n--encoding\n--exclude\n--exclude-hidden\n--glob\n--grep\n--grep-reflog\n--max-age\n--max-count\n--min-age\n--since\n--since-as-filter\n--skip\n--until\n'
 
 hub_ext_cherry_pick() {
   local -a args=("$@") picks=()
@@ -42,8 +50,11 @@ hub_ext_cherry_pick() {
       case $arg in
         --help) hub::usage ;;
         *)
-          hub::git_option cherry-pick mX S "$arg" || true # unknown to git too: kept, for its revision parser
-          ((HUB_OPT_NEXT)) && value=1
+          if hub::git_option cherry-pick mX S "$arg"; then
+            ((HUB_OPT_NEXT)) && value=1
+          elif [[ $arg != *=* && $HUB_REVISION_VALUE_OPTIONS == *$'\n'"$arg"$'\n'* ]]; then
+            value=1 # a revision option that reads the next argument; the rest git keeps for its revision parser, as hub does
+          fi
           ;;
       esac
     elif _hub_cherry_pick_shorthand "$arg"; then
