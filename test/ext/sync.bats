@@ -475,6 +475,44 @@ Updated branch main (was $(git rev-parse --short "$(server_ref mislav/dotfiles m
   assert_output_equals "Updated branch main (was $a)."
 }
 
+@test "sync refuses a remote while another remote's fetch refspecs write inside its namespace, before fetching" {
+  serve_github mislav/dotfiles alice/dotfiles
+  clone_served mislav/dotfiles work
+  git remote add fork https://github.com/alice/dotfiles.git
+  git config remote.fork.fetch '+refs/heads/*:refs/remotes/origin/fork/*' # alice's branches, seen as origin/fork/*
+  local srv fork_main origin_main
+  srv=$(server_dir alice/dotfiles)
+  git -C "$srv" update-ref refs/heads/main "$(git -C "$srv" commit-tree -p main -m "alice's work" 'main^{tree}')"
+  git fetch -q fork
+  fork_main=$(git rev-parse refs/remotes/origin/fork/main) origin_main=$(git rev-parse refs/remotes/origin/main)
+  # github.com's mislav/dotfiles moves on, and gets a branch called fork/main of its own
+  (cd "$HUB_TEST_TMP" && clone_served mislav/dotfiles seed && git commit -q --allow-empty -m "upstream work" && git push -q origin main && git switch -q -c fork/main && git commit -q --allow-empty -m "origin's fork/main" && git push -q origin fork/main)
+  run hub sync origin
+  assert_failure
+  assert_output_equals "Aborted: remote fork fetches into refs/remotes/origin/fork/* (remote.fork.fetch), inside refs/remotes/origin/, where sync writes and prunes origin's remote-tracking branches, so it would overwrite or delete fork's; map them elsewhere (git config remote.fork.fetch '+refs/heads/*:refs/remotes/fork/*') to sync origin."
+  assert_equals "$(git rev-parse refs/remotes/origin/fork/main)" "$fork_main" # not overwritten with origin's fork/main
+  assert_equals "$(git rev-parse refs/remotes/origin/main)" "$origin_main"    # nothing was fetched
+  assert_equals "$(tip main)" "$origin_main"
+  # a pattern that reaches inside through the branch name is refused too
+  git config remote.fork.fetch '+refs/heads/*:refs/remotes/*'
+  run hub sync origin
+  assert_failure
+  assert_output_equals "Aborted: remote fork fetches into refs/remotes/* (remote.fork.fetch), inside refs/remotes/origin/, where sync writes and prunes origin's remote-tracking branches, so it would overwrite or delete fork's; map them elsewhere (git config remote.fork.fetch '+refs/heads/*:refs/remotes/fork/*') to sync origin."
+  assert_equals "$(git rev-parse refs/remotes/origin/fork/main)" "$fork_main"
+  # fork's own namespace, a negative refspec, one for FETCH_HEAD alone and another namespace that
+  # merely starts like origin's are no destinations inside it: origin syncs, and takes its own fork/main
+  git config remote.fork.fetch '+refs/heads/*:refs/remotes/fork/*'
+  git config --add remote.fork.fetch '^refs/heads/skip'
+  git config --add remote.fork.fetch 'refs/heads/only'
+  git config --add remote.fork.fetch '+refs/heads/*:refs/remotes/originals/*'
+  run hub sync origin
+  assert_success
+  assert_output_equals "Updated branch main (was ${origin_main:0:7})."
+  assert_equals "$(tip main)" "$(server_ref mislav/dotfiles main)"
+  assert_equals "$(git rev-parse refs/remotes/origin/fork/main)" "$(server_ref mislav/dotfiles fork/main)"
+  assert_gh_not_called
+}
+
 @test "sync without a GitHub remote, or with an unknown remote, aborts before fetching" {
   make_repo dotfiles
   run hub sync

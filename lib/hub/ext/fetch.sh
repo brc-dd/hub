@@ -1,6 +1,7 @@
 # shellcheck shell=bash
 # Summary: Fetch from GitHub users' forks, adding remotes for them first.
-# Usage: hub fetch [<git-fetch options>] USER[,USER...] [<refspec>...]
+# Usage: hub fetch [<git-fetch options>] USER [<refspec>...]
+#        hub fetch [<git-fetch options>] USER,USER... [(USER | REMOTE | GROUP)...]
 #        hub fetch --multiple [<git-fetch options>] (USER | REMOTE | GROUP)...
 #
 # A git command hub extends: git fetch's options apply, and hub recognizes one operand, the
@@ -8,8 +9,11 @@
 # remote or remote group, hub adds a remote named USER that points at USER's copy of the current
 # project (as `hub remote add USER` does), then runs git fetch with the arguments as given; a
 # list becomes its members in its place, with --multiple put first on the command line (before
-# any `--`). With --multiple (or -m) in effect, every operand is a remote, a group or a USER. The
-# last of --multiple and --no-multiple on the command line counts, as in git; when it is
+# any `--`), and every other operand is then a remote, a group or a USER, as with --multiple
+# given: `git fetch --multiple` takes no refspecs, so refspecs go with one USER alone (hub fetch
+# USER REFSPEC...), and an operand after a list that is none of the three is refused before
+# anything is added. With --multiple (or -m) in effect, every operand is a remote, a group or a
+# USER. The last of --multiple and --no-multiple on the command line counts, as in git; when it is
 # --no-multiple, a list is one repository name for git, and goes to it unchanged. Nothing is
 # looked up on GitHub, and git's --dry-run does not stop hub from adding the remotes.
 #
@@ -89,6 +93,14 @@ hub_ext_fetch() {
         [[ -n ${seen[$arg]-} ]] || missing+=("$arg")
         seen[$arg]=1
       done
+      for i in "${operands[@]:1}"; do # the rest are git fetch --multiple's: remotes, groups, or users to add
+        arg=${args[i]}
+        _hub_fetch_is_remote "$arg" && continue
+        _hub_fetch_is_user "$arg" || hub::die "hub fetch: with a list, every other operand is a remote, a remote group or a GitHub user for git fetch --multiple, and '$arg' is none; refspecs go with one user: hub fetch USER REFSPEC..."
+        [[ -n ${seen[$arg]-} ]] || missing+=("$arg")
+        seen[$arg]=1
+      done
+      i=${operands[0]}
       args=(--multiple "${args[@]:0:i}" "${members[@]}" "${args[@]:i+1}")
     elif _hub_fetch_is_user "$name"; then
       missing=("$name")

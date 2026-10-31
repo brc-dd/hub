@@ -234,6 +234,30 @@ assert_no_leftovers() {
   assert_no_leftovers
 }
 
+@test "merge --no-message leaves the message to git, as -m and -F leave it to you" {
+  make_pr_fixture
+  local main
+  main=$(git rev-parse HEAD)
+  run hub merge --no-message "$PR"
+  assert_success
+  assert_equals "$(parents HEAD)" "$main $PR_HEAD"
+  assert_equals "$(git log -1 --format=%B)" "Merge commit '$PR_HEAD'" # git's own, for the commit merged by its hash
+  assert_no_leftovers
+  git reset -q --hard "$main"
+  run hub merge --no-mess "$PR" # abbreviated, as git reads it
+  assert_success
+  assert_equals "$(git log -1 --format=%B)" "Merge commit '$PR_HEAD'"
+  git reset -q --hard "$main"
+  run hub merge --no-message -m "Own message" "$PR" # the last one counts, as in git
+  assert_success
+  assert_equals "$(git log -1 --format=%B)" "Own message"
+  run hub --noop merge --no-message "$PR"
+  assert_success
+  [[ ${lines[1]} == "git merge --no-ff --no-message refs/hub/merge/12-"* ]]
+  assert_gh_not_called
+  assert_no_leftovers
+}
+
 @test "merge passes other git-merge options on, in place" {
   make_pr_fixture
   stub_pr_message

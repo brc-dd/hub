@@ -407,11 +407,15 @@ alias.
   (nor, for a subcommand, a usage); hub then hands the command line to git,
   which fails the same way.
 - `merge` treats a pull-request URL anywhere among its arguments as the
-  request to merge, and takes no other revision with it.
+  request to merge, and takes no other revision with it; `-m`, `-F` and
+  `--no-message` are your say on the message, and hub adds none then.
 - `sync` fetches with a fixed refspec (`--refmap=` and
   `+refs/heads/*:refs/remotes/REMOTE/*`), so the remote's configured refspecs,
   `fetch.prune` and `fetch.pruneTags` cannot make it write or delete local
-  branches or tags; a branch is gone when the remote has no such head.
+  branches or tags; a branch is gone when the remote has no such head. Another
+  remote whose `remote.*.fetch` writes inside `refs/remotes/REMOTE/` would
+  have its remote-tracking branches overwritten or pruned there, so sync
+  refuses REMOTE until they are mapped elsewhere.
 - `sync` assumes that nothing else rewrites branches or adds work trees
   while it runs. Each update is conditional on the commit sync saw and
   writes the ref it examined (`update-ref --no-deref`), so a branch that

@@ -302,6 +302,32 @@ git fetch --multiple --depth=1 carol -j4 alice --recurse-submodules bob --recurs
   assert_line_equals 1 "git fetch alice main:refs/remotes/alice/main --no-tags"
 }
 
+@test "after a list, operands are remotes, groups or users for --multiple, never refspecs: those go with one user" {
+  serve_github mislav/dotfiles alice/dotfiles bob/dotfiles
+  clone_served mislav/dotfiles
+  git remote add topic https://github.com/bob/dotfiles.git # a remote called like a branch
+  git -C "$(server_dir alice/dotfiles)" branch topic main
+  # a refspec after a list is refused before anything is added
+  run hub fetch alice,carol refs/heads/main
+  assert_failure
+  assert_output_equals "hub fetch: with a list, every other operand is a remote, a remote group or a GitHub user for git fetch --multiple, and 'refs/heads/main' is none; refspecs go with one user: hub fetch USER REFSPEC..."
+  assert_equals "$(git remote | tr '\n' ' ')" "origin topic "
+  assert_gh_not_called # not even asked which protocol the remotes would use
+  # a remote's name is that remote, as under --multiple; a user's is their fork, added first
+  run hub --noop fetch alice,carol topic
+  assert_success
+  assert_output_equals $'git remote add alice https://github.com/alice/dotfiles.git\ngit remote add carol https://github.com/carol/dotfiles.git\ngit fetch --multiple alice carol topic'
+  run hub --noop fetch alice,carol dave
+  assert_success
+  assert_line_equals -2 "git remote add dave https://github.com/dave/dotfiles.git"
+  assert_line_equals -1 "git fetch --multiple alice carol dave"
+  # one user takes refspecs: alice's topic, and nothing from the remote called topic
+  run hub fetch alice topic
+  assert_success
+  assert_equals "$(git rev-parse refs/remotes/alice/topic)" "$(server_ref alice/dotfiles topic)"
+  [[ -z $(git for-each-ref refs/remotes/topic/) ]]
+}
+
 @test "remote groups are not mistaken for users" {
   serve_github mislav/dotfiles github/dotfiles alice/dotfiles
   clone_served mislav/dotfiles
@@ -439,10 +465,11 @@ git fetch --multiple --depth=1 carol -j4 alice --recurse-submodules bob --recurs
   run hub fetch --help
   assert_success
   assert_line_equals 0 "Summary: Fetch from GitHub users' forks, adding remotes for them first."
-  assert_output_contains "Usage: hub fetch [<git-fetch options>] USER[,USER...]"
+  assert_output_contains "Usage: hub fetch [<git-fetch options>] USER [<refspec>...]"
+  assert_output_contains "       hub fetch [<git-fetch options>] USER,USER... [(USER | REMOTE | GROUP)...]"
   run hub fetch alice,bob --help
   assert_success
-  assert_output_contains "Usage: hub fetch [<git-fetch options>] USER[,USER...]"
+  assert_output_contains "Usage: hub fetch [<git-fetch options>] USER [<refspec>...]"
   run hub --noop fetch -h
   assert_output_equals "git fetch -h"
   assert_gh_not_called

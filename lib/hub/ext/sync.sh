@@ -17,7 +17,10 @@
 # Local commits are never discarded. The fetch is `git fetch --prune REMOTE
 # +refs/heads/*:refs/remotes/REMOTE/*` whatever remote.REMOTE.fetch, fetch.prune
 # or fetch.pruneTags say, so nothing outside refs/remotes/REMOTE/ is ever pruned
-# and no local branch is written by it; tags follow as in any fetch. A branch is
+# and no local branch is written by it; tags follow as in any fetch. Another
+# remote whose fetch refspecs (remote.*.fetch) write inside refs/remotes/REMOTE/
+# would have its remote-tracking branches overwritten or pruned there, so sync
+# refuses REMOTE until they are mapped elsewhere. A branch is
 # updated or deleted only while it is still where sync saw it, never while it is
 # checked out in another work tree, and never through a symbolic ref: one that
 # is a symbolic ref is skipped, and the ref sync names is the one it writes
@@ -76,7 +79,8 @@ hub_ext_sync() {
 
   # Only refs/remotes/REMOTE/ is written or pruned: the refspec is given, and --refmap= keeps the
   # configured one (which may map into refs/heads/) out of it; with a refspec on the command line
-  # git ignores fetch.pruneTags too.
+  # git ignores fetch.pruneTags too. What another remote keeps there would be overwritten or pruned.
+  _hub_sync_namespace_free "$remote"
   hub::git fetch --prune --quiet --refmap= "$remote" "+refs/heads/*:refs/remotes/$remote/*" || exit
 
   # The snapshot every decision and every conditional update is based on. REMOTE's default branch
@@ -179,6 +183,33 @@ hub_ext_sync() {
 }
 
 _hub_sync_usage() { hub::die "Usage: hub sync [--color[=WHEN]] [REMOTE]"; }
+
+# _hub_sync_namespace_free REMOTE : no other remote's fetch refspecs (remote.*.fetch) write into
+# refs/remotes/REMOTE/, where sync's fetch writes REMOTE's branches and prunes the rest: a
+# remote-tracking branch another remote keeps there would be overwritten by REMOTE's branch of
+# that name, or pruned as gone from REMOTE. A destination reaches inside when it names a ref there
+# or is a pattern whose fixed part begins there (refs/remotes/REMOTE/fork/*) or ends before it
+# (refs/remotes/*, which a branch called REMOTE/x fills in). Dies, before anything is fetched.
+_hub_sync_namespace_free() {
+  local ns=refs/remotes/$1/ entry key spec other dst prefix
+  while IFS= read -r -d '' entry; do    # the key, a newline and the value: -z ends each entry with NUL
+    [[ $entry == *$'\n'* ]] || continue # a key without a value
+    key=${entry%%$'\n'*} spec=${entry#*$'\n'}
+    other=${key#remote.}
+    other=${other%.fetch}
+    [[ $other != "$1" ]] || continue
+    spec=${spec#+}
+    [[ $spec != ^* && $spec == ?*:?* ]] || continue # a negative refspec, or one for FETCH_HEAD alone
+    dst=${spec#*:}
+    if [[ $dst == *'*'* ]]; then
+      prefix=${dst%%\**}
+      [[ $prefix == "$ns"* || $ns == "$prefix"* ]] || continue
+    else
+      [[ $dst == "$ns"?* ]] || continue
+    fi
+    hub::die "Aborted: remote $other fetches into $dst (remote.$other.fetch), inside $ns, where sync writes and prunes $1's remote-tracking branches, so it would overwrite or delete $other's; map them elsewhere (git config remote.$other.fetch '+refs/heads/*:refs/remotes/$other/*') to sync $1."
+  done < <(hub::git_query config -z --get-regexp '^remote\..+\.fetch$')
+}
 
 # _hub_sync_checked_out ARRAY : ARRAY[refs/heads/NAME] is the path of the work tree NAME is
 # checked out in (through any chain of symbolic refs, as git reports it).

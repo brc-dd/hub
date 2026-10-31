@@ -47,16 +47,19 @@ is not.
   a one-operand `remote add NAME` always expands. `clone` no longer takes
   `HOST/OWNER/REPO`: other hosts come from `GH_HOST` or `hub.host`.
 - `fetch` accepts options before the names and `--multiple` anywhere (the last
-  of `--multiple`/`--no-multiple` counts); a list member that is empty or not a
-  login is an error before any remote is added; a remote whose name contains a
-  comma is fetched as it is. `push` accepts options before the remote list,
-  checks every member before the first push, pushes the current branch as
-  `refs/heads/BRANCH` (a tag of the same name cannot make git refuse it), and
-  never splits an existing remote, a path or a URL.
+  of `--multiple`/`--no-multiple` counts); a list member that is empty or not
+  a login is an error before any remote is added, and so is an operand after a
+  list that is neither a remote, a group nor a user (a list makes the command
+  line a `--multiple` one, which takes no refspecs: those go with one user); a
+  remote whose name contains a comma is fetched as it is. `push` accepts
+  options before the remote list, checks every member before the first push,
+  pushes the current branch as `refs/heads/BRANCH` (a tag of the same name
+  cannot make git refuse it), and never splits an existing remote, a path or a
+  URL.
 - `merge` fetches the pull request into a private ref, with `--no-tags`, and
   merges that commit, takes the last of `--squash`/`--no-squash`, adds
-  `--no-ff` only when no fast-forward option was given, and refuses a second
-  revision. `cherry-pick`
+  `--no-ff` only when no fast-forward option was given, leaves the message to
+  git under `--no-message`, and refuses a second revision. `cherry-pick`
   resolves every URL or `USER@SHA` operand, prefers a local revision of that
   name, and finds a pull request's commit by id in its history. `am` and
   `apply` download pull-request, commit and compare URLs (also `.patch` and
@@ -352,6 +355,20 @@ is not.
   empty extra operand (`hub merge URL ''`) for none, fetched the pull request
   and let git refuse the empty revision; it is refused before anything is
   fetched.
+- Found by the review of the twelfth round: `sync` fetched REMOTE's branches
+  into `refs/remotes/REMOTE/` with pruning, whatever other remotes keep there,
+  so a remote whose fetch refspecs map its branches inside that namespace
+  (`+refs/heads/*:refs/remotes/origin/fork/*`) had them overwritten by
+  REMOTE's branches of those names, or pruned as gone from REMOTE; sync now
+  refuses REMOTE, before fetching, while another remote's `remote.*.fetch`
+  writes inside its namespace, and says which. `merge --no-message URL` had
+  git clear the merge-button message hub gave and refuse to commit without
+  one, leaving the merge in progress; `--no-message` now leaves the message to
+  git, as `-m` and `-F` leave it to you. `fetch`'s synopsis offered refspecs
+  after a list of users, which hub turns into `git fetch --multiple`, where
+  every operand is a remote: the synopsis says so now, an operand after a list
+  that is neither a remote, a group nor a user is refused before anything is
+  added, and refspecs go with one user.
 - The option table and the usage of a git command are read once per run, as
   documented; read through `hub::git_option`, they were asked of git again
   for every option on the command line.

@@ -10,8 +10,10 @@
 # OWNER/BRANCH" followed by the pull request's title. The pull request is the only revision
 # merged; every other argument is git's and reaches it in place: --ff, --ff-only or --no-ff set
 # the fast-forward behavior instead of hub's --no-ff; -m or -F give the message instead of
-# GitHub's; when --squash is in effect (the last of --squash and --no-squash counts, as in git)
-# git squashes as usual, without a merge commit or hub's message. Nothing changes on GitHub until
+# GitHub's, and --no-message leaves it to git (Merge commit 'SHA', as the commit fetched is
+# merged by its hash; git would otherwise clear hub's message and refuse to commit without one);
+# when --squash is in effect (the last of --squash and --no-squash counts, as in git) git
+# squashes as usual, without a merge commit or hub's message. Nothing changes on GitHub until
 # you push (`gh pr merge` merges there). Without a pull request URL, or with --abort, --quit or
 # --continue, this is plain git merge, as given; arguments after -- are never read.
 #
@@ -52,7 +54,7 @@ hub_ext_merge() {
               --squash) squash=1 ;;
               --no-squash) squash=0 ;;
               --ff | --no-ff | --ff-only) ff_given=1 ;;
-              -m | -F | --message | --file) own_msg=1 ;;
+              -m | -F | --message | --file | --no-message) own_msg=1 ;; # the message is the user's to give, or git's
             esac
           done
           ((HUB_OPT_NEXT)) && value=1
