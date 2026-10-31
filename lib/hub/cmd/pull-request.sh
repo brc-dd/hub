@@ -14,11 +14,15 @@
 # The head is the current branch, named for gh as it is where `git push` sends it: on the remote
 # git would push to (remote.*.push, branch.*.pushRemote, remote.pushDefault, branch.*.remote and
 # push.default), under its name there, in the repository that remote's push URL names, written
-# OWNER:BRANCH when that is not the base repository. A branch without an upstream goes to the
-# remote `git push -u` would take; one that `git push` would not push as configured (push.default
-# nothing, or remote.*.push refspecs that map other branches) is refused. Without -p, the branch
-# must already be pushed there, which its remote-tracking branch shows; a remote that fetches
-# from one repository and pushes to another shows nothing, and is refused without -p or -f. -f
+# OWNER:BRANCH when that is not the base repository. remote.*.push is read as git reads it: the
+# first refspec whose source is the branch (in full, short, or HEAD while it is checked out) or a
+# pattern it matches names the destination, a matching refspec (`:`) sends it where the remote has
+# it, and a negative one (^PATTERN) excludes a destination. A branch without an upstream goes to
+# the remote `git push -u` would take; one that `git push` would not push as configured
+# (push.default nothing, refspecs that send other branches, several upstream branches in
+# branch.*.merge) is refused. Without -p, the branch must already be pushed there, which its
+# remote-tracking branch shows; a remote that fetches from one repository and pushes to another
+# shows nothing, and is refused without -p or -f. -f
 # skips that check. -h BRANCH names a branch on that remote instead, pushed from HEAD with -p; -h
 # OWNER:BRANCH names a branch in OWNER's repository, pushed with -p to the remote here whose push
 # URL names it (owner and repository names compare without regard to case, as on GitHub). That
@@ -223,9 +227,15 @@ hub_cmd_pull_request() {
         case $HUB_PUSH_WHY in
           remote) hub::die "Aborted: there is no remote $(_hub_pull_request_push_remote "$branch") to push $branch to; add one, or name the head with -h [OWNER:]BRANCH." ;;
           refspec) hub::die "Aborted: git push would not push $branch: remote.$HUB_PUSH_REMOTE.push is configured, and none of its refspecs maps $branch; push it yourself (git push $HUB_PUSH_REMOTE $branch), or name the head with -h [OWNER:]BRANCH." ;;
+          negative) hub::die "Aborted: git push would not push $branch: a negative refspec in remote.$HUB_PUSH_REMOTE.push excludes where it would go; push it yourself (git push $HUB_PUSH_REMOTE $branch), or name the head with -h [OWNER:]BRANCH." ;;
           destination) hub::die "Aborted: remote.$HUB_PUSH_REMOTE.push maps $branch to something that is not a branch; name the head with -h [OWNER:]BRANCH." ;;
-          matching) hub::die "Aborted: git push would not push $branch: push.default is matching, and $HUB_PUSH_REMOTE has no branch $branch; push it yourself (git push $HUB_PUSH_REMOTE $branch), or name the head with -h [OWNER:]BRANCH." ;;
-          *) hub::die "Aborted: git push would refuse to push $branch as configured (push.default, branch.$branch.remote and branch.$branch.merge); push it yourself, e.g. git push -u $HUB_PUSH_REMOTE $branch, or name the head with -h [OWNER:]BRANCH." ;;
+          matching) hub::die "Aborted: git push would not push $branch: it pushes only branches $HUB_PUSH_REMOTE has (push.default matching, or a matching refspec in remote.$HUB_PUSH_REMOTE.push), and $branch is not among them; push it yourself (git push $HUB_PUSH_REMOTE $branch), or name the head with -h [OWNER:]BRANCH." ;;
+          *)
+            local -a upstreams
+            mapfile -t upstreams < <(hub::git_query config --get-all "branch.$branch.merge")
+            ((${#upstreams[@]} < 2)) || hub::die "Aborted: git push would refuse to push $branch: branch.$branch.merge names ${#upstreams[@]} upstream branches, and git pushes to one; keep one (git config --unset-all branch.$branch.merge; git branch --set-upstream-to=$HUB_PUSH_REMOTE/$branch), push it yourself (git push $HUB_PUSH_REMOTE $branch), or name the head with -h [OWNER:]BRANCH."
+            hub::die "Aborted: git push would refuse to push $branch as configured (push.default, branch.$branch.remote and branch.$branch.merge); push it yourself, e.g. git push -u $HUB_PUSH_REMOTE $branch, or name the head with -h [OWNER:]BRANCH."
+            ;;
         esac
       fi
     else

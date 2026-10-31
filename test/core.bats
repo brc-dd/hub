@@ -802,7 +802,7 @@ push_why() {
   git config push.default matching
   run hub::push_target topic verify
   assert_failure
-  assert_output_contains "Aborted: could not list the branches of https://github.com/o/none.git, to tell whether git push would push topic (push.default matching):"
+  assert_output_contains "Aborted: could not list the branches of https://github.com/o/none.git, to tell whether git push would push topic, as it does only where the remote has it (push.default matching, or a matching refspec in remote.origin.push):"
 }
 
 @test "push_target says why git would not push a branch" {
@@ -832,6 +832,127 @@ push_why() {
   [[ -z $(push_why topic) ]]
   git config --replace-all remote.origin.push refs/heads/topic:refs/tags/topic # not to a branch
   [[ $(push_why topic) == destination ]]
+}
+
+@test "push_target reads remote.*.push as git push does: short and HEAD sources, matching, negatives, a mirror" {
+  serve_github o/r
+  clone_served o/r
+  git checkout -q -b topic
+  git commit -q --allow-empty -m t
+  local spec
+  # a source named short, from refs/, or as HEAD while the branch is checked out; a destination
+  # outside refs/ is a branch, as git completes it for a branch source
+  for spec in topic:refs/heads/publish heads/topic:refs/heads/publish HEAD:refs/heads/publish HEAD:publish topic:publish; do
+    git config remote.origin.push "$spec"
+    hub::push_target topic
+    [[ $HUB_PUSH_REMOTE == origin && $HUB_PUSH_BRANCH == publish ]]
+    run git push --dry-run --porcelain origin
+    assert_success
+    assert_output_contains ":refs/heads/publish"
+  done
+  for spec in topic HEAD heads/topic 'refs/heads/*'; do # no destination: the source's own name
+    git config remote.origin.push "$spec"
+    hub::push_target topic
+    [[ $HUB_PUSH_BRANCH == topic ]]
+    run git push --dry-run --porcelain origin
+    assert_success
+    assert_output_contains ":refs/heads/topic"
+  done
+  git config remote.origin.push HEAD:refs/heads/publish
+  git checkout -q main
+  [[ $(push_why topic) == refspec ]] # HEAD is main now: the refspec sends main
+  git checkout -q topic
+  # the first refspec whose source is the branch decides, a pattern with the name mapped through
+  git config --replace-all remote.origin.push 'refs/heads/*:refs/heads/mirror/*'
+  git config --add remote.origin.push topic:refs/heads/publish
+  hub::push_target topic
+  [[ $HUB_PUSH_BRANCH == mirror/topic ]]
+  git config --replace-all remote.origin.push 'refs/heads/*:refs/tags/*'
+  [[ $(push_why topic) == destination ]]
+  # a matching refspec sends a branch where the remote has it already, as push.default matching does
+  git config --replace-all remote.origin.push :
+  [[ $(push_why topic) == matching && $(push_why topic verify) == matching ]]
+  run git push --dry-run --porcelain origin
+  assert_success
+  assert_output_lacks refs/heads/topic
+  git push -q origin topic
+  [[ -z $(push_why topic) && -z $(push_why topic verify) ]]
+  hub::push_target topic
+  [[ $HUB_PUSH_BRANCH == topic ]]
+  git config remote.origin.push '+:'
+  [[ -z $(push_why topic) ]]
+  # a negative refspec excludes a destination, whatever sends the branch there, as git applies it
+  git config --replace-all remote.origin.push HEAD:refs/heads/publish
+  git config --add remote.origin.push '^refs/heads/topic'
+  hub::push_target topic
+  [[ $HUB_PUSH_BRANCH == publish ]] # the source's name is not what it excludes
+  run git push --dry-run --porcelain origin
+  assert_success
+  assert_output_contains "HEAD:refs/heads/publish"
+  git config --add remote.origin.push '^refs/heads/pub*'
+  [[ $(push_why topic) == negative ]]
+  run git push --dry-run --porcelain origin
+  assert_success
+  assert_output_lacks publish
+  git config --replace-all remote.origin.push :
+  git config --add remote.origin.push '^refs/heads/topic'
+  [[ $(push_why topic) == negative ]]
+  run git push --dry-run --porcelain origin
+  assert_success
+  assert_output_lacks refs/heads/topic
+  # negative refspecs alone send nothing, and push.default is not consulted
+  git config --replace-all remote.origin.push '^refs/heads/nothing'
+  git config push.default current
+  [[ $(push_why topic) == refspec ]]
+  run git push --dry-run --porcelain origin
+  assert_success
+  assert_output_lacks refs/heads/topic
+  # a mirror pushes every ref as it is, whatever push.default says
+  git config --unset-all remote.origin.push
+  git config push.default nothing
+  git config remote.origin.mirror true
+  hub::push_target topic
+  [[ $HUB_PUSH_REMOTE == origin && $HUB_PUSH_BRANCH == topic ]]
+  run git push --dry-run --porcelain origin
+  assert_success
+  assert_output_contains "refs/heads/topic:refs/heads/topic"
+}
+
+@test "push_target refuses a branch with several upstream branches, as git push does" {
+  serve_github o/r o/fork
+  clone_served o/r
+  git checkout -q -b topic
+  git commit -q --allow-empty -m t
+  git push -q -u origin topic
+  [[ -z $(push_why topic) ]]
+  git config --add branch.topic.merge refs/heads/main # a second upstream: git refuses to push
+  local mode
+  for mode in simple upstream; do
+    git config push.default $mode
+    [[ $(push_why topic) == upstream ]]
+    run git push --dry-run origin
+    assert_failure
+    assert_output_contains "multiple upstream branches"
+  done
+  git config push.default current # the branch's own name, whatever the upstreams
+  [[ -z $(push_why topic) ]]
+  git config push.default matching
+  [[ -z $(push_why topic) ]]
+  # a triangular push does not read the upstream under simple
+  git config push.default simple
+  git remote add fork https://github.com/o/fork.git
+  git config branch.topic.pushRemote fork
+  hub::push_target topic
+  [[ $HUB_PUSH_REMOTE == fork && $HUB_PUSH_BRANCH == topic ]]
+  git config --unset branch.topic.pushRemote
+  # the same upstream twice counts twice, as git counts it
+  git config --replace-all branch.topic.merge refs/heads/topic
+  [[ -z $(push_why topic) ]]
+  git config --add branch.topic.merge refs/heads/topic
+  [[ $(push_why topic) == upstream ]]
+  run git push --dry-run origin
+  assert_failure
+  assert_output_contains "multiple upstream branches"
 }
 
 @test "hosts.yml in flow style names its hosts too" {
@@ -868,7 +989,7 @@ push_why() {
   # -c and --config-env: GIT_CONFIG_PARAMETERS, quoted as git quotes it
   HUB_GIT_GLOBALS=(-c user.name=Mislav -c 'alias.st=status -sb' -c core.quotepath -c "x.y=it's" --config-env=http.extraheader=HUB_TEST_AUTH)
   line=$(hub::gh_line gh pr list)
-  [[ $line == "env GIT_CONFIG_PARAMETERS=\"'user.name'='Mislav' 'alias.st'='status -sb' 'core.quotepath'= 'x.y'='it'\\\\''s' 'http.extraheader'=\$(git rev-parse --sq-quote \"\$HUB_TEST_AUTH\" | cut -c2-)\" gh pr list" ]]
+  [[ $line == "env GIT_CONFIG_PARAMETERS=\"'user.name'='Mislav' 'alias.st'='status -sb' 'core.quotepath'= 'x.y'='it'\\\\''s' 'http.extraheader'=\$(git rev-parse --sq-quote \"\$HUB_TEST_AUTH\" | sed '1s/^ //')\" gh pr list" ]]
   [[ $line != *secret* ]]
   # run, the line gives gh exactly what git gave it, whatever the variable holds (git quotes ' and !)
   mkdir bin
@@ -879,6 +1000,11 @@ push_why() {
   [[ $expected == *"'Authorization: it'\\''s secret'\\!''"* ]]
   [[ $(PATH=$PWD/bin:$PATH HUB_TEST_AUTH="Authorization: it's secret!" bash -c "$line") == "$expected" ]]
   [[ $(PATH=$PWD/bin:$PATH HUB_TEST_AUTH="Authorization: it's secret!" sh -c "$line") == "$expected" ]]
+  # a value of several lines keeps every line whole, and the newlines at its end
+  expected=$(HUB_TEST_AUTH=$' one\n two\n\n' git -c user.name=Mislav -c 'alias.st=status -sb' -c core.quotepath -c "x.y=it's" --config-env=http.extraheader=HUB_TEST_AUTH -c 'alias.hubtest=!printf "%s" "$GIT_CONFIG_PARAMETERS"' hubtest)
+  expected=${expected% \'alias.hubtest\'=*}
+  [[ $expected == *"'http.extraheader'=' one"$'\n'" two"$'\n\n'"'" ]]
+  [[ $(PATH=$PWD/bin:$PATH HUB_TEST_AUTH=$' one\n two\n\n' sh -c "$line") == "$expected" ]]
   # the other options, as gh has them in the environment; merged with the caller's env words and the cd
   HUB_GIT_GLOBALS=(--git-dir .git --work-tree . --no-optional-locks --literal-pathspecs --no-replace-objects -C .)
   [[ $(GIT_DIR=.git GIT_WORK_TREE=. GIT_OPTIONAL_LOCKS=0 GIT_LITERAL_PATHSPECS=1 GIT_NO_REPLACE_OBJECTS=1 hub::gh_line env GH_HOST=ghe.example.com gh pr list) == "env GIT_DIR=.git GIT_WORK_TREE=. GIT_OPTIONAL_LOCKS=0 GIT_LITERAL_PATHSPECS=1 GIT_NO_REPLACE_OBJECTS=1 GH_HOST=ghe.example.com gh pr list" ]]
@@ -898,9 +1024,9 @@ push_why() {
   # through a shell that drops such a variable)
   HUB_GIT_GLOBALS=(--config-env=a.b=CONFIG.VAR)
   GIT_CONFIG_PARAMETERS="'a.b'='dotted value'"
-  [[ $(hub::gh_line gh pr list) == "env GIT_CONFIG_PARAMETERS=\"'a.b'=\$(git rev-parse --sq-quote \"\$(printenv CONFIG.VAR)\" | cut -c2-)\" gh pr list" ]]
+  [[ $(hub::gh_line gh pr list) == "env GIT_CONFIG_PARAMETERS=\"'a.b'=\$(v=\$(printenv CONFIG.VAR; echo .) && git rev-parse --sq-quote \"\${v%??}\" | sed '1s/^ //')\" gh pr list" ]]
   GIT_CONFIG_PARAMETERS="'x.y'='it'\\''s a b' 'a.b'='dotted value'"
-  [[ $(hub::gh_line gh pr list) == "env GIT_CONFIG_PARAMETERS=\"\${GIT_CONFIG_PARAMETERS:+\$GIT_CONFIG_PARAMETERS }'a.b'=\$(git rev-parse --sq-quote \"\$(printenv CONFIG.VAR)\" | cut -c2-)\" gh pr list" ]]
+  [[ $(hub::gh_line gh pr list) == "env GIT_CONFIG_PARAMETERS=\"\${GIT_CONFIG_PARAMETERS:+\$GIT_CONFIG_PARAMETERS }'a.b'=\$(v=\$(printenv CONFIG.VAR; echo .) && git rev-parse --sq-quote \"\${v%??}\" | sed '1s/^ //')\" gh pr list" ]]
   unset GIT_CONFIG_PARAMETERS
   [[ $(hub::config_entries '') == 0 ]]
   [[ $(hub::config_entries "'k'=") == 1 ]]

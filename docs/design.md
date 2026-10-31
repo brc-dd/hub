@@ -264,17 +264,28 @@ Common rules:
   not fetch the branch shows nothing about it: `compare` asks for the head,
   `pull-request --no-edit` for the message.
 - **The default branch** is `refs/remotes/REMOTE/HEAD` when it points at a
-  branch that still exists, else gh's answer, else `main`.
+  branch that still exists, else gh's answer. When neither knows it, a
+  command that only builds a URL (browse, compare) assumes `main`; one that
+  changes something (sync, pull-request) does not, and says so.
 - **Where a branch pushes** (`hub::push_target`) follows git's own rules:
-  `remote.*.push` refspecs, then `branch.*.pushRemote`, `remote.pushDefault`,
-  `branch.*.remote` and `push.default`. When git would refuse, or would push
-  other branches and leave this one alone (`remote.*.push` refspecs that map
-  none of it, or map it to something other than a branch; `push.default
-  nothing`; `simple` with a differently named upstream; no upstream;
-  `matching` when the remote has no branch of that name, as its
-  remote-tracking ref shows, or, for a caller about to push, as every push
-  URL answers `git ls-remote`), hub says why (`HUB_PUSH_WHY`) before pushing
-  anywhere. Branch-aware commands
+  `remote.*.push` refspecs when there are any, read as `git push` reads them
+  (`hub::push_refspec_dest`: the first refspec whose source is the branch, in
+  full, short or as `HEAD` while it is checked out, or a pattern it matches,
+  names the destination; a short destination is a branch; a matching `:`
+  sends the branch where the remote has it; a negative `^PATTERN` excludes a
+  destination, not a source. `%(push:remoteref)` is not consulted: it knows
+  neither short sources nor matching refspecs, and applies negatives to the
+  source), else a mirror remote, else `branch.*.pushRemote`,
+  `remote.pushDefault`, `branch.*.remote` and `push.default`, with the
+  upstream read from `branch.*.remote` and every `branch.*.merge` value
+  (`simple` and `upstream` need exactly one). When git would refuse, or would
+  push other branches and leave this one alone (refspecs that send none of
+  it, exclude its destination or send it to something other than a branch;
+  `push.default nothing`; `simple` with a differently named upstream; no
+  upstream, or several; `matching`, by `push.default` or by refspec, when the
+  remote has no branch of that name, as its remote-tracking ref shows, or,
+  for a caller about to push, as every push URL answers `git ls-remote`), hub
+  says why (`HUB_PUSH_WHY`) before pushing anywhere. Branch-aware commands
   (browse, compare, pull-request) use it, so a branch that tracks your fork
   is opened in, compared from and published to the fork.
 - **A remote's fetch URL and push URL** may name different repositories. The
@@ -352,7 +363,10 @@ the completions into `$PREFIX/share/zsh/site-functions/_hub`,
 exist. It never replaces a file it didn't link, and `make uninstall` removes
 only its own links. The completions make `git <TAB>` keep working through the
 alias (zsh's `_git`, git's bash completion and fish's git completion do the
-work) and add hub's own commands without replacing what the user configured.
+work) and add hub's own commands without replacing what the user configured:
+in bash, a completion registered for `git` before hub's file is sourced keeps
+completing plain git, with its options, and hub's commands come through the
+alias.
 
 ## Non-goals and accepted limitations
 

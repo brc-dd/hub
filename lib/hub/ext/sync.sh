@@ -31,7 +31,9 @@
 # is deleted once it is merged into the default branch and otherwise left alone.
 # When a branch could not be updated or deleted, sync carries on with the others
 # and exits non-zero. REMOTE's default branch is refs/remotes/REMOTE/HEAD, else
-# gh's answer, else main.
+# gh's answer; when neither knows it, a branch deleted on REMOTE is left alone,
+# with a warning that says so (git remote set-head REMOTE -a records it), and
+# nothing is assumed in its place.
 #
 # Options:
 #   --color[=WHEN]   Color the output: always (the default for --color), never,

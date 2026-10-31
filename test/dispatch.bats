@@ -304,7 +304,7 @@ make_fakegh() { # SCRIPT-BODY
   assert_output_equals "env GIT_CONFIG_PARAMETERS=\"'review.value'='example'\" gh pr list"
   HUB_TEST_SECRET=s3cret run hub --noop --config-env=review.token=HUB_TEST_SECRET -c 'review.value=two words' pr list
   assert_success
-  assert_output_equals "env GIT_CONFIG_PARAMETERS=\"'review.token'=\$(git rev-parse --sq-quote \"\$HUB_TEST_SECRET\" | cut -c2-) 'review.value'='two words'\" gh pr list"
+  assert_output_equals "env GIT_CONFIG_PARAMETERS=\"'review.token'=\$(git rev-parse --sq-quote \"\$HUB_TEST_SECRET\" | sed '1s/^ //') 'review.value'='two words'\" gh pr list"
   assert_output_lacks s3cret
   # run in the same shell, the printed line gives gh the configuration the real one had, whatever
   # the variable holds then
@@ -313,12 +313,15 @@ make_fakegh() { # SCRIPT-BODY
   chmod +x bin/gh
   [[ $(PATH=$PWD/bin:$PATH HUB_TEST_SECRET=s3cret bash -c "$output") == $'s3cret\ntwo words' ]]
   [[ $(PATH=$PWD/bin:$PATH HUB_TEST_SECRET="it's a secret!" sh -c "$output") == $'it\'s a secret!\ntwo words' ]]
+  # a value of several lines, one starting with a space and newlines at the end, byte for byte
+  cmp -s <(PATH=$PWD/bin:$PATH HUB_TEST_SECRET=$' one\n two\n\n' sh -c "$output") <(printf ' one\n two\n\n\ntwo words\n')
   # a variable the shell cannot expand (git reads any name) is read with printenv
   printf '#!/bin/sh\ngit config --get-all review.value\n' >bin/gh
   run env 'CONFIG.VAR=dotted value' "$HUB_BIN" --noop --config-env=review.value=CONFIG.VAR pr list
   assert_success
-  assert_output_equals "env GIT_CONFIG_PARAMETERS=\"'review.value'=\$(git rev-parse --sq-quote \"\$(printenv CONFIG.VAR)\" | cut -c2-)\" gh pr list"
+  assert_output_equals "env GIT_CONFIG_PARAMETERS=\"'review.value'=\$(v=\$(printenv CONFIG.VAR; echo .) && git rev-parse --sq-quote \"\${v%??}\" | sed '1s/^ //')\" gh pr list"
   [[ $(PATH=$PWD/bin:$PATH env 'CONFIG.VAR=dotted value' bash -c "$output") == 'dotted value' ]] # not sh: dash drops such a variable
+  cmp -s <(PATH=$PWD/bin:$PATH env $'CONFIG.VAR= one\n two\n\n' bash -c "$output") <(printf ' one\n two\n\n\n')
   # what gh inherited in GIT_CONFIG_PARAMETERS before the command line comes along, unprinted and
   # first, as the real gh had it; without it the line still runs
   run env GIT_CONFIG_PARAMETERS="'review.value'='inherited'" "$HUB_BIN" --noop -c review.value=local pr list

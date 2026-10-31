@@ -839,13 +839,13 @@ SH
   stub_gh 'pr create *' ''
   run hub pull-request -p -m Fix
   assert_failure
-  assert_output_equals "Aborted: git push would not push feature: push.default is matching, and origin has no branch feature; push it yourself (git push origin feature), or name the head with -h [OWNER:]BRANCH."
+  assert_output_equals "Aborted: git push would not push feature: it pushes only branches origin has (push.default matching, or a matching refspec in remote.origin.push), and feature is not among them; push it yourself (git push origin feature), or name the head with -h [OWNER:]BRANCH."
   assert_equals "$(branches mislav/dotfiles)" "main "
   [[ -z $(git config branch.feature.merge) ]]
   # without -p the branch has to be there too
   run hub pull-request -m Fix
   assert_failure
-  assert_output_contains "push.default is matching, and origin has no branch feature"
+  assert_output_contains "it pushes only branches origin has (push.default matching, or a matching refspec in remote.origin.push), and feature is not among them"
   assert_gh_not_called
   git push -q origin feature
   git commit -q --allow-empty -m More
@@ -858,8 +858,67 @@ SH
   git commit -q --allow-empty -m "Even more"
   run hub pull-request -p -m Fix
   assert_failure
-  assert_output_contains "origin has no branch feature"
+  assert_output_contains "and feature is not among them"
   assert_equals "$(branches mislav/dotfiles)" "main "
+}
+
+@test "-p refuses a branch with several upstream branches before pushing, as git push does" {
+  pushed_repo
+  stub_gh 'pr create *' ''
+  git config --add branch.feature.merge refs/heads/main
+  git commit -q --allow-empty -m More
+  run git push --dry-run origin
+  assert_failure
+  assert_output_contains "multiple upstream branches"
+  run hub pull-request -p -m Fix
+  assert_failure
+  assert_output_equals "Aborted: git push would refuse to push feature: branch.feature.merge names 2 upstream branches, and git pushes to one; keep one (git config --unset-all branch.feature.merge; git branch --set-upstream-to=origin/feature), push it yourself (git push origin feature), or name the head with -h [OWNER:]BRANCH."
+  assert_equals "$(server_ref mislav/dotfiles refs/heads/feature)" "$(git rev-parse HEAD~1)"
+  assert_gh_not_called
+  git config push.default upstream
+  run hub pull-request -p -m Fix
+  assert_failure
+  assert_output_contains "branch.feature.merge names 2 upstream branches"
+  assert_gh_not_called
+  # current pushes the branch's own name, upstreams aside, as git does
+  git config push.default current
+  run hub pull-request -p -m Fix
+  assert_success
+  assert_equals "$(server_ref mislav/dotfiles refs/heads/feature)" "$(git rev-parse HEAD)"
+  assert_gh_called 'pr create --repo github.com/mislav/dotfiles --base main --head feature --title Fix --body '
+}
+
+@test "the head follows remote.*.push as git reads it: a HEAD source, a short one, a matching refspec, a negative one" {
+  pushed_repo
+  git commit -q --allow-empty -m More
+  git config remote.origin.push HEAD:refs/heads/publish
+  run hub --noop pull-request -p -m Fix
+  assert_success
+  assert_output_equals $'git push origin HEAD:refs/heads/publish\ngh pr create --repo github.com/mislav/dotfiles --base main --head publish --title Fix --body \'\''
+  git config remote.origin.push feature:publish # a short source and destination, completed as git completes them
+  run git push --dry-run --porcelain origin
+  assert_success
+  assert_output_contains "refs/heads/feature:refs/heads/publish"
+  run hub --noop pull-request -p -m Fix
+  assert_success
+  assert_line_equals 0 "git push origin HEAD:refs/heads/publish"
+  # a matching refspec sends the branch where the remote has it already
+  git config remote.origin.push :
+  run hub --noop pull-request -p -m Fix
+  assert_success
+  assert_output_equals $'git push origin HEAD:refs/heads/feature\ngh pr create --repo github.com/mislav/dotfiles --base main --head feature --title Fix --body \'\''
+  git checkout -q -b other
+  run hub pull-request -p -m Fix
+  assert_failure
+  assert_output_equals "Aborted: git push would not push other: it pushes only branches origin has (push.default matching, or a matching refspec in remote.origin.push), and other is not among them; push it yourself (git push origin other), or name the head with -h [OWNER:]BRANCH."
+  assert_equals "$(branches mislav/dotfiles)" "feature main "
+  # a negative refspec excludes the destination
+  git checkout -q feature
+  git config --add remote.origin.push '^refs/heads/feature'
+  run hub pull-request -p -m Fix
+  assert_failure
+  assert_output_equals "Aborted: git push would not push feature: a negative refspec in remote.origin.push excludes where it would go; push it yourself (git push origin feature), or name the head with -h [OWNER:]BRANCH."
+  assert_equals "$(server_ref mislav/dotfiles refs/heads/feature)" "$(git rev-parse HEAD~1)"
 }
 
 # no_gh_path : a PATH with everything hub needs but gh, to run hub where the GitHub CLI is not installed.

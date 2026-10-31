@@ -119,8 +119,9 @@ is not.
   list, so a list after `--` or before `--no-multiple` works, and leaves a
   `--multiple` operand that names an existing path to git.
 - `pull-request` says why when `git push` would not push the branch as
-  configured (`remote.*.push` refspecs that map other branches, no such
-  remote, `push.default nothing`), refuses without `-p` or `-f` a remote that
+  configured (`remote.*.push` refspecs that send other branches or exclude
+  the destination, no such remote, `push.default nothing`, several upstream
+  branches in `branch.*.merge`), refuses without `-p` or `-f` a remote that
   fetches from one repository and pushes to another, passes `head_repo` to
   the API when `-i` converts an issue for a head in another repository, and
   compares owner and repository names without regard to case. `compare`
@@ -136,7 +137,8 @@ is not.
   gh inherits: `-c` and `--config-env` as `GIT_CONFIG_PARAMETERS` in git's own
   quoting, after whatever gh inherited there before the command line (carried
   along by reference, unprinted), a `--config-env` value as git's quoting of
-  its variable, computed when the line runs, never its value, and
+  its variable, computed when the line runs, whole, however many lines it
+  has, never its value, and
   `--git-dir`, `--work-tree`, `--namespace`, `--bare` and the switches
   (`--no-optional-locks`, `--literal-pathspecs`, ...) as the variables git
   sets. gh's `hosts.yml` is read in flow style too.
@@ -145,14 +147,19 @@ is not.
   `GIT_SSH`, then `ssh`), with the user and port, so `Match` blocks and
   port-443 aliases work and HTTPS hosts are taken literally; `GH_REPO` must be
   `OWNER/REPO`, `HOST/OWNER/REPO` or a URL. Push destinations follow git's own
-  rules (`remote.*.push`, `branch.*.pushRemote`, `remote.pushDefault`,
-  `push.default`). Branches are handled as full refs, so a tag of the same
+  rules: `remote.*.push` as `git push` reads it (a source named in full,
+  short or as `HEAD`, a pattern, a matching `:`, a negative refspec against
+  the destination), `remote.*.mirror`, then `branch.*.pushRemote`,
+  `remote.pushDefault`, `push.default` and the one upstream that `simple` and
+  `upstream` need. Branches are handled as full refs, so a tag of the same
   name cannot confuse them.
 - Prerequisites: bash 5.3, git 2.41 and gh 2.40 or newer, with the reason for
   each in the README. `make install PREFIX="$HOME/.local"` is the documented
   local install; `make install` refuses to overwrite anything it did not
   create. Completions no longer replace a user's own git completion
-  customizations and find hub's command word after any global option.
+  customizations (in bash, a completion registered for `git` keeps completing
+  plain git, with its options) and find hub's command word after any global
+  option.
   `script/release` names the canonical repository, which origin's fetch URL
   and every push URL must agree on, pushes exact refspecs,
   publishes drafts and resumes after its formula commit; the formula workflow
@@ -304,6 +311,20 @@ is not.
   refspecs map it to no remote-tracking ref, and said `git push` would refuse
   where git pushes by the configured names (`branch.*.remote`,
   `branch.*.merge`).
+- Found by the review of the tenth round: `hub::push_target` read one
+  `branch.*.merge` value where git counts them, so `pull-request -p` could
+  push a branch that `git push` refuses for having several upstream branches;
+  it took `%(push:remoteref)` for git's reading of `remote.*.push`, which
+  knows neither a matching refspec (`:`), nor a `HEAD` or short source, and
+  applies a negative refspec to the source where `git push` applies it to the
+  destination, so such a branch was refused as unmapped, or sent where git
+  excludes it, and a mirror remote fell through to `push.default`; a `--noop`
+  gh line cut the first character of every further line of a multi-line
+  `--config-env` value, and lost the trailing newlines of one read through
+  `printenv`; the bash completion replaced a `complete -F` registration the
+  user had for `git`; `hub help sync` claimed a `main` fallback that `sync`
+  does not have (a branch deleted on the remote is left alone, with a
+  warning, when the default branch is unknown).
 - The option table and the usage of a git command are read once per run, as
   documented; read through `hub::git_option`, they were asked of git again
   for every option on the command line.

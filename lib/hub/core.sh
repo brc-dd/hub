@@ -122,14 +122,16 @@ hub::require_gh() {
 # the command line (the user's, or an outer git's), carried along as
 # "${GIT_CONFIG_PARAMETERS:+$GIT_CONFIG_PARAMETERS }" when there was one, never printed; a
 # --config-env value as the variable it came from, quoted the way git quotes it when the line runs
-# ($(git rev-parse --sq-quote "$VAR" | cut -c2-), through printenv for a name the shell cannot
-# expand), never as its value, since the user kept it off the command line; GIT_DIR,
+# ($(git rev-parse --sq-quote "$VAR" | sed '1s/^ //'): git's quoting less the space it puts in
+# front, which only the first line of a value has; through printenv, with a dot behind the value
+# so that its last newlines survive the substitution, for a name the shell cannot expand), never
+# as its value, since the user kept it off the command line; GIT_DIR,
 # GIT_WORK_TREE, GIT_NAMESPACE, GIT_ATTR_SOURCE and GIT_EXEC_PATH as gh has them; and the switches
 # (--literal-pathspecs, --no-replace-objects, --no-optional-locks, ...) as git sets them. -C needs
 # none (hub::gh_line prints a cd), and the pager options export nothing gh reads.
 hub::git_env() {
   local -a g=("${HUB_GIT_GLOBALS[@]}") names=()
-  local i arg kv entry params='' given=0 name key var
+  local i arg kv entry params='' given=0 name key var pre
   HUB_GIT_ENV=()
   for ((i = 0; i < ${#g[@]}; i++)); do
     arg=${g[i]} name=''
@@ -149,11 +151,14 @@ hub::git_env() {
         if [[ $arg == *=* ]]; then kv=${arg#*=}; else kv=${g[++i]-}; fi
         key=${kv%=*} var=${kv##*=} # split at the last =, as git splits it
         if [[ $var =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
-          var="\$$var"
-        else # a name the shell cannot expand (CONFIG.VAR): printenv reads it, as git did
-          var="\$(printenv $(hub::quote "$var"))"
+          var="\"\$$var\"" pre=''
+        else # a name the shell cannot expand (CONFIG.VAR): printenv reads it, as git did, into a
+          # variable, with a dot behind the value so that its last newlines survive the substitution
+          pre="v=\$(printenv $(hub::quote "$var"); echo .) && " var="\"\${v%??}\""
         fi
-        params+="${params:+ }$(hub::dquote_text "$(hub::sq "$key")")=\$(git rev-parse --sq-quote \"$var\" | cut -c2-)"
+        # git's own quoting of the value, less the space rev-parse puts in front, which only the
+        # first line has: no other line loses a character
+        params+="${params:+ }$(hub::dquote_text "$(hub::sq "$key")")=\$(${pre}git rev-parse --sq-quote $var | sed '1s/^ //')"
         ((++given))
         name=GIT_CONFIG_PARAMETERS
         ;;
@@ -813,30 +818,34 @@ hub::remote_for_project() {
   return 1
 }
 
-# hub::push_target BRANCH : where `git push` with no arguments would send BRANCH, by git's rules:
-# remote.*.push refspecs, else push.default with branch.*.pushRemote, remote.pushDefault,
-# branch.*.remote (origin when unset). Sets HUB_PUSH_REMOTE (the remote git would push to, when
-# it exists, whatever the outcome) and HUB_PUSH_BRANCH (BRANCH's name on it). Returns 1 when git
-# would not push BRANCH there, so that callers fail before pushing anywhere, with the reason in
-# HUB_PUSH_WHY: remote (no such remote), refspec (remote.*.push is configured and none of its
-# refspecs maps BRANCH, so `git push` would push other branches and leave this one alone),
-# destination (a refspec maps it to something other than a branch), nothing (push.default),
-# upstream (push.default simple or upstream without an upstream on that remote, or, for simple,
-# one of another name) or matching (push.default matching, and the remote has no branch of that
-# name: it pushes only branches both sides have). Whether the remote has the branch is read from
-# its remote-tracking ref here, as of the last fetch, or, with VERIFY, asked of every URL git
-# pushes the remote to (git ls-remote), as git asks at push time; a caller about to push verifies.
-# The upstream is read as git push reads it, from branch.*.remote and branch.*.merge: %(upstream)
-# has nothing to say when the remote's fetch refspecs map the upstream branch to no
-# remote-tracking ref, and git pushes by the names all the same.
+# hub::push_target BRANCH [verify] : where `git push` with no arguments would send BRANCH, by
+# git's rules: remote.*.push refspecs when there are any (hub::push_refspec_dest), else every ref
+# as it is for a mirror (remote.*.mirror), else push.default; to the remote of branch.*.pushRemote,
+# remote.pushDefault or branch.*.remote (origin when unset). Sets HUB_PUSH_REMOTE (the remote git
+# would push to, when it exists, whatever the outcome) and HUB_PUSH_BRANCH (BRANCH's name on it).
+# Returns 1 when git would not push BRANCH there, so that callers fail before pushing anywhere,
+# with the reason in HUB_PUSH_WHY: remote (no such remote), refspec (remote.*.push is configured
+# and none of its refspecs sends BRANCH, so `git push` would push other branches and leave this
+# one alone), negative (one sends it, and a negative refspec there, ^PATTERN, excludes its
+# destination: git applies them to what it would update), destination (it is sent to something
+# other than a branch), nothing (push.default), upstream (push.default simple or upstream, and the
+# branch has no upstream on that remote, has several, as a branch.*.merge with more than one value
+# gives it, or, for simple, one of another name: git refuses each) or matching (push.default
+# matching, or a matching refspec `:` in remote.*.push, and the remote has no branch of that name:
+# they push only branches both sides have). Whether the remote has the branch is read from its
+# remote-tracking ref here, as of the last fetch, or, with VERIFY, asked of every URL git pushes
+# the remote to (git ls-remote), as git asks at push time; a caller about to push verifies. The
+# upstream is read as git push reads it, from branch.*.remote and branch.*.merge: %(upstream) has
+# nothing to say when the remote's fetch refspecs map the upstream branch to no remote-tracking
+# ref, and git pushes by the names all the same.
 hub::push_target() {
-  local branch=$1 verify=${2-} push_remote push_ref push_track up_remote up_ref mode
+  local branch=$1 verify=${2-} push_remote up_remote mode track spec rc=0
+  local -a up_refs specs
   HUB_PUSH_REMOTE='' HUB_PUSH_BRANCH='' HUB_PUSH_WHY=''
-  IFS=$'\x1f' read -r push_remote push_ref push_track < <(hub::git_query for-each-ref \
-    --format='%(push:remotename)%1f%(push:remoteref)%1f%(push)' -- "refs/heads/$branch")
+  push_remote=$(hub::git_query for-each-ref --format='%(push:remotename)' -- "refs/heads/$branch") || push_remote=''
   up_remote=$(hub::git_query config --get "branch.$branch.remote") || up_remote=''
-  up_ref=$(hub::git_query config --get "branch.$branch.merge") || up_ref=''
-  [[ -n $up_remote && -n $up_ref ]] || up_ref='' # an upstream is both settings, or none
+  mapfile -t up_refs < <(hub::git_query config --get-all "branch.$branch.merge")
+  [[ -n $up_remote ]] || up_refs=() # an upstream is both settings, or none
   [[ -n $up_remote ]] || up_remote=origin
   [[ -n $push_remote ]] || push_remote=$up_remote
   hub::remote_exists "$push_remote" || {
@@ -844,19 +853,32 @@ hub::push_target() {
     return 1
   }
   HUB_PUSH_REMOTE=$push_remote
-  if [[ -n $push_ref ]]; then # remote.NAME.push decides
-    [[ $push_ref == refs/heads/?* ]] || {
+  mapfile -t specs < <(hub::git_query config --get-all "remote.$push_remote.push")
+  if ((${#specs[@]})); then # remote.NAME.push decides, whatever push.default says
+    hub::push_refspec_dest "$branch" "${specs[@]}" || rc=$?
+    if ((rc == 1)); then
+      HUB_PUSH_WHY=refspec # configured, and none of them sends this branch
+      return 1
+    fi
+    for spec in "${specs[@]}"; do # a negative refspec excludes what it names on the remote
+      if [[ $spec == ^?* ]] && hub::ref_matches "${spec#^}" "$HUB_PUSH_DEST"; then
+        HUB_PUSH_WHY=negative
+        return 1
+      fi
+    done
+    [[ $HUB_PUSH_DEST == refs/heads/?* ]] || {
       HUB_PUSH_WHY=destination
       return 1
     }
-    HUB_PUSH_BRANCH=${push_ref#refs/heads/}
+    HUB_PUSH_BRANCH=${HUB_PUSH_DEST#refs/heads/}
+    ((rc == 2)) || return 0
+    mode=matching # only a matching refspec sends it: where the remote has the branch already
+  elif [[ $(hub::git_query config --bool --get "remote.$push_remote.mirror") == true ]]; then
+    HUB_PUSH_BRANCH=$branch # a mirror pushes every ref under its own name, push.default aside
     return 0
+  else
+    mode=$(hub::git_query config --get push.default) || mode=simple
   fi
-  if hub::git_query config --get-all "remote.$push_remote.push" >/dev/null; then
-    HUB_PUSH_WHY=refspec # configured, and none of them maps this branch
-    return 1
-  fi
-  mode=$(hub::git_query config --get push.default) || mode=simple
   case $mode in
     nothing)
       HUB_PUSH_WHY=nothing
@@ -867,22 +889,22 @@ hub::push_target() {
       HUB_PUSH_BRANCH=$branch
       if [[ -n $verify ]]; then
         hub::remote_has_branch "$push_remote" "$branch"
-      else # %(push) is the remote-tracking ref of the branch's name on the remote
-        [[ -n $push_track ]] && hub::git_query show-ref --verify --quiet -- "$push_track"
+      else # as of the last fetch: the remote-tracking ref the remote's fetch refspecs give the branch
+        track=$(hub::tracking_ref "$push_remote" "$branch") && hub::git_query show-ref --verify --quiet -- "$track"
       fi || {
         HUB_PUSH_WHY=matching
         return 1
       }
       ;;
-    upstream)
-      [[ $up_remote == "$push_remote" && $up_ref == refs/heads/?* ]] || {
+    upstream) # exactly one upstream, on this remote: git refuses with none or with several
+      [[ $up_remote == "$push_remote" && ${#up_refs[@]} -eq 1 && ${up_refs[0]-} == refs/heads/?* ]] || {
         HUB_PUSH_WHY=upstream
         return 1
       }
-      HUB_PUSH_BRANCH=${up_ref#refs/heads/}
+      HUB_PUSH_BRANCH=${up_refs[0]#refs/heads/}
       ;;
-    *) # simple: the same name, and when pushing to the upstream remote, an upstream of that name
-      if [[ $up_remote == "$push_remote" && $up_ref != "refs/heads/$branch" ]]; then
+    *) # simple: the same name, and when pushing to the upstream remote, one upstream, of that name
+      if [[ $up_remote == "$push_remote" ]] && [[ ${#up_refs[@]} -ne 1 || ${up_refs[0]-} != "refs/heads/$branch" ]]; then
         HUB_PUSH_WHY=upstream
         return 1
       fi
@@ -891,14 +913,82 @@ hub::push_target() {
   esac
 }
 
+# hub::push_refspec_dest BRANCH REFSPEC... : the destination that push refspecs (remote.*.push)
+# send refs/heads/BRANCH to, as `git push` reads them, in HUB_PUSH_DEST. The first refspec whose
+# source is the branch decides: its name in full (refs/heads/BRANCH), from refs/ (heads/BRANCH) or
+# short (BRANCH), HEAD while the branch is checked out, or a pattern it matches (refs/heads/*).
+# The destination is the source's own name when the refspec has none, refs/heads/NAME for a NAME
+# outside refs/, as git completes it for a branch, and the pattern's destination with the matched
+# part filled in. Returns 0 then; 2 when only a matching refspec (`:` or `+:`) sends it, to
+# refs/heads/BRANCH, which git pushes only where the remote has that branch already; 1 when no
+# refspec sends it. A negative refspec (^PATTERN) is the caller's to apply: git applies it to the
+# destinations, not the sources.
+hub::push_refspec_dest() {
+  local branch=$1 src=refs/heads/$1 head='' have_head=0 spec lhs rhs mid matching=0
+  shift
+  HUB_PUSH_DEST=''
+  for spec in "$@"; do
+    spec=${spec#+}
+    case $spec in
+      ^*) continue ;;
+      :)
+        matching=1
+        continue
+        ;;
+    esac
+    lhs=${spec%%:*}
+    if [[ $lhs == *'*'* ]]; then # a pattern matches the full name alone, as in git
+      hub::ref_matches "$lhs" "$src" || continue
+      if [[ $spec != *:* ]]; then
+        HUB_PUSH_DEST=$src
+        return 0
+      fi
+      rhs=${spec#*:}
+      [[ $rhs == *'*'* ]] || return 1 # git refuses a * on one side alone
+      mid=${src#"${lhs%%\**}"}
+      mid=${mid%"${lhs#*\*}"}
+      HUB_PUSH_DEST=${rhs%%\**}$mid${rhs#*\*}
+      return 0
+    fi
+    case $lhs in
+      "$src" | "heads/$branch" | "$branch") ;;
+      HEAD)
+        if ((! have_head)); then
+          head=$(hub::git_query symbolic-ref --quiet HEAD) || head=''
+          have_head=1
+        fi
+        [[ $head == "$src" ]] || continue
+        ;;
+      *) continue ;;
+    esac
+    if [[ $spec != *:* ]]; then
+      HUB_PUSH_DEST=$src # no destination: the source's own name
+    else
+      rhs=${spec#*:}
+      case $rhs in
+        '') HUB_PUSH_DEST='' ;; # git refuses the refspec itself: nothing to call a branch
+        refs/*) HUB_PUSH_DEST=$rhs ;;
+        *) HUB_PUSH_DEST=refs/heads/$rhs ;; # a short destination is a branch, for a branch source
+      esac
+    fi
+    return 0
+  done
+  if ((matching)); then
+    HUB_PUSH_DEST=$src
+    return 2
+  fi
+  return 1
+}
+
 # hub::remote_has_branch REMOTE BRANCH : every URL git pushes REMOTE to has a branch BRANCH right
-# now (git ls-remote), as push.default matching requires to push it. Dies when a URL cannot be asked.
+# now (git ls-remote), as push.default matching and a matching push refspec require to push it.
+# Dies when a URL cannot be asked.
 hub::remote_has_branch() {
   local url out
   while IFS= read -r url; do
     out=$(git ls-remote --heads --exit-code "$url" "refs/heads/$2" 2>&1) && continue
     (($? != 2)) || return 1 # no such branch
-    hub::die "Aborted: could not list the branches of $url, to tell whether git push would push $2 (push.default matching):"$'\n'"$out"
+    hub::die "Aborted: could not list the branches of $url, to tell whether git push would push $2, as it does only where the remote has it (push.default matching, or a matching refspec in remote.$1.push):"$'\n'"$out"
   done < <(hub::git_query remote get-url --push --all "$1")
 }
 

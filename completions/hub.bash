@@ -8,7 +8,11 @@
 # Plain git keeps git's completion untouched, git aliases and _git_CMD functions
 # of the user's included: hub's commands, and their arguments, are offered only
 # when the command is hub or a shell alias for it (alias git=hub), and never in
-# place of a _git_CMD function that already exists.
+# place of a _git_CMD function that already exists. A completion registered for
+# git before this file is sourced (complete -F FUNCTION git: git's own, or one
+# of the user's) keeps completing plain git, with the options it was registered
+# with; one that is not a function (-C, -W) is left as it is, and hub's commands
+# are then not offered through git at all.
 
 __hub_commands='alias api browse ci-status compare create delete fork gist issue pr pull-request release sync'
 
@@ -37,7 +41,7 @@ if ! declare -F __git_main >/dev/null 2>&1; then
   unset __hub_file
 fi
 
-if declare -F __git_main >/dev/null 2>&1 && declare -F __git_complete >/dev/null 2>&1; then
+if declare -F __git_main >/dev/null 2>&1 && declare -F __git_func_wrap >/dev/null 2>&1; then
   # __hub_invoked : the command word is hub, or a shell alias whose command is hub.
   __hub_invoked() {
     local w=${words[0]}
@@ -53,7 +57,11 @@ if declare -F __git_main >/dev/null 2>&1 && declare -F __git_complete >/dev/null
     local i=1 drop=0 cmd='' fn
     local -a w=("${words[0]}")
     if ! __hub_invoked; then
-      __git_main
+      if [[ -n $__hub_git_prev ]]; then
+        "$__hub_git_prev" "${__hub_args[@]}" # the completion git had before this file was sourced
+      else
+        __git_main
+      fi
       return 0
     fi
     # Find the command word as bin/hub does: after git's global options, skipping the value of
@@ -109,8 +117,45 @@ if declare -F __git_main >/dev/null 2>&1 && declare -F __git_complete >/dev/null
     done
     return 0
   }
-  __git_complete hub __hub_main
-  __git_complete git __hub_main
+  # __hub_wrap COMMAND WORD PREVIOUS : what bash calls for hub and git: git's completion
+  # context, then __hub_main, with the arguments kept for the function git had before.
+  __hub_args=()
+  __hub_wrap() {
+    __hub_args=("$@")
+    __git_func_wrap __hub_main
+  }
+  # __hub_register NAME : complete NAME with __hub_wrap, with the options git's completion uses.
+  __hub_register() {
+    complete -o bashdefault -o default -o nospace -F __hub_wrap "$1" 2>/dev/null \
+      || complete -o default -o nospace -F __hub_wrap "$1"
+  }
+  __hub_register hub
+  # git keeps the completion it has, when that is a function: it completes plain git from now
+  # on, registered as it was, and hub's commands come through the alias.
+  __hub_git_prev=${__hub_git_prev-}
+  __hub_spec=$(complete -p git 2>/dev/null) || __hub_spec=''
+  __hub_fn=''
+  if [[ -n $__hub_spec ]]; then
+    read -r -a __hub_words <<<"$__hub_spec"
+    for ((__hub_i = 1; __hub_i + 1 < ${#__hub_words[@]}; __hub_i++)); do
+      if [[ ${__hub_words[__hub_i]} == -F ]]; then
+        __hub_fn=${__hub_words[__hub_i + 1]}
+        break
+      fi
+    done
+  fi
+  if [[ -z $__hub_spec ]]; then
+    __hub_git_prev='' # nothing yet: git's own completion, plus hub's commands
+    __hub_register git
+  elif [[ $__hub_fn == __hub_wrap ]]; then
+    : # sourced again: already this registration, with what git had before it
+  elif [[ -n $__hub_fn ]]; then
+    __hub_git_prev=$__hub_fn
+    eval "${__hub_spec/ -F $__hub_fn / -F __hub_wrap }"
+  else
+    __hub_git_prev='' # not a function (-C, -W): left as it is, and without hub's commands
+  fi
+  unset __hub_spec __hub_fn __hub_words __hub_i
 
   # __hub_complete CMD : the arguments of hub's command CMD.
   __hub_complete() {

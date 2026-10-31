@@ -511,6 +511,9 @@ Updated branch main (was $(git rev-parse --short "$(server_ref mislav/dotfiles m
   run hub sync --help
   assert_success
   assert_output_contains "Usage: hub sync [--color[=WHEN]] [REMOTE]"
+  # what sync does when the default branch is unknown, as the manual says it: no fallback
+  assert_output_contains "gh's answer; when neither knows it, a branch deleted on REMOTE is left alone,"
+  assert_output_lacks "else main"
   run hub sync -h
   assert_success
   assert_output_contains "Usage: hub sync [--color[=WHEN]] [REMOTE]"
