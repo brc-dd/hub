@@ -3,7 +3,8 @@
 load ../test_helper
 
 # fake_gh_fork : a gh whose `repo fork --remote` adds the remote as gh does: the fork of GH_REPO,
-# with the scheme of the remote origin points at the parent with, and records GH_REPO.
+# with the scheme of the remote origin points at the parent with, and records GH_REPO, the
+# directory it ran in and the test.option configuration it saw.
 fake_gh_fork() {
   mkdir -p "$HUB_TEST_TMP/fake"
   cat >"$HUB_TEST_TMP/fake/gh" <<'SH'
@@ -11,6 +12,8 @@ fake_gh_fork() {
 [[ $1 == repo && $2 == fork ]] || exec "$HUB_TEST_ROOT/test/stubs/gh" "$@"
 printf 'gh %s\n' "$*" >>"$HUB_TEST_LOG"
 printf '%s\n' "${GH_REPO-}" >"$HUB_TEST_TMP/gh.repo"
+pwd -P >"$HUB_TEST_TMP/gh.cwd"
+git config --get test.option >"$HUB_TEST_TMP/gh.config" || :
 owner=mislav name=${GH_REPO##*/} remote=origin
 while (($#)); do
   case $1 in
@@ -39,6 +42,27 @@ SH
   assert_equals "$(cat "$HUB_TEST_TMP/gh.repo")" github.com/dotcom/dotfiles
   assert_equals "$(remote_url mislav)" https://github.com/mislav/dotfiles.git
   assert_gh_called 'repo fork --remote --remote-name mislav'
+}
+
+@test "fork's printed gh line has the directory and configuration of -C and -c, as the real call has them" {
+  make_repo demo origin=https://github.com/acme/demo.git
+  cd ..
+  fake_gh_fork
+  run hub -C demo -c test.option=value fork --org acmefork
+  assert_success
+  assert_equals "$(cat "$HUB_TEST_TMP/gh.cwd")" "$(cd demo && pwd -P)"
+  assert_equals "$(cat "$HUB_TEST_TMP/gh.config")" value
+  assert_equals "$(git -C demo remote get-url acmefork)" https://github.com/acmefork/demo.git
+  git -C demo remote remove acmefork
+  rm "$HUB_TEST_TMP/gh.cwd" "$HUB_TEST_TMP/gh.config"
+  run hub --noop -C demo -c test.option=value fork --org acmefork
+  assert_success
+  [[ $output == "(cd "*" && env GIT_CONFIG_PARAMETERS=\"'test.option'='value'\" GH_REPO=github.com/acme/demo gh repo fork --remote --remote-name acmefork --org acmefork)" ]]
+  run bash -c "$output" # pasted back where hub was started
+  assert_success
+  assert_equals "$(cat "$HUB_TEST_TMP/gh.cwd")" "$(cd demo && pwd -P)"
+  assert_equals "$(cat "$HUB_TEST_TMP/gh.config")" value
+  assert_equals "$(git -C demo remote get-url acmefork)" https://github.com/acmefork/demo.git
 }
 
 @test "fork forks the upstream remote's repository, whatever gh's default is, and GH_REPO when set" {

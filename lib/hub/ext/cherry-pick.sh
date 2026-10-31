@@ -61,6 +61,7 @@ hub_ext_cherry_pick() {
       picks+=("$i")
     fi
   done
+  ((value == 0)) || hub::exec_git cherry-pick "$@" # the last option's value never came: git says so, before anything is fetched
   ((${#picks[@]})) || hub::exec_git cherry-pick "$@"
   HUB_PICK_TMP=''
   trap _hub_cherry_pick_cleanup EXIT

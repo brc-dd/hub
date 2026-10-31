@@ -62,6 +62,7 @@ hub_ext_merge() {
       esac
     fi
   done
+  ((value == 0)) || hub::exec_git merge "$@" # the last option's value never came: git says so, before anything is fetched
   [[ -n $url ]] || hub::exec_git merge "$@"
   if ((has_extra)); then
     [[ -n $extra ]] || extra="''"

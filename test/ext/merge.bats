@@ -258,6 +258,19 @@ assert_no_leftovers() {
   assert_no_leftovers
 }
 
+@test "merge with an option at the end that wants a value is git's, before anything is fetched" {
+  make_pr_fixture
+  run hub merge "$PR" -m
+  assert_failure
+  assert_output_contains "requires a value"
+  [[ -z $(git cat-file -t "$PR_HEAD" 2>/dev/null) ]] # the pull request was not fetched
+  assert_gh_not_called
+  assert_no_leftovers
+  run hub --noop merge "$PR" --strategy
+  assert_success
+  assert_output_equals "git merge $PR --strategy"
+}
+
 @test "merge passes other git-merge options on, in place" {
   make_pr_fixture
   stub_pr_message

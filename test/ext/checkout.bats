@@ -250,6 +250,26 @@ setup() {
     assert_success
     assert_output_equals "$CHECKOUT $PR"
   done
+  # integers as git reads them: a base prefix, a k, m or g suffix, int's range; what git refuses is git's
+  for v in 0x10 0X1F 07 1k 1K 1m 1g 2097151k 2147483647 -2147483647 -2147483648 ' 1' $'\t1'; do
+    run hub --noop checkout "--recurse-submodules=$v" "$PR"
+    assert_success
+    assert_output_equals "$CHECKOUT $PR --recurse-submodules"
+  done
+  for v in 0k 00; do
+    run hub --noop checkout "--recurse-submodules=$v" "$PR"
+    assert_success
+    assert_output_equals "$CHECKOUT $PR"
+  done
+  for v in 08 0x 2097152k 2147483648 18446744073709551616 '1 ' 1.0 1e3 k 1kk; do
+    run hub --noop checkout "--recurse-submodules=$v" "$PR"
+    assert_success
+    assert_output_equals "git checkout $(printf '%q' "--recurse-submodules=$v") $PR"
+  done
+  run hub checkout --recurse-submodules=2147483648 "$PR"
+  assert_failure
+  assert_output_contains "bad recurse-submodules argument: 2147483648"
+  assert_gh_not_called
   run hub --noop checkout --recurse=no "$PR" -d
   assert_success
   assert_output_equals "$CHECKOUT $PR --detach"

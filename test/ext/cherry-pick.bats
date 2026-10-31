@@ -400,3 +400,18 @@ git cherry-pick $SHA"
   assert_line_equals 1 "git cherry-pick --first-parent $(git rev-parse feature)"
   assert_gh_not_called
 }
+
+@test "cherry-pick with an option at the end that wants a value is git's, before anything is fetched" {
+  serve_github mislav/dotfiles jingweno/dotfiles
+  local sha
+  sha=$(served_commit jingweno/dotfiles fix-build)
+  clone_served mislav/dotfiles
+  run hub cherry-pick "https://github.com/jingweno/dotfiles/commit/$sha" -m
+  assert_failure
+  assert_output_contains "requires a value"
+  [[ -z $(git cat-file -t "$sha" 2>/dev/null) ]] # nothing was fetched
+  assert_no_private_refs
+  run hub --noop cherry-pick "https://github.com/jingweno/dotfiles/commit/$sha" --strategy
+  assert_success
+  assert_output_equals "git cherry-pick https://github.com/jingweno/dotfiles/commit/$sha --strategy"
+}

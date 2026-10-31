@@ -301,3 +301,14 @@ git am --sign TMP/1.patch"
   assert_success
   assert_output_contains "Usage: hub am"
 }
+
+@test "am with an option at the end that wants a value is git's, before anything is downloaded" {
+  make_repo work
+  run hub am "$PR" --whitespace
+  assert_failure
+  assert_output_contains "requires a value"
+  assert_gh_not_called
+  run hub --noop apply "$PR" -p
+  assert_success
+  assert_output_equals "git apply $PR -p"
+}

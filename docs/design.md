@@ -197,11 +197,15 @@ Common rules:
   shell-quoted command lines: `hub::git`, `hub::gh`, `hub::run`,
   `hub::exec_git`, `hub::exec_gh` (`git …`, `gh …`), `hub::open_url`
   (`open URL`) and `hub::copy` (`copy to clipboard: …`). Printed git lines
-  start with the global options the user gave hub, so they can be pasted
-  back into the same shell. gh has no `-C`, so a printed gh line becomes
+  start with the global options the user gave hub, so they can be pasted back
+  into the same shell. gh has no `-C`, so a printed gh line becomes
   `(cd DIR && gh …)` when `-C` moved hub away from the directory it was
   started in (`HUB_INVOKED_PWD`, `hub::gh_line`), and a gh that needs a
-  variable is printed as `env VAR=VALUE gh …`. Read-only lookups use
+  variable is printed as `env VAR=VALUE gh …`, the `GH_HOST` hub derived from
+  `GITHUB_HOST` among them, since the shell has `GITHUB_HOST` alone, which gh
+  does not read. Every gh call with side effects goes through `hub::gh` (with
+  `env VAR=VALUE` in front when it needs a variable), so that its printed line
+  has that context; `hub::run` is for other programs. Read-only lookups use
   `hub::git_query` and `hub::gh_query`, which always run, so `--noop` shows
   what would really happen in this repository.
 - **Never change directory.** The user's directory is the context for every
@@ -241,7 +245,8 @@ Common rules:
   rewrites them. Explicit `OWNER/REPO` arguments use the default host
   (`hub::host`), which follows gh's rule: `GH_HOST`, else the single host gh is
   logged in to, else github.com. hub 2.x's `GITHUB_HOST` is accepted and
-  exported to gh as `GH_HOST`, so both tools resolve the same host.
+  exported to gh as `GH_HOST`, so both tools resolve the same host, and a
+  printed gh line carries that `GH_HOST`.
 - **Your login** comes from gh's cached `gh config get user -h HOST`, else
   `gh api user` (`hub::current_user`). A bare `REPO` argument means
   `LOGIN/REPO`.

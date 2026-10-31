@@ -369,6 +369,26 @@ is not.
   every operand is a remote: the synopsis says so now, an operand after a list
   that is neither a remote, a group nor a user is refused before anything is
   added, and refspecs go with one user.
+- Found by the review of the thirteenth round: the option normalizer of hub's
+  own commands split a long option's separate value that starts with a dash
+  into short options (`--message '-pd'` gave `pull-request` the title `-p` and
+  `--draft`, `--description '-po'` gave `create` the description `-p` and
+  `-o`), while `-m '-pd'` and `--message=-pd` kept the value; the value is now
+  the next argument, whatever it looks like. `fork` ran gh through the generic
+  runner, so its `--noop` line lacked the directory and configuration that
+  git's `-C` and `-c` gave the real call; it goes through the gh runner, which
+  prints them. A printed gh line lacked the `GH_HOST` hub derives from
+  `GITHUB_HOST`, so pasted into the shell, which has `GITHUB_HOST` alone, gh
+  would have talked to another host; the derived `GH_HOST` is printed. `fetch
+  USER` added the remote before git refused an option at the end of the
+  command line that wanted a value (`hub fetch alice --depth`), and `merge`,
+  `cherry-pick`, `am` and `apply` fetched or downloaded before git refused
+  one; such a command line is git's as given, before anything is done (`push`
+  hands it over too, instead of expanding the list first). `checkout
+  --recurse-submodules=VALUE` read an integer as bash does, so `2147483648`,
+  which git refuses, reached gh as true, and a longer one wrapped around; the
+  value is read by git itself (`git config --type=bool`), bases, `k`, `m` and
+  `g` suffixes and int's range included.
 - The option table and the usage of a git command are read once per run, as
   documented; read through `hub::git_option`, they were asked of git again
   for every option on the command line.

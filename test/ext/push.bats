@@ -204,3 +204,17 @@ load ../test_helper
   run hub --noop push -h
   assert_output_equals "git push -h"
 }
+
+@test "push with an option at the end that wants a value is git's, as given" {
+  serve_github me/r me/r2
+  clone_served me/r
+  git remote add two https://github.com/me/r2.git
+  git commit -q --allow-empty -m work
+  run hub push origin,two --receive-pack
+  assert_failure
+  assert_output_contains "requires a value"
+  [[ $(server_ref me/r main) != "$(git rev-parse HEAD)" ]] # nothing was pushed
+  run hub --noop push origin,two --push-option
+  assert_success
+  assert_output_equals "git push origin,two --push-option"
+}

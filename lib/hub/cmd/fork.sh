@@ -91,8 +91,7 @@ hub_cmd_fork() {
   hub::valid_remote_name "$remote" || hub::die "Aborted: not a remote name: '$remote'"
   ! hub::remote_exists "$remote" || hub::die "Aborted: a remote named '$remote' already exists; pick another name with --remote-name NAME."
 
-  hub::require_gh
-  hub::run env "GH_REPO=$host/$proj" gh repo fork --remote --remote-name "$remote" "${opts[@]}" || exit
+  hub::gh env "GH_REPO=$host/$proj" repo fork --remote --remote-name "$remote" "${opts[@]}" || exit
   _hub_fork_fix_url "$remote" "$host" "$proj" "$owner/${fork_name:-${proj#*/}}"
 }
 

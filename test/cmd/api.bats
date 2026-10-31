@@ -84,6 +84,13 @@ SH
   GH_HOST=one.example.com GITHUB_HOST=two.example.com PATH=$SHIM_PATH run hub api user </dev/null
   assert_success
   assert_output_equals "gh api user | GH_HOST=one.example.com | stdin="
+  # the printed line carries the GH_HOST hub derived: the shell it is pasted into has GITHUB_HOST, which gh does not read
+  GITHUB_HOST=ghe.example.com run hub --noop api user
+  assert_success
+  assert_output_equals "env GH_HOST=ghe.example.com gh api user"
+  GH_HOST=one.example.com GITHUB_HOST=two.example.com run hub --noop api user
+  assert_success
+  assert_output_equals "gh api user"
 }
 
 @test "api adds no repository of its own: placeholders are gh's to fill from the remotes, GH_REPO or -R" {

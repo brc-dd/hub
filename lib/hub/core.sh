@@ -24,9 +24,12 @@ declare -p HUB_GIT_GLOBALS >/dev/null 2>&1 || HUB_GIT_GLOBALS=()
 
 # hub 2.x configured Enterprise hosts with GITHUB_HOST; gh reads GH_HOST. Make
 # gh see the same default host, or hub would build URLs for one host while gh
-# creates, deletes and queries on another.
+# creates, deletes and queries on another. HUB_GH_HOST_DERIVED remembers that
+# hub set it (exported: it must outlive the re-exec through git), so that a
+# printed gh line carries GH_HOST, which the shell it is pasted into lacks.
+: "${HUB_GH_HOST_DERIVED:=0}"
 if [[ -z ${GH_HOST:-} && -n ${GITHUB_HOST:-} ]]; then
-  export GH_HOST=$GITHUB_HOST
+  export GH_HOST=$GITHUB_HOST HUB_GH_HOST_DERIVED=1
 fi
 
 # ---------------------------------------------------------------------------
@@ -100,6 +103,13 @@ hub::git() {
 
 # hub::git_query ARGS... : read-only git call; always runs, stderr silenced.
 hub::git_query() { git "$@" 2>/dev/null; }
+
+# hub::git_bool VALUE : VALUE as git reads a boolean (git checkout --recurse-submodules=VALUE, a
+# configuration value): true, yes, on, false, no, off in any case, and an integer that fits an int,
+# base prefix (0x10, 010) and k, m or g suffix included, true unless zero. Prints true or false;
+# returns 1 for a value git refuses. Asked of git itself (`git config --type=bool`), so that git's
+# spellings, bases and limits are never hub's to know.
+hub::git_bool() { hub::git_query -c "hub.boolean=$1" config --type=bool --get hub.boolean; }
 
 # hub::exec_git ARGS... : hand the process over to git (printed under --noop, then exit 0).
 hub::exec_git() {
@@ -247,19 +257,24 @@ hub::dquote_text() {
 # hub::gh_line WORDS... : a gh command line as the user could run it (for --noop and debug output):
 # WORDS is `gh ...`, or `env VAR=VALUE gh ...`. gh takes none of git's global options; what they
 # put in the environment, which gh and its git children inherit, is printed as an env prefix
-# (hub::git_env). gh has no -C: when git's -C made hub run in another directory than the one it
-# was started in, the line is `(cd DIR && gh ...)`.
+# (hub::git_env), and so is the GH_HOST hub derived from GITHUB_HOST, which gh does not read, unless
+# WORDS set GH_HOST themselves. gh has no -C: when git's -C made hub run in another directory than
+# the one it was started in, the line is `(cd DIR && gh ...)`.
 hub::gh_line() {
   local -a words
-  local line
+  local line own_host=0
   hub::git_env
   words=("${HUB_GIT_ENV[@]}")
   if [[ $1 == env ]]; then
     shift
     while [[ ${1-} == [A-Za-z_]*=* ]]; do
+      [[ $1 != GH_HOST=* ]] || own_host=1
       words+=("$(hub::quote "$1")")
       shift
     done
+  fi
+  if ((HUB_GH_HOST_DERIVED && ! own_host)); then # the shell the line is pasted into has GITHUB_HOST alone
+    words=("$(hub::quote "GH_HOST=$GH_HOST")" "${words[@]}")
   fi
   line=$(hub::quote "$@")
   ((${#words[@]} == 0)) || line="env ${words[*]} $line"
@@ -270,16 +285,27 @@ hub::gh_line() {
   fi
 }
 
-# hub::gh ARGS... : gh call with side effects (printed under --noop). gh's own git subprocesses
-# inherit the same environment as hub's git.
+# hub::gh [env VAR=VALUE...] ARGS... : gh call with side effects (printed under --noop, through
+# hub::gh_line, with the directory and environment the real call has). gh's own git subprocesses
+# inherit the same environment as hub's git; the VAR=VALUE words after a leading `env` are set for
+# this call alone.
 hub::gh() {
+  local -a pre=()
   hub::require_gh
+  if [[ $1 == env ]]; then
+    pre=(env)
+    shift
+    while [[ ${1-} == [A-Za-z_]*=* ]]; do
+      pre+=("$1")
+      shift
+    done
+  fi
   if ((HUB_NOOP)); then
-    hub::gh_line gh "$@"
+    hub::gh_line "${pre[@]}" gh "$@"
     return 0
   fi
-  hub::debug "\$ $(hub::gh_line gh "$@")"
-  gh "$@"
+  hub::debug "\$ $(hub::gh_line "${pre[@]}" gh "$@")"
+  "${pre[@]}" gh "$@"
 }
 
 # hub::gh_query ARGS... : read-only gh call that always runs (used to work out what to do).
@@ -337,11 +363,13 @@ hub::gh_subcommand_args() {
 }
 
 # hub::normalize_opts SHORTS LONGS ARGS... : HUB_ARGS gets ARGS with short-option clusters split
-# (-pf -> -p -f), attached values detached (-bmain -> -b main, --base=main -> --base main) and
-# everything after -- kept as it is. SHORTS lists the short options that take a value ("bhm");
-# LONGS the long ones, space-separated ("--base --head"). Unknown options and operands are kept
-# as they are, for the caller's case statement to accept or reject. An operand is anything that
-# does not start with -, plus - itself.
+# (-pf -> -p -f), attached values detached (-bmain -> -b main, --base=main -> --base main), the
+# separate value of an option that takes one kept whole, whatever it looks like (-m -pd and
+# --message -pd give the message -pd, as gh and git read them), and everything after -- kept as
+# it is. SHORTS lists the short options that take a value ("bhm"); LONGS the long ones,
+# space-separated ("--base --head"). Unknown options and operands are kept as they are, for the
+# caller's case statement to accept or reject. An operand is anything that does not start with -,
+# plus - itself.
 hub::normalize_opts() {
   local shorts=$1 longs=" $2 " arg name c i
   shift 2
@@ -358,7 +386,14 @@ hub::normalize_opts() {
         name=${arg%%=*}
         if [[ $longs == *" $name "* ]]; then HUB_ARGS+=("$name" "${arg#*=}"); else HUB_ARGS+=("$arg"); fi
         ;;
-      --?*) HUB_ARGS+=("$arg") ;;
+      --?*)
+        if [[ $longs == *" $arg "* ]] && (($#)); then # its value is the next argument, whatever it looks like
+          HUB_ARGS+=("$arg" "$1")
+          shift
+        else
+          HUB_ARGS+=("$arg") # the caller reports the missing value
+        fi
+        ;;
       -?*)
         for ((i = 1; i < ${#arg}; i++)); do
           c=${arg:i:1}

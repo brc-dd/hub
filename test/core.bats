@@ -407,6 +407,9 @@ EOF
   [[ $(printf '%s|' "${HUB_ARGS[@]}") == '--other=1|--flag|2|' ]]
   hub::normalize_opts m '' -pm msg
   [[ $(printf '%s|' "${HUB_ARGS[@]}") == '-p|-m|msg|' ]]
+  # a long option's separate value is the next argument, whatever it looks like, as with -m and --message=
+  hub::normalize_opts m '--message' --message -pd -m -pd --message=-pd --message --draft -p --message
+  [[ $(printf '%s|' "${HUB_ARGS[@]}") == '--message|-pd|-m|-pd|--message|-pd|--message|--draft|-p|--message|' ]]
   hub::normalize_opts '' ''
   [[ ${#HUB_ARGS[@]} -eq 0 ]]
 }
@@ -425,11 +428,13 @@ EOF
   [[ $(git tag) == v1 ]]
 }
 
-@test "GITHUB_HOST is passed on to gh as GH_HOST" {
-  run env -u GH_HOST GITHUB_HOST=ghe.example.com bash -c 'source "$HUB_TEST_ROOT/lib/hub/core.sh"; printf "%s\n" "$GH_HOST"'
-  [[ $output == ghe.example.com ]]
-  run env GH_HOST=other.example.com GITHUB_HOST=ghe.example.com bash -c 'source "$HUB_TEST_ROOT/lib/hub/core.sh"; printf "%s\n" "$GH_HOST"'
-  [[ $output == other.example.com ]]
+@test "GITHUB_HOST is passed on to gh as GH_HOST, which printed gh lines carry: the shell has GITHUB_HOST alone" {
+  run env -u GH_HOST GITHUB_HOST=ghe.example.com bash -c 'source "$HUB_TEST_ROOT/lib/hub/core.sh"; printf "%s\n" "$GH_HOST"; hub::gh_line gh api user; hub::gh_line env GH_HOST=github.com gh pr checkout URL; HUB_GIT_GLOBALS=(-c a.b=c); hub::gh_line env GH_REPO=o/r gh repo fork'
+  assert_success
+  assert_output_equals $'ghe.example.com\nenv GH_HOST=ghe.example.com gh api user\nenv GH_HOST=github.com gh pr checkout URL\nenv GH_HOST=ghe.example.com GIT_CONFIG_PARAMETERS="\'a.b\'=\'c\'" GH_REPO=o/r gh repo fork'
+  run env GH_HOST=other.example.com GITHUB_HOST=ghe.example.com bash -c 'source "$HUB_TEST_ROOT/lib/hub/core.sh"; printf "%s\n" "$GH_HOST"; hub::gh_line gh api user'
+  assert_success
+  assert_output_equals $'other.example.com\ngh api user'
 }
 
 @test "default_branch asks gh about the remote's own host" {

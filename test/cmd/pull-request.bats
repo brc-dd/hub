@@ -1229,3 +1229,20 @@ no_gh_path() {
   assert_success
   assert_output_equals "gh pr create --repo github.com/alice/repo --base main --head topic --title Upstream\\ topic\\ message --body ''"
 }
+
+@test "a long option's separate value that starts with a dash is the value, not options" {
+  feature_repo
+  run hub --noop pull-request -f --base main --message '-pd'
+  assert_success
+  assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --base main --head feature --title -pd --body ''"
+  run hub --noop pull-request -f -m '-pd' --base main
+  assert_success
+  assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --base main --head feature --title -pd --body ''"
+  run hub --noop pull-request -f --message='-pd' --base main
+  assert_success
+  assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --base main --head feature --title -pd --body ''"
+  run hub --noop pull-request -f --base main --message '-fix this' -d
+  assert_success
+  assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --base main --head feature --title -fix\\ this --body '' --draft"
+  assert_gh_not_called
+}

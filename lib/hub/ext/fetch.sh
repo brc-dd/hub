@@ -7,15 +7,18 @@
 # A git command hub extends: git fetch's options apply, and hub recognizes one operand, the
 # repository: a GitHub USER, or a comma-separated list of them. For each USER that is not yet a
 # remote or remote group, hub adds a remote named USER that points at USER's copy of the current
-# project (as `hub remote add USER` does), then runs git fetch with the arguments as given; a
-# list becomes its members in its place, with --multiple put first on the command line (before
-# any `--`), and every other operand is then a remote, a group or a USER, as with --multiple
-# given: `git fetch --multiple` takes no refspecs, so refspecs go with one USER alone (hub fetch
-# USER REFSPEC...), and an operand after a list that is none of the three is refused before
-# anything is added. With --multiple (or -m) in effect, every operand is a remote, a group or a
-# USER. The last of --multiple and --no-multiple on the command line counts, as in git; when it is
-# --no-multiple, a list is one repository name for git, and goes to it unchanged. Nothing is
-# looked up on GitHub, and git's --dry-run does not stop hub from adding the remotes.
+# project (as `hub remote add USER` does), then runs git fetch with the arguments as given; a list
+# becomes its members in its place, with --multiple put first on the command line (before any
+# `--`), and every other operand is then a remote, a group or a USER, as with --multiple given:
+# `git fetch --multiple` takes no refspecs, so refspecs go with one USER alone (hub fetch USER
+# REFSPEC...), and an operand after a list that is none of the three is refused before anything is
+# added. With --multiple (or -m) in effect, every operand is a remote, a group or a USER. The last
+# of --multiple and --no-multiple on the command line counts, as in git; when it is --no-multiple,
+# a list is one repository name for git, and goes to it unchanged. Nothing is looked up on GitHub,
+# and git's --dry-run does not stop hub from adding the remotes. An option that wants a value and
+# ends the command line leaves it to git, which says so, before any remote is added; the value of
+# an option is git's to judge, after the remotes are added, so a remote added before git refuses a
+# value (--depth 0) stays, as one added before a fetch that fails does.
 #
 # An operand goes to git unchanged when it is an existing remote or remote group, whatever its
 # name (a remote called `alice,bob` is never split, and one defined in the legacy .git/remotes
@@ -68,6 +71,7 @@ hub_ext_fetch() {
       esac
     fi
   done
+  ((value == 0)) || hub::exec_git fetch "$@" # the last option's value never came: git says so, before any remote is added
   ((all == 0 && ${#operands[@]})) || hub::exec_git fetch "$@"
   if ((multiple)); then
     for i in "${operands[@]}"; do

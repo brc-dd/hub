@@ -162,6 +162,13 @@ SH
   assert_output_equals "gh repo create github.com/mislav/dotfiles --source=$top --remote=origin --private --description Dots --homepage https://example.com"
   run hub --noop create -dDots
   assert_output_equals "gh repo create github.com/mislav/dotfiles --source=$top --remote=origin --private --description Dots"
+  # a separate value is the next argument, whatever it looks like: no -p, -o or -h is read in it
+  run hub --noop create --description '-po' --homepage '-h'
+  assert_success
+  assert_output_equals "gh repo create github.com/mislav/dotfiles --source=$top --remote=origin --private --description -po --homepage -h"
+  run hub --noop create -d '-fix this'
+  assert_success
+  assert_output_equals "gh repo create github.com/mislav/dotfiles --source=$top --remote=origin --private --description -fix\\ this"
   run hub create -d
   assert_failure
   assert_output_equals "Aborted: -d needs a value."

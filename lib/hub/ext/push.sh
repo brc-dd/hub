@@ -47,6 +47,7 @@ hub_ext_push() {
       esac
     fi
   done
+  ((value == 0)) || hub::exec_git push "$@" # the last option's value never came: git says so, as given
   if ((pos < 0)) || [[ ${args[pos]} != *,* || ${args[pos]} == *:* ]] || hub::remote_exists "${args[pos]}" || hub::local_source "${args[pos]}"; then
     hub::exec_git push "$@"
   fi

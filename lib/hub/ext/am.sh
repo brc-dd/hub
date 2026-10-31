@@ -46,6 +46,7 @@ _hub_am_run() {
       *) _hub_am_url "${args[i]}" && urls+=("$i") ;;
     esac
   done
+  ((value == 0)) || hub::exec_git "$cmd" "$@" # the last option's value never came: git says so, before anything is downloaded
   ((${#urls[@]})) || hub::exec_git "$cmd" "$@"
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/hub-$cmd.XXXXXX") || exit
   # shellcheck disable=SC2064  # expand $tmp now

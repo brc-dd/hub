@@ -328,6 +328,27 @@ git fetch --multiple --depth=1 carol -j4 alice --recurse-submodules bob --recurs
   [[ -z $(git for-each-ref refs/remotes/topic/) ]]
 }
 
+@test "an option at the end that wants a value leaves the command line to git, before any remote is added" {
+  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
+  run hub fetch alice --depth
+  assert_failure
+  assert_equals "$status" 129 # git's usage error, as for git fetch alice --depth
+  assert_output_contains "option \`depth' requires a value"
+  assert_equals "$(git remote)" origin
+  run hub fetch alice,bob -j
+  assert_failure
+  assert_output_contains "requires a value"
+  assert_equals "$(git remote)" origin
+  assert_gh_not_called
+  run hub --noop fetch --multiple alice --depth
+  assert_success
+  assert_output_equals "git fetch --multiple alice --depth"
+  # with its value, the remote is added and the option goes to git as given
+  run hub --noop fetch alice --depth 1
+  assert_success
+  assert_output_equals $'git remote add alice https://github.com/alice/dotfiles.git\ngit fetch alice --depth 1'
+}
+
 @test "remote groups are not mistaken for users" {
   serve_github mislav/dotfiles github/dotfiles alice/dotfiles
   clone_served mislav/dotfiles
