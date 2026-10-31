@@ -103,6 +103,28 @@ load ../test_helper
   assert_output_equals "git clone --bare --recurse-submodules --mirror -n -q https://github.com/mislav/dotfiles.git"
 }
 
+@test "abbreviated options are read as git reads them, and their values are never the repository" {
+  serve_github alice/dotfiles
+  run hub --noop clone --dep 1 alice/dotfiles
+  assert_success
+  assert_output_equals "git clone --dep 1 https://github.com/alice/dotfiles.git"
+  run hub clone --bra main alice/dotfiles dots
+  assert_success
+  assert_equals "$(git -C dots symbolic-ref --short HEAD)" main
+  assert_equals "$(git -C dots config remote.origin.url)" https://github.com/alice/dotfiles.git
+  # with a URL or a path, there is no shorthand to expand: the value stays what it is
+  run hub --noop clone --bra main https://github.com/alice/dotfiles.git
+  assert_output_equals "git clone --bra main https://github.com/alice/dotfiles.git"
+  run hub --noop clone --bra main file:///srv/repo.git
+  assert_output_equals "git clone --bra main file:///srv/repo.git"
+  # an option git would refuse, ambiguous here, leaves the command line to git
+  run hub --noop clone --re x alice/dotfiles
+  assert_output_equals "git clone --re x alice/dotfiles"
+  run hub clone --re x alice/dotfiles
+  assert_failure
+  assert_output_contains "ambiguous option"
+}
+
 @test "-- ends the options" {
   run hub --noop clone --depth 1 -- mislav/dotfiles dots
   assert_success

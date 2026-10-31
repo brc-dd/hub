@@ -17,9 +17,10 @@ stub_ci() {
 }
 
 # shim_gh : a gh in PATH that logs its calls, prints HUB_TEST_STATUSES for the status lookup and
-# HUB_TEST_CHECKS (the pages read so far; both tagged, with printf %b escapes) for the check-runs
-# lookup, then, when HUB_TEST_CHECKS_ERROR is set, fails the way gh does when a page cannot be
-# read: the error document on stdout, "gh: $HUB_TEST_CHECKS_ERROR" on stderr, exit 1.
+# HUB_TEST_CHECKS for the check-runs lookup (what hub's jq filters print: tagged lines, with printf
+# %b escapes; for the check runs, a "page\t" line per page read and a check line per check run),
+# then, when HUB_TEST_CHECKS_ERROR is set, fails the way gh does when a page cannot be read: the
+# error document on stdout, "gh: $HUB_TEST_CHECKS_ERROR" on stderr, exit 1.
 shim_gh() {
   mkdir -p "$HUB_TEST_TMP/shim"
   cat >"$HUB_TEST_TMP/shim/gh" <<'SH'
@@ -185,7 +186,7 @@ ci_repo() { make_repo dotfiles origin=https://github.com/mislav/dotfiles.git; }
     success ci/travis https://ci.example/1 \
     neutral lint https://github.com/r/5)"
   assert_gh_called 'api --hostname github.com --paginate repos/mislav/dotfiles/commits/*/status --jq .statuses\[\] | \["status", .state, .context, .target_url // ""\] | @tsv'
-  assert_gh_called 'api --hostname github.com --paginate repos/mislav/dotfiles/commits/*/check-runs --jq .check_runs\[\] | \["check", (if .status == "completed" then .conclusion else "pending" end), .name, .html_url // ""\] | @tsv'
+  assert_gh_called 'api --hostname github.com --paginate repos/mislav/dotfiles/commits/*/check-runs --jq (select((.check_runs | type) == "array") | \["page", ""\]), (.check_runs // \[\] | .\[\] | \["check", (if .status == "completed" then .conclusion else "pending" end), .name, .html_url // ""\]) | @tsv'
 }
 
 @test "-v keeps the exit code and says 'no status' when there are no checks" {
@@ -276,7 +277,7 @@ ci_repo() { make_repo dotfiles origin=https://github.com/mislav/dotfiles.git; }
 @test "a check-runs page that cannot be read after a failing check was keeps the failure" {
   ci_repo
   shim_gh
-  export HUB_TEST_CHECKS='check\tfailure\tlint\thttps://github.com/r/1\ncheck\tsuccess\tbuild\thttps://github.com/r/2'
+  export HUB_TEST_CHECKS='page\t\ncheck\tfailure\tlint\thttps://github.com/r/1\ncheck\tsuccess\tbuild\thttps://github.com/r/2'
   for HUB_TEST_CHECKS_ERROR in 'Resource not accessible by integration (HTTP 403)' 'Not Found (HTTP 404)' \
     'Validation Failed (HTTP 422)' 'Server Error (HTTP 500)'; do
     export HUB_TEST_CHECKS_ERROR
@@ -291,7 +292,7 @@ ci_repo() { make_repo dotfiles origin=https://github.com/mislav/dotfiles.git; }
       "$(printf '%s\t%s\t%s\n' failure lint https://github.com/r/1 success build https://github.com/r/2 success ci https://ci.example/1)")"
   done
   # a check that was cancelled is a failure, too
-  HUB_TEST_CHECKS='check\tcancelled\tdeploy\thttps://github.com/r/3' run hub ci-status
+  HUB_TEST_CHECKS='page\t\ncheck\tcancelled\tdeploy\thttps://github.com/r/3' run hub ci-status
   assert_status 1
   assert_output_equals "$(printf '%s\n' "gh: $HUB_TEST_CHECKS_ERROR" \
     "hub ci-status: not every check run could be read; the cancelled already seen is final" cancelled)"
@@ -301,8 +302,8 @@ ci_repo() { make_repo dotfiles origin=https://github.com/mislav/dotfiles.git; }
   ci_repo
   shim_gh
   local checks
-  for checks in 'check\tsuccess\tbuild\thttps://github.com/r/2' 'check\tpending\tbuild\thttps://github.com/r/2' \
-    'check\tskipped\tbuild\thttps://github.com/r/2'; do
+  for checks in 'page\t\ncheck\tsuccess\tbuild\thttps://github.com/r/2' 'page\t\ncheck\tpending\tbuild\thttps://github.com/r/2' \
+    'page\t\ncheck\tskipped\tbuild\thttps://github.com/r/2'; do
     export HUB_TEST_CHECKS=$checks
     for HUB_TEST_CHECKS_ERROR in 'Resource not accessible by integration (HTTP 403)' 'Not Found (HTTP 404)' \
       'Validation Failed (HTTP 422)' 'Server Error (HTTP 500)'; do
@@ -315,6 +316,27 @@ ci_repo() { make_repo dotfiles origin=https://github.com/mislav/dotfiles.git; }
       assert_output_equals "gh: $HUB_TEST_CHECKS_ERROR"
     done
   done
+}
+
+@test "a check-runs page that cannot be read after an empty page is an error, not a verdict" {
+  ci_repo
+  shim_gh
+  export HUB_TEST_CHECKS='page\t' # the first page was read and held no check run; the next one fails
+  for HUB_TEST_CHECKS_ERROR in 'Resource not accessible by integration (HTTP 403)' 'Not Found (HTTP 404)' \
+    'Validation Failed (HTTP 422)'; do
+    export HUB_TEST_CHECKS_ERROR
+    run hub ci-status
+    assert_status 1
+    assert_output_equals "gh: $HUB_TEST_CHECKS_ERROR"
+    run hub ci-status -v
+    assert_status 1
+    assert_output_equals "gh: $HUB_TEST_CHECKS_ERROR"
+  done
+  # refused on the first page, with nothing read: the statuses decide, as always
+  unset HUB_TEST_CHECKS
+  run hub ci-status
+  assert_status 0
+  assert_output_equals "success"
 }
 
 @test "a status that failed is final even when the check runs cannot be read at all" {

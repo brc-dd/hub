@@ -180,7 +180,7 @@ warning: 'x-pushed' seems to contain unpushed commits"
   make_sync_fixture
   local c
   c=$(child_of refs/heads/behind "concurrent work")
-  shim_git 'update-ref -m * refs/heads/behind *' "git update-ref refs/heads/behind $c"
+  shim_git 'update-ref --no-deref -m * refs/heads/behind *' "git update-ref refs/heads/behind $c"
   PATH=$SHIM_PATH run hub sync
   assert_failure
   assert_output_contains "error: 'behind' changed while syncing; leaving it alone"
@@ -207,7 +207,7 @@ warning: 'x-pushed' seems to contain unpushed commits"
   make_sync_fixture
   local c
   c=$(child_of refs/heads/merged "concurrent work")
-  shim_git 'update-ref -d refs/heads/merged *' "git update-ref refs/heads/merged $c"
+  shim_git 'update-ref --no-deref -d refs/heads/merged *' "git update-ref refs/heads/merged $c"
   PATH=$SHIM_PATH run hub sync
   assert_failure
   assert_output_contains "error: 'merged' changed while syncing; leaving it alone"
@@ -219,12 +219,40 @@ warning: 'x-pushed' seems to contain unpushed commits"
   make_sync_fixture
   local d
   d=$(child_of refs/heads/behind "elsewhere")
-  shim_git 'update-ref -m * refs/heads/behind *' "git update-ref refs/remotes/origin/behind $d"
+  shim_git 'update-ref --no-deref -m * refs/heads/behind *' "git update-ref refs/remotes/origin/behind $d"
   PATH=$SHIM_PATH run hub sync
   assert_success
   assert_output_contains "Updated branch behind (was "
   assert_equals "$(tip behind)" "$(server_ref mislav/dotfiles behind)"
   [[ $(git rev-parse refs/remotes/origin/behind) == "$d" ]]
+}
+
+@test "sync writes the ref it examined, never another branch through a symbolic ref made meanwhile" {
+  make_sync_fixture
+  local old
+  old=$(tip behind)
+  # between sync's look and its update, behind becomes a symbolic ref to a branch at the same commit
+  shim_git 'update-ref --no-deref -m * refs/heads/behind *' 'git branch target refs/heads/behind && git symbolic-ref refs/heads/behind refs/heads/target'
+  PATH=$SHIM_PATH run hub sync
+  assert_success
+  assert_output_contains "Updated branch behind (was "
+  [[ -e $HUB_TEST_TMP/shim/done ]]
+  [[ -z $(git symbolic-ref -q refs/heads/behind) ]] # a plain branch again, at the new commit
+  assert_equals "$(tip behind)" "$(server_ref mislav/dotfiles behind)"
+  [[ $(tip target) == "$old" ]] # the branch the symbolic ref pointed at is untouched
+}
+
+@test "sync deletes the ref it examined, never the branch a symbolic ref made meanwhile points at" {
+  make_sync_fixture
+  local old
+  old=$(tip merged)
+  shim_git 'update-ref --no-deref -d refs/heads/merged *' 'git branch keep refs/heads/merged && git symbolic-ref refs/heads/merged refs/heads/keep'
+  PATH=$SHIM_PATH run hub sync
+  assert_success
+  assert_output_contains "Deleted branch merged (was "
+  [[ -e $HUB_TEST_TMP/shim/done ]]
+  [[ -z $(git symbolic-ref -q refs/heads/merged) && -z $(tip merged) ]]
+  [[ $(tip keep) == "$old" ]]
 }
 
 @test "sync skips symbolic refs among the branches and fast-forwards their target through the work tree" {
@@ -327,19 +355,19 @@ warning: 'x-pushed' seems to contain unpushed commits"
   assert_success
   assert_output_equals "git fetch --prune --quiet --refmap= origin +refs/heads/\\*:refs/remotes/origin/\\*
 warning: 'ahead' seems to contain unpushed commits
-git update-ref -m hub\\ sync:\\ fast-forward\\ to\\ origin/behind refs/heads/behind $(server_ref mislav/dotfiles behind) $(tip behind)
+git update-ref --no-deref -m hub\\ sync:\\ fast-forward\\ to\\ origin/behind refs/heads/behind $(server_ref mislav/dotfiles behind) $(tip behind)
 warning: 'diverged' seems to contain unpushed commits
 git merge --ff-only --no-squash --quiet $(server_ref mislav/dotfiles main)
-git update-ref -d refs/heads/merged $(tip merged)
+git update-ref --no-deref -d refs/heads/merged $(tip merged)
 git config --remove-section branch.merged
-git update-ref -m hub\\ sync:\\ fast-forward\\ to\\ origin/same-name refs/heads/same-name $(server_ref mislav/dotfiles same-name) $(tip same-name)
+git update-ref --no-deref -m hub\\ sync:\\ fast-forward\\ to\\ origin/same-name refs/heads/same-name $(server_ref mislav/dotfiles same-name) $(tip same-name)
 warning: 'unmerged' was deleted on origin, but appears not merged into 'main'"
   [[ $(git for-each-ref) == "$before" && -z $(git status --porcelain) ]]
   git switch -q merged
   run hub --noop sync
   assert_success
   assert_output_contains "git switch --quiet --no-guess main
-git update-ref -d refs/heads/merged $(tip merged)"
+git update-ref --no-deref -d refs/heads/merged $(tip merged)"
   [[ $(git for-each-ref) == "$before" && $(git symbolic-ref --short HEAD) == merged ]]
 }
 

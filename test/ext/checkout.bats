@@ -2,11 +2,18 @@
 load ../test_helper
 
 PR=https://github.com/mislav/dotfiles/pull/12
+CHECKOUT="env GH_HOST=github.com gh pr checkout" # what runs for a github.com pull request
+
+# git lists checkout's options, which hub reads to find the URL, only inside a repository.
+setup() {
+  hub_test_setup
+  make_repo work
+}
 
 @test "checkout of a pull request URL hands off to gh pr checkout" {
   run hub --noop checkout "$PR"
   assert_success
-  assert_output_equals "gh pr checkout $PR"
+  assert_output_equals "$CHECKOUT $PR"
   assert_gh_not_called
   stub_gh "pr checkout $PR" ''
   run hub checkout "$PR"
@@ -17,13 +24,13 @@ PR=https://github.com/mislav/dotfiles/pull/12
 @test "checkout of a pull request URL into a named branch" {
   run hub --noop checkout "$PR" fix-build
   assert_success
-  assert_output_equals "gh pr checkout $PR -b fix-build"
+  assert_output_equals "$CHECKOUT $PR -b fix-build"
   run hub --noop checkout -b fix-build "$PR"
   assert_success
-  assert_output_equals "gh pr checkout $PR -b fix-build"
+  assert_output_equals "$CHECKOUT $PR -b fix-build"
   run hub --noop checkout -bfix-build "$PR"
   assert_success
-  assert_output_equals "gh pr checkout $PR -b fix-build"
+  assert_output_equals "$CHECKOUT $PR -b fix-build"
   stub_gh "pr checkout $PR -b fix-build" ''
   run hub checkout "$PR" fix-build
   assert_success
@@ -33,17 +40,17 @@ PR=https://github.com/mislav/dotfiles/pull/12
 @test "the branch name is the last of -b BRANCH and the operand after the URL" {
   run hub --noop checkout -b one "$PR" two
   assert_success
-  assert_output_equals "gh pr checkout $PR -b two"
+  assert_output_equals "$CHECKOUT $PR -b two"
   run hub --noop checkout -b one -b two "$PR"
   assert_success
-  assert_output_equals "gh pr checkout $PR -b two"
+  assert_output_equals "$CHECKOUT $PR -b two"
   run hub --noop checkout "$PR" one -b two
   assert_success
-  assert_output_equals "gh pr checkout $PR -b two"
+  assert_output_equals "$CHECKOUT $PR -b two"
 }
 
 @test "an empty branch name is an error, not an omitted name" {
-  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
+  cd .. && make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
   run hub checkout -b '' "$PR"
   assert_failure
   assert_output_equals "Aborted: the branch name is empty"
@@ -60,25 +67,25 @@ PR=https://github.com/mislav/dotfiles/pull/12
   # an earlier empty value is overridden by a later one, as git does
   run hub --noop checkout -b '' -b chosen "$PR"
   assert_success
-  assert_output_equals "gh pr checkout $PR -b chosen"
+  assert_output_equals "$CHECKOUT $PR -b chosen"
 }
 
 @test "checkout passes --detach and --recurse-submodules on to gh" {
   run hub --noop checkout --recurse-submodules "$PR" -d
   assert_success
-  assert_output_equals "gh pr checkout $PR --recurse-submodules --detach"
+  assert_output_equals "$CHECKOUT $PR --recurse-submodules --detach"
   run hub --noop checkout --detach "$PR"
-  assert_output_equals "gh pr checkout $PR --detach"
+  assert_output_equals "$CHECKOUT $PR --detach"
 }
 
 @test "checkout of any page of a pull request, or on an enterprise host, goes to gh" {
   run hub --noop checkout "$PR/files"
   assert_success
-  assert_output_equals "gh pr checkout $PR/files"
+  assert_output_equals "$CHECKOUT $PR/files"
   git config --global hub.host ghe.example.com
   run hub --noop checkout https://ghe.example.com/team/app/pull/7
   assert_success
-  assert_output_equals "gh pr checkout https://ghe.example.com/team/app/pull/7"
+  assert_output_equals "env GH_HOST=ghe.example.com gh pr checkout https://ghe.example.com/team/app/pull/7"
 }
 
 @test "checkout -f with a pull request URL is refused, because gh's --force resets the branch" {
@@ -124,7 +131,7 @@ PR=https://github.com/mislav/dotfiles/pull/12
 }
 
 @test "checkout really runs git checkout" {
-  make_repo dotfiles
+  cd .. && make_repo dotfiles
   git branch feature
   run hub checkout -q feature
   assert_success
@@ -133,7 +140,7 @@ PR=https://github.com/mislav/dotfiles/pull/12
 }
 
 @test "the value of an option is never taken for the pull request URL" {
-  make_repo dotfiles
+  cd .. && make_repo dotfiles
   printf 'committed\n' >file
   git add file && git commit -qm base
   mkdir -p 'https:/github.com/o/r/pull'
@@ -172,6 +179,55 @@ PR=https://github.com/mislav/dotfiles/pull/12
   run hub --noop checkout main -- "$PR"
   assert_success
   assert_output_equals "git checkout main -- $PR"
+}
+
+@test "checkout tells gh the URL's host through GH_HOST, whatever host gh defaults to" {
+  # a gh that records the host it was given, with its arguments
+  mkdir -p "$HUB_TEST_TMP/bin"
+  printf '#!/usr/bin/env bash\nprintf "%%s|%%s\\n" "${GH_HOST-unset}" "$*" >>"%s/gh.hosts"\n' "$HUB_TEST_TMP" >"$HUB_TEST_TMP/bin/gh"
+  chmod +x "$HUB_TEST_TMP/bin/gh"
+  PATH=$HUB_TEST_TMP/bin:$PATH run hub checkout "$PR"
+  assert_success
+  assert_equals "$(<"$HUB_TEST_TMP/gh.hosts")" "github.com|pr checkout $PR"
+  # gh's own default host does not decide
+  export GH_HOST=ghe.example.com
+  : >"$HUB_TEST_TMP/gh.hosts"
+  PATH=$HUB_TEST_TMP/bin:$PATH run hub checkout "$PR" fix-build
+  assert_success
+  assert_equals "$(<"$HUB_TEST_TMP/gh.hosts")" "github.com|pr checkout $PR -b fix-build"
+  run hub --noop checkout "$PR"
+  assert_output_equals "$CHECKOUT $PR"
+  unset GH_HOST
+  git config --global hub.host ghe.example.com
+  : >"$HUB_TEST_TMP/gh.hosts"
+  PATH=$HUB_TEST_TMP/bin:$PATH run hub checkout https://ghe.example.com/team/app/pull/7
+  assert_success
+  assert_equals "$(<"$HUB_TEST_TMP/gh.hosts")" "ghe.example.com|pr checkout https://ghe.example.com/team/app/pull/7"
+}
+
+@test "checkout reads abbreviated options and clusters as git does" {
+  run hub --noop checkout --det "$PR"
+  assert_success
+  assert_output_equals "$CHECKOUT $PR --detach"
+  run hub --noop checkout --recurse "$PR"
+  assert_output_equals "$CHECKOUT $PR --recurse-submodules"
+  run hub --noop checkout -db fix-build "$PR"
+  assert_output_equals "$CHECKOUT $PR --detach -b fix-build"
+  run hub --noop checkout -dbfix-build "$PR"
+  assert_output_equals "$CHECKOUT $PR --detach -b fix-build"
+  # the value of an abbreviated option is never the URL
+  printf 'file\n' >list.txt
+  run hub --noop checkout --pathspec-from "$PR"
+  assert_output_equals "git checkout --pathspec-from $PR"
+  run hub --noop checkout --pathspec-from list.txt
+  assert_output_equals "git checkout --pathspec-from list.txt"
+  # an option git would refuse, ambiguous here, leaves the command line to git
+  run hub --noop checkout --no "$PR"
+  assert_output_equals "git checkout --no $PR"
+  run hub checkout --no "$PR"
+  assert_failure
+  assert_output_contains "ambiguous option"
+  assert_gh_not_called
 }
 
 @test "checkout --help prints the manual, while -h is left to git" {

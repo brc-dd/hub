@@ -123,16 +123,17 @@ test/                   bats tests, the gh stub and the test helper
    options that follow; hub only uses them to print faithful `--noop` lines.
 6. **The re-entered hub** (`hub --run ...`) goes back to the user's directory
    (`cd -P -- "./${GIT_PREFIX:-.}"`), so relative paths in the arguments and
-   in `GIT_WORK_TREE` mean what the user meant. It unsets `GIT_DIR` when
-   neither the user's environment nor the command line set it: git exports
-   the directory it discovered, but a `GIT_DIR` without `GIT_WORK_TREE` would
-   make the user's subdirectory the work tree. With `--git-dir`, `--bare` or
-   a `GIT_DIR` in the environment, git's `GIT_DIR` stays. It removes its own
-   alias from `GIT_CONFIG_PARAMETERS`, sources `core.sh` and the module, and
-   calls `hub_cmd_NAME` / `hub_ext_NAME` (dashes become underscores) with the
-   remaining arguments. Every git and gh the module runs inherits this
-   environment, so the same context reaches hub's own git commands and the
-   git commands gh runs.
+   in `GIT_WORK_TREE` mean what the user meant; the directory hub was started
+   in travels along as `HUB_INVOKED_PWD`, for `--noop`'s gh lines. It unsets
+   `GIT_DIR` when neither the user's environment nor the command line set it:
+   git exports the directory it discovered, but a `GIT_DIR` without
+   `GIT_WORK_TREE` would make the user's subdirectory the work tree. With
+   `--git-dir`, `--bare` or a `GIT_DIR` in the environment, git's `GIT_DIR`
+   stays. It removes its own alias from `GIT_CONFIG_PARAMETERS`, sources
+   `core.sh` and the module, and calls `hub_cmd_NAME` / `hub_ext_NAME`
+   (dashes become underscores) with the remaining arguments. Every git and gh
+   the module runs inherits this environment, so the same context reaches
+   hub's own git commands and the git commands gh runs.
 
    `--run` is internal: it is honored only with the marker hub sets in the
    environment for the alias.
@@ -163,12 +164,16 @@ exactly one of these three kinds and says so in its header.
   apply. Behavior hub cannot see, such as which host a URL argument selects,
   is gh's.
 - **git commands hub extends** (`ext/`: clone, fetch, push, remote, checkout,
-  merge, am, apply, cherry-pick) take git's options. hub knows which of
-  git's options take a value, only so that it can find the operands, and
-  recognizes its GitHub shorthands there (`clone OWNER/REPO`, `push a,b`,
-  `fetch USER`, `remote add USER`, pull-request and commit URLs, `USER@SHA`).
-  Everything else, and anything ambiguous, is `hub::exec_git` with the
-  arguments as given.
+  merge, am, apply, cherry-pick) take git's options. hub reads them as the
+  installed git does, only so that it can find the operands: the long
+  options, which of them take a value and what an abbreviation stands for
+  come from git's own option table (`git CMD --git-completion-helper-all`,
+  through `hub::git_option`), and each module names the few short options
+  that take a value (`-j 4`, `-Skey`). Among the operands hub recognizes its
+  GitHub shorthands (`clone OWNER/REPO`, `push a,b`, `fetch USER`, `remote
+  add USER`, pull-request and commit URLs, `USER@SHA`). Everything else,
+  anything ambiguous and an option git would refuse is `hub::exec_git` with
+  the arguments as given.
 
 Common rules:
 
@@ -186,9 +191,12 @@ Common rules:
   `hub::exec_git`, `hub::exec_gh` (`git …`, `gh …`), `hub::open_url`
   (`open URL`) and `hub::copy` (`copy to clipboard: …`). Printed git lines
   start with the global options the user gave hub, so they can be pasted
-  back into the same shell. Read-only lookups use `hub::git_query` and
-  `hub::gh_query`, which always run, so `--noop` shows what would really
-  happen in this repository.
+  back into the same shell. gh has no `-C`, so a printed gh line becomes
+  `(cd DIR && gh …)` when `-C` moved hub away from the directory it was
+  started in (`HUB_INVOKED_PWD`, `hub::gh_line`), and a gh that needs a
+  variable is printed as `env VAR=VALUE gh …`. Read-only lookups use
+  `hub::git_query` and `hub::gh_query`, which always run, so `--noop` shows
+  what would really happen in this repository.
 - **Never change directory.** The user's directory is the context for every
   relative path and environment value; a module that needs the top of the
   work tree asks git for it (`hub::toplevel`) and passes it on.
@@ -216,7 +224,8 @@ Common rules:
   `OWNER/REPO[.git]` as the path. `file://` and extra path components are not
   GitHub repositories.
 - **GitHub hosts** are github.com, `GH_HOST`, `GITHUB_HOST`, every host gh is
-  logged in to (read from gh's `hosts.yml`) and every `git config hub.host`
+  logged in to (read from gh's `hosts.yml`, in the block style gh writes or
+  in a flow mapping a hand edit may have left) and every `git config hub.host`
   entry. For an SSH remote, hub asks the ssh git would run (`GIT_SSH_COMMAND`,
   `core.sshCommand`, `GIT_SSH`, else `ssh`) what host an alias really means
   (`ssh -G`, with the URL's user and port, so `Match` rules see the same
@@ -244,11 +253,20 @@ Common rules:
   branch that still exists, else gh's answer, else `main`.
 - **Where a branch pushes** (`hub::push_target`) follows git's own rules:
   `remote.*.push` refspecs, then `branch.*.pushRemote`, `remote.pushDefault`,
-  `branch.*.remote` and `push.default`. When git would refuse (`simple` with a
-  differently named upstream, `nothing`, no upstream) hub says so before
-  pushing anywhere. Branch-aware commands (browse, compare, pull-request) use
-  it, so a branch that tracks your fork is opened in, compared from and
-  published to the fork.
+  `branch.*.remote` and `push.default`. When git would refuse, or would push
+  other branches and leave this one alone (`remote.*.push` refspecs that map
+  none of it, or map it to something other than a branch; `push.default
+  nothing`; `simple` with a differently named upstream; no upstream), hub
+  says why (`HUB_PUSH_WHY`) before pushing anywhere. Branch-aware commands
+  (browse, compare, pull-request) use it, so a branch that tracks your fork
+  is opened in, compared from and published to the fork.
+- **A remote's fetch URL and push URL** may name different repositories. The
+  remote-tracking branches come from the fetch URL, so they show nothing
+  about the repository the remote pushes to: `compare` and `pull-request`
+  (without `-p` or `-f`) refuse to read them as evidence that a branch is
+  pushed there, and ask for the head by name instead.
+- **Owner and repository names** compare without regard to case, as on
+  GitHub, and keep their spelling in output.
 - **Clone URLs** use `git config hub.protocol`, else gh's `git_protocol`, else
   https. On GHE.com hosts the SSH user is the tenant, whether or not `GH_HOST`
   carries a port.
@@ -276,6 +294,11 @@ Common rules:
   in PATH. The stub logs every call and replays responses registered with
   `stub_gh 'ARGS GLOB' 'STDOUT' [EXIT]`; an unexpected call exits 97.
   `config get user -h github.com` answers `mislav` by default.
+- Race tests slip another process between two of hub's git commands with
+  `shim_git 'ARGS GLOB' COMMAND`, a git that runs COMMAND once, right before
+  the first call matching the glob. `script/release`'s repository check runs
+  the same way as everything else, from a copy of the script in a scratch
+  repository.
 - Every finding that was ever reproduced against hub becomes a regression
   test that reproduces it the same way.
 - No test uses the network.
@@ -314,16 +337,27 @@ work) and add hub's own commands without replacing what the user configured.
   interactive-shell alias.
 - No reproduction of old hub's output formats, prompts or quirks, and no
   translation of old hub's option letters for the commands gh also has.
-- hub finds operands by knowing which git options take a value. git's
-  abbreviated long options (`--dep 1` for `--depth`) and option values that
-  look like URLs (`--pathspec-from-file=https://...`) are taken as written;
-  spell such options out when mixing them with hub's shorthands.
+- hub finds operands by reading the installed git's option table, so an
+  option it has never heard of is read as git reads it, abbreviations
+  included; two options git lists otherwise than it reads them (`merge
+  --file`, which takes the next argument, and `remote add --mirror`, which
+  takes only an attached value) are special-cased. A short option git does
+  not know is left for git to reject. An option value that looks like a URL
+  (`--pathspec-from-file=https://...`) is a value, never an operand. Outside
+  a repository a command that needs one has no option table; hub then hands
+  the command line to git, which fails the same way.
 - `merge` treats a pull-request URL anywhere among its arguments as the
   request to merge, and takes no other revision with it.
 - `sync` fetches with a fixed refspec (`--refmap=` and
   `+refs/heads/*:refs/remotes/REMOTE/*`), so the remote's configured refspecs,
   `fetch.prune` and `fetch.pruneTags` cannot make it write or delete local
   branches or tags; a branch is gone when the remote has no such head.
+- `sync` assumes that nothing else rewrites branches or adds work trees
+  while it runs. Each update is conditional on the commit sync saw and
+  writes the ref it examined (`update-ref --no-deref`), so a branch that
+  moved, or became a symbolic ref, meanwhile is not followed; but, as with
+  `git fetch`, a work tree that checks a branch out between sync's look and
+  its update is not detected.
 - Remotes defined in `.git/remotes` and `.git/branches` are not seen by
   repository discovery; `git remote add` them.
 - Everything gh does with a URL or `-R` argument, including which host it
@@ -333,13 +367,15 @@ work) and add hub's own commands without replacing what the user configured.
 
 `lib/hub/core.sh` holds what more than one module needs: running git and gh
 (`hub::git`, `hub::gh`, `hub::exec_git`, `hub::exec_gh`, the `_query`
-variants), option parsing for hub-owned commands (`hub::normalize_opts`) and the
-subcommand scan of gh-backed ones (`hub::gh_subcommand_args`),
+variants, `hub::gh_line`), option parsing for hub-owned commands
+(`hub::normalize_opts`), git's own option tables for the commands hub extends
+(`hub::git_options`, `hub::git_option`) and the subcommand scan of gh-backed
+ones (`hub::gh_subcommand_args`),
 repository and host resolution (`hub::main_project`, `hub::parse_project`,
 `hub::remote_project`, `hub::remote_for_project`, `hub::project_or_dir`,
 `hub::push_target`, `hub::default_branch`, `hub::current_branch`,
-`hub::toplevel`, `hub::host`, `hub::same_host`), shorthand rules
-(`hub::is_project_name`, `hub::local_source`, `hub::expand_project`),
+`hub::toplevel`, `hub::gh_hosts`, `hub::host`, `hub::same_host`), shorthand
+rules (`hub::is_project_name`, `hub::local_source`, `hub::expand_project`),
 identity and URLs (`hub::current_user`, `hub::git_url`,
 `hub::parse_remote_url`, `hub::parse_github_url`, `hub::url_escape`,
 `hub::url_segment`), and text (`hub::message`, `hub::split_message`). A module

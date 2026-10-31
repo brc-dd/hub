@@ -553,3 +553,118 @@ EOF
   run ! hub::valid_remote_name 'a b'
   run ! hub::valid_remote_name 'a..b'
 }
+
+@test "git_option reads a command's options as the installed git does" {
+  make_repo r
+  hub::git_option clone bcjou '' --depth
+  [[ ${HUB_OPTS[*]} == --depth && $HUB_OPT_NEXT == 1 ]]
+  hub::git_option clone bcjou '' --depth=1
+  [[ ${HUB_OPTS[*]} == --depth && $HUB_OPT_NEXT == 0 ]]
+  hub::git_option clone bcjou '' --dep # an abbreviation, as git resolves it
+  [[ ${HUB_OPTS[*]} == --depth && $HUB_OPT_NEXT == 1 ]]
+  hub::git_option clone bcjou '' --no-checkout
+  [[ ${HUB_OPTS[*]} == --no-checkout && $HUB_OPT_NEXT == 0 ]]
+  hub::git_option clone bcjou '' --recurse # --recurse-submodules takes only an attached value
+  [[ ${HUB_OPTS[*]} == --recurse-submodules && $HUB_OPT_NEXT == 0 ]]
+  run hub::git_option clone bcjou '' --re # ambiguous
+  assert_failure
+  run hub::git_option clone bcjou '' --nonsense
+  assert_failure
+  hub::git_option 'remote add' tm '' --tra
+  [[ ${HUB_OPTS[*]} == --track && $HUB_OPT_NEXT == 1 ]]
+  # a cluster of short options stops at the first that takes a value, attached or next
+  hub::git_option fetch jo '' -pj3
+  [[ ${HUB_OPTS[*]} == "-p -j" && $HUB_OPT_NEXT == 0 ]]
+  hub::git_option fetch jo '' -qj
+  [[ ${HUB_OPTS[*]} == "-q -j" && $HUB_OPT_NEXT == 1 ]]
+  hub::git_option fetch jo '' -nq
+  [[ ${HUB_OPTS[*]} == "-n -q" && $HUB_OPT_NEXT == 0 ]]
+  # an optional value is read only attached, and takes the rest of the cluster
+  hub::git_option am pC S -3S
+  [[ ${HUB_OPTS[*]} == "-3 -S" && $HUB_OPT_NEXT == 0 ]]
+  hub::git_option am pC S -Skeyp
+  [[ ${HUB_OPTS[*]} == -S && $HUB_OPT_NEXT == 0 ]]
+  hub::git_option am pC S -3p
+  [[ ${HUB_OPTS[*]} == "-3 -p" && $HUB_OPT_NEXT == 1 ]]
+  # cherry-pick and revert take no abbreviation: git keeps an unknown option for its revision parser
+  hub::git_option cherry-pick mX S --strategy-option
+  [[ ${HUB_OPTS[*]} == --strategy-option && $HUB_OPT_NEXT == 1 ]]
+  run hub::git_option cherry-pick mX S --strat
+  assert_failure
+  # the table of a command is read once, and another command's replaces it
+  hub::git_options clone >/dev/null
+  [[ $HUB_GIT_OPTIONS_FOR == clone && $'\n'$HUB_GIT_OPTIONS$'\n' == *$'\n--depth=\n'* ]]
+  HUB_GIT_OPTIONS=cached
+  [[ $(hub::git_options clone) == cached ]]
+  hub::git_options fetch >/dev/null
+  [[ $HUB_GIT_OPTIONS_FOR == fetch && $'\n'$HUB_GIT_OPTIONS$'\n' == *$'\n--jobs=\n'* ]]
+}
+
+@test "git_option has no table outside a repository for a command that needs one" {
+  run hub::git_option checkout bBU '' --detach
+  assert_failure
+  hub::git_option clone bcjou '' --depth # clone needs none
+  [[ ${HUB_OPTS[*]} == --depth && $HUB_OPT_NEXT == 1 ]]
+}
+
+# push_why BRANCH : why hub::push_target would not push BRANCH (empty when git would push it).
+push_why() {
+  hub::push_target "$1" || true
+  printf '%s\n' "$HUB_PUSH_WHY"
+}
+
+@test "push_target says why git would not push a branch" {
+  serve_github o/r
+  clone_served o/r
+  git checkout -q -b topic
+  git commit -q --allow-empty -m t
+  [[ $(push_why topic) == upstream ]] # no upstream yet, under push.default simple
+  git config push.default nothing
+  [[ $(push_why topic) == nothing ]]
+  git config push.default simple
+  git push -q -u origin topic
+  [[ -z $(push_why topic) ]]
+  git config branch.topic.merge refs/heads/main # an upstream of another name
+  [[ $(push_why topic) == upstream ]]
+  git config branch.topic.remote nowhere
+  [[ $(push_why topic) == remote ]]
+  git config branch.topic.remote origin
+  git config branch.topic.merge refs/heads/topic
+  # remote.*.push refspecs that map other branches: git push would push those and leave topic alone
+  git config remote.origin.push refs/heads/main:refs/heads/main
+  [[ $(push_why topic) == refspec ]]
+  run git push --dry-run --porcelain origin
+  assert_success
+  assert_output_lacks refs/heads/topic
+  git config --add remote.origin.push refs/heads/topic:refs/heads/topic
+  [[ -z $(push_why topic) ]]
+  git config --replace-all remote.origin.push refs/heads/topic:refs/tags/topic # not to a branch
+  [[ $(push_why topic) == destination ]]
+}
+
+@test "hosts.yml in flow style names its hosts too" {
+  mkdir -p "$GH_CONFIG_DIR"
+  printf "{'enterprise.example': {user: cached, oauth_token: dummy, git_protocol: https}}\n" >"$GH_CONFIG_DIR/hosts.yml"
+  unset HUB_GH_HOSTS
+  [[ $(hub::gh_hosts) == enterprise.example ]]
+  [[ $(hub::host) == enterprise.example ]]
+  [[ $(hub::git_url o/r) == https://enterprise.example/o/r.git ]]
+  # several hosts, quoted or bare, over several lines with a comment; values and nested keys never count
+  printf '# gh hosts\n{ "second.example": {user: me, oauth_token: "gho:xyz", git_protocol: ssh},\n  third.example : { user: me, users: { me: { oauth_token: x } } } }\n' >"$GH_CONFIG_DIR/hosts.yml"
+  unset HUB_GH_HOSTS
+  [[ $(hub::gh_hosts | sort | tr '\n' ' ') == "second.example third.example " ]]
+  [[ $(hub::host) == github.com ]]
+}
+
+@test "gh_line adds the cd that -C would need, and only then" {
+  mkdir inner
+  HUB_INVOKED_PWD=$PWD
+  [[ $(hub::gh_line gh pr list) == "gh pr list" ]]
+  cd inner
+  [[ $(hub::gh_line gh pr list) == "(cd $(hub::quote "$PWD") && gh pr list)" ]]
+  [[ $(hub::gh_line env GH_HOST=ghe.example.com gh pr checkout URL) == "(cd $(hub::quote "$PWD") && env GH_HOST=ghe.example.com gh pr checkout URL)" ]]
+  HUB_INVOKED_PWD=$PWD
+  [[ $(hub::gh_line gh pr list) == "gh pr list" ]]
+  unset HUB_INVOKED_PWD
+  [[ $(hub::gh_line gh pr list) == "gh pr list" ]]
+}

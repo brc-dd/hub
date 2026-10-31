@@ -167,7 +167,7 @@ load ../test_helper
 @test "values of -t, -m, --track and --master are never taken for the name" {
   make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
   local opt
-  for opt in -t -m --track --master -ft; do
+  for opt in -t -m --track --master -ft --tra --mas; do # abbreviations as git resolves them, too
     run hub --noop remote add "$opt" feature alice
     assert_success
     assert_output_equals "git remote add $opt feature alice https://github.com/alice/dotfiles.git"
@@ -175,6 +175,19 @@ load ../test_helper
   run hub --noop remote add -tfeature --track=other alice
   assert_success
   assert_output_equals "git remote add -tfeature --track=other alice https://github.com/alice/dotfiles.git"
+  # --mirror takes only an attached value, however git lists it for its completion
+  run hub --noop remote add --mirror alice
+  assert_success
+  assert_output_equals "git remote add --mirror alice https://github.com/alice/dotfiles.git"
+  run hub --noop remote add --mir alice bob/dots
+  assert_output_equals "git remote add --mir alice https://github.com/bob/dots.git"
+  # an option git would refuse, ambiguous here, leaves the command line to git
+  run hub --noop remote add --t main alice
+  assert_output_equals "git remote add --t main alice"
+  run hub remote add --t main alice
+  assert_failure
+  assert_output_contains "ambiguous option"
+  assert_equals "$(git remote)" origin
 }
 
 @test "-- before the operands is kept" {

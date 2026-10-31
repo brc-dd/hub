@@ -14,9 +14,9 @@
 # an empty member, or one that starts with -, is an error, found before anything is pushed.
 # Anything else is plain git push.
 #
-# hub finds the operand by knowing which of git push's options take a value (git 2.54). An
-# abbreviated long option (--rec check for --recurse-submodules check) is not recognized, so its
-# value would be taken for the operand: spell options out when mixing them with a list.
+# hub reads git push's options as the installed git does, from the option table git keeps for
+# its completion: which ones take a value (--push-option x, -o x) and what an abbreviation stands
+# for (--rec check). An option git would refuse leaves the command line to git.
 #
 #   $ hub push origin,staging
 #   > git push origin CURRENT-BRANCH
@@ -39,9 +39,10 @@ hub_ext_push() {
       case $arg in
         --) ended=1 ;;
         --help) hub::usage ;;
-        --repo | --receive-pack | --exec | --push-option | --recurse-submodules) value=1 ;;
-        --*) ;;
-        *) [[ $arg =~ ^-[^o]*o$ ]] && value=1 ;; # -o last in a cluster takes the next argument
+        *)
+          hub::git_option push o '' "$arg" || hub::exec_git push "$@" # an option git refuses
+          ((HUB_OPT_NEXT)) && value=1
+          ;;
       esac
     fi
   done

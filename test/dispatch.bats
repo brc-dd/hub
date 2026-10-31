@@ -280,3 +280,19 @@ make_fakegh() { # SCRIPT-BODY
   assert_success
   assert_equals "$(git -C r1 remote get-url dave)" https://github.com/dave/r1.git
 }
+
+@test "--noop gh lines say where -C runs them, since gh has no -C" {
+  make_repo outer origin=https://github.com/o/outer.git
+  make_repo inner origin=https://github.com/o/inner.git # nested in outer
+  cd ..
+  run hub --noop -C inner pr list
+  assert_success
+  assert_output_equals "(cd $(cd inner && pwd -P) && gh pr list)"
+  run hub --noop -C inner -C .. pr list
+  assert_output_equals "gh pr list"
+  run hub --noop pr list
+  assert_output_equals "gh pr list"
+  run hub --noop -C inner status
+  assert_output_equals "git -C inner status"
+  assert_gh_not_called
+}

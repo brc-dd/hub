@@ -115,22 +115,33 @@ hub::require_gh() {
   command -v gh >/dev/null 2>&1 || hub::die "hub: this command needs the GitHub CLI (gh): https://cli.github.com"
 }
 
+# hub::gh_line WORDS... : a gh command line as the user could run it (for --noop and debug output):
+# WORDS is `gh ...`, or `env VAR=VALUE gh ...`. gh has no -C: when git's -C made hub run in another
+# directory than the one it was started in, the line is `(cd DIR && gh ...)`.
+hub::gh_line() {
+  if [[ -n ${HUB_INVOKED_PWD-} && ! $PWD -ef $HUB_INVOKED_PWD ]]; then
+    printf '(cd %s && %s)\n' "$(hub::quote "$PWD")" "$(hub::quote "$@")"
+  else
+    hub::quote "$@"
+  fi
+}
+
 # hub::gh ARGS... : gh call with side effects (printed under --noop). gh's own git subprocesses
 # inherit the same environment as hub's git.
 hub::gh() {
   hub::require_gh
   if ((HUB_NOOP)); then
-    hub::quote gh "$@"
+    hub::gh_line gh "$@"
     return 0
   fi
-  hub::debug "\$ $(hub::quote gh "$@")"
+  hub::debug "\$ $(hub::gh_line gh "$@")"
   gh "$@"
 }
 
 # hub::gh_query ARGS... : read-only gh call that always runs (used to work out what to do).
 hub::gh_query() {
   hub::require_gh
-  hub::debug "\$ $(hub::quote gh "$@")"
+  hub::debug "\$ $(hub::gh_line gh "$@")"
   gh "$@"
 }
 
@@ -138,10 +149,10 @@ hub::gh_query() {
 hub::exec_gh() {
   hub::require_gh
   if ((HUB_NOOP)); then
-    hub::quote gh "$@"
+    hub::gh_line gh "$@"
     exit 0
   fi
-  hub::debug "\$ $(hub::quote gh "$@")"
+  hub::debug "\$ $(hub::gh_line gh "$@")"
   exec gh "$@"
 }
 
@@ -227,6 +238,72 @@ hub::normalize_opts() {
 }
 
 # ---------------------------------------------------------------------------
+# Options of git commands, as the installed git reads them
+# ---------------------------------------------------------------------------
+# hub::git_options CMD... : the long options of git CMD (a subcommand too: remote add), one per
+# line, as the installed git lists them for its own completion (--git-completion-helper-all), so
+# that hub reads a command line the way this git does: an option listed with a trailing = takes a
+# value, which is the next argument when it is not attached; the others take none, or only an
+# attached one (--log=5). Asked once per run. Fails when git cannot answer, as outside a
+# repository for a command that needs one; git then fails the same way on the command itself.
+hub::git_options() {
+  local out
+  if [[ ${HUB_GIT_OPTIONS_FOR-} != "$*" ]]; then
+    out=$(hub::git_query "$@" --git-completion-helper-all) || return 1
+    HUB_GIT_OPTIONS_FOR=$*
+    # shellcheck disable=SC2086  # one option per word
+    HUB_GIT_OPTIONS=$(printf '%s\n' $out)
+  fi
+  printf '%s\n' "$HUB_GIT_OPTIONS"
+}
+
+# hub::git_option CMD SHORTS OPTIONAL ARG : how git CMD reads the option ARG (-x, a cluster -xyz,
+# --long or --long=VALUE; never -- itself). Sets HUB_OPTS to the options ARG spells, in order and
+# as git names them: the long option ARG spells or unambiguously abbreviates (--dep is --depth),
+# or every short option of a cluster up to the first that takes a value (-qj3 is -q -j); and
+# HUB_OPT_NEXT to 1 when the last of them takes the next argument as its value. SHORTS lists CMD's
+# short options whose value is required ("jo"), OPTIONAL those whose value is optional, which git
+# reads only attached ("S", for -S[<key-id>]). Returns 1 when git would not know ARG: an unknown
+# or ambiguous long option, which git refuses, so callers leave the command line to it. For
+# cherry-pick and revert git keeps unknown long options for its revision parser and takes no
+# abbreviation, so only a spelled-out option is known.
+hub::git_option() {
+  local cmd=$1 shorts=$2 optional=$3 arg=$4 name entry found='' n=0 c i table
+  HUB_OPTS=() HUB_OPT_NEXT=0
+  if [[ $arg == --* ]]; then
+    name=${arg%%=*}
+    # shellcheck disable=SC2086  # CMD may be two words
+    table=$(hub::git_options $cmd) || return 1
+    while IFS= read -r entry; do
+      [[ -n $entry && $entry != -- ]] || continue
+      if [[ ${entry%=} == "$name" ]]; then
+        found=$entry n=1
+        break
+      fi
+      [[ $cmd == cherry-pick || $cmd == revert ]] && continue
+      if [[ $entry == "$name"* ]]; then
+        found=$entry
+        ((++n))
+      fi
+    done <<<"$table"
+    ((n == 1)) || return 1
+    HUB_OPTS=("${found%=}")
+    [[ $found == *= && $arg != *=* ]] && HUB_OPT_NEXT=1
+    return 0
+  fi
+  for ((i = 1; i < ${#arg}; i++)); do
+    c=${arg:i:1}
+    HUB_OPTS+=("-$c")
+    if [[ -n $shorts && $shorts == *"$c"* ]]; then
+      ((i + 1 < ${#arg})) || HUB_OPT_NEXT=1
+      return 0
+    fi
+    [[ -n $optional && $optional == *"$c"* ]] && return 0 # the rest of the cluster is its value
+  done
+  return 0 # short flags are not checked: git reports an unknown one itself
+}
+
+# ---------------------------------------------------------------------------
 # Repository
 # ---------------------------------------------------------------------------
 hub::in_repo() { [[ $(hub::git_query rev-parse --is-inside-work-tree) == true ]]; }
@@ -258,19 +335,57 @@ hub::remote_exists() { hub::git_query remote get-url -- "$1" >/dev/null; }
 # Hosts and URLs
 # ---------------------------------------------------------------------------
 # hub::gh_hosts : the hosts gh is logged in to, one per line, read once from gh's hosts.yml. The
-# top-level keys of that file are the hosts, bare or quoted, possibly followed by a comment.
+# top-level keys of that file are the hosts, bare or quoted, possibly followed by a comment: in
+# the block style gh writes, one per line, or in a flow mapping ({host: {user: x}, other: {...}})
+# a hand edit may have left, which is read by nesting depth.
 hub::gh_hosts() {
   if [[ -z ${HUB_GH_HOSTS+x} ]]; then
     HUB_GH_HOSTS=''
-    local file=${GH_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/gh}/hosts.yml line
+    local file=${GH_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/gh}/hosts.yml line text=''
     if [[ -r $file ]]; then
-      while IFS= read -r line; do
-        [[ $line =~ ^(\"([A-Za-z0-9.:-]+)\"|\'([A-Za-z0-9.:-]+)\'|([A-Za-z0-9.:-]+)):[[:space:]]*(#.*)?$ ]] || continue
-        HUB_GH_HOSTS+="${BASH_REMATCH[2]}${BASH_REMATCH[3]}${BASH_REMATCH[4]}"$'\n'
+      while IFS= read -r line || [[ -n $line ]]; do
+        [[ $line =~ ^[[:space:]]*(#|---[[:space:]]*$|$) ]] && continue # comments, the document marker
+        text+=$line$'\n'
       done <"$file"
+      if [[ $text == \{* ]]; then
+        _hub_gh_hosts_flow "$text"
+      else
+        while IFS= read -r line; do
+          [[ $line =~ ^(\"([A-Za-z0-9.:-]+)\"|\'([A-Za-z0-9.:-]+)\'|([A-Za-z0-9.:-]+)):[[:space:]]*(#.*)?$ ]] || continue
+          HUB_GH_HOSTS+="${BASH_REMATCH[2]}${BASH_REMATCH[3]}${BASH_REMATCH[4]}"$'\n'
+        done <<<"$text"
+      fi
     fi
   fi
   printf '%s' "$HUB_GH_HOSTS"
+}
+
+# _hub_gh_hosts_flow TEXT : the keys at depth one of a YAML flow mapping, into HUB_GH_HOSTS; a key
+# is what stands before the first : of an entry, bare or quoted.
+_hub_gh_hosts_flow() {
+  local s=$1 c key='' depth=0 in_key=1 quote='' i
+  for ((i = 0; i < ${#s}; i++)); do
+    c=${s:i:1}
+    if [[ -n $quote ]]; then
+      [[ $c == "$quote" ]] && quote=''
+      ((depth == 1 && in_key)) && [[ -n $quote ]] && key+=$c
+      continue
+    fi
+    case $c in
+      \" | \') quote=$c ;;
+      \{ | \[) ((++depth)) ;;
+      \} | \]) ((depth--)) ;;
+      :)
+        if ((depth == 1 && in_key)); then
+          key=${key//[[:space:]]/}
+          [[ $key =~ ^[A-Za-z0-9.:-]+$ ]] && HUB_GH_HOSTS+=$key$'\n'
+          key='' in_key=0
+        fi
+        ;;
+      ,) ((depth == 1)) && key='' in_key=1 ;;
+      *) ((depth == 1 && in_key)) && key+=$c ;;
+    esac
+  done
 }
 
 # hub::host : the default GitHub host, following gh's rule: GH_HOST (or hub 2.x's GITHUB_HOST),
@@ -508,38 +623,61 @@ hub::remote_for_project() {
 
 # hub::push_target BRANCH : where `git push` with no arguments would send BRANCH, by git's rules:
 # remote.*.push refspecs, else push.default with branch.*.pushRemote, remote.pushDefault,
-# branch.*.remote (origin when unset). Sets HUB_PUSH_REMOTE and HUB_PUSH_BRANCH (its name on that
-# remote). Returns 1 when git would refuse (push.default nothing; simple with no upstream or one of
-# another name; upstream without one) or the destination is not a branch, so that callers fail
-# before pushing anywhere.
+# branch.*.remote (origin when unset). Sets HUB_PUSH_REMOTE (the remote git would push to, when
+# it exists, whatever the outcome) and HUB_PUSH_BRANCH (BRANCH's name on it). Returns 1 when git
+# would not push BRANCH there, so that callers fail before pushing anywhere, with the reason in
+# HUB_PUSH_WHY: remote (no such remote), refspec (remote.*.push is configured and none of its
+# refspecs maps BRANCH, so `git push` would push other branches and leave this one alone),
+# destination (a refspec maps it to something other than a branch), nothing (push.default) or
+# upstream (push.default simple or upstream without an upstream on that remote, or, for simple,
+# one of another name).
 hub::push_target() {
   local branch=$1 push_remote push_ref up_remote up_ref mode
-  HUB_PUSH_REMOTE='' HUB_PUSH_BRANCH=''
+  HUB_PUSH_REMOTE='' HUB_PUSH_BRANCH='' HUB_PUSH_WHY=''
   IFS=$'\x1f' read -r push_remote push_ref up_remote up_ref < <(hub::git_query for-each-ref \
     --format='%(push:remotename)%1f%(push:remoteref)%1f%(upstream:remotename)%1f%(upstream:remoteref)' \
     -- "refs/heads/$branch")
   [[ -n $up_remote ]] || up_remote=origin
   [[ -n $push_remote ]] || push_remote=$up_remote
-  hub::remote_exists "$push_remote" || return 1
+  hub::remote_exists "$push_remote" || {
+    HUB_PUSH_WHY=remote
+    return 1
+  }
+  HUB_PUSH_REMOTE=$push_remote
   if [[ -n $push_ref ]]; then # remote.NAME.push decides
-    [[ $push_ref == refs/heads/?* ]] || return 1
-    HUB_PUSH_REMOTE=$push_remote HUB_PUSH_BRANCH=${push_ref#refs/heads/}
+    [[ $push_ref == refs/heads/?* ]] || {
+      HUB_PUSH_WHY=destination
+      return 1
+    }
+    HUB_PUSH_BRANCH=${push_ref#refs/heads/}
     return 0
+  fi
+  if hub::git_query config --get-all "remote.$push_remote.push" >/dev/null; then
+    HUB_PUSH_WHY=refspec # configured, and none of them maps this branch
+    return 1
   fi
   mode=$(hub::git_query config --get push.default) || mode=simple
   case $mode in
-    nothing) return 1 ;;
+    nothing)
+      HUB_PUSH_WHY=nothing
+      return 1
+      ;;
     current | matching) HUB_PUSH_BRANCH=$branch ;;
     upstream)
-      [[ $up_remote == "$push_remote" && $up_ref == refs/heads/?* ]] || return 1
+      [[ $up_remote == "$push_remote" && $up_ref == refs/heads/?* ]] || {
+        HUB_PUSH_WHY=upstream
+        return 1
+      }
       HUB_PUSH_BRANCH=${up_ref#refs/heads/}
       ;;
     *) # simple: the same name, and when pushing to the upstream remote, an upstream of that name
-      if [[ $up_remote == "$push_remote" ]]; then [[ $up_ref == "refs/heads/$branch" ]] || return 1; fi
+      if [[ $up_remote == "$push_remote" && $up_ref != "refs/heads/$branch" ]]; then
+        HUB_PUSH_WHY=upstream
+        return 1
+      fi
       HUB_PUSH_BRANCH=$branch
       ;;
   esac
-  HUB_PUSH_REMOTE=$push_remote
 }
 
 # hub::default_branch [REMOTE] : from refs/remotes/REMOTE/HEAD when it points at a branch that still

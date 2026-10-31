@@ -32,9 +32,9 @@ is not.
   subcommand names gh lacks (`show` to `view`, none to `list`, found as gh
   itself finds the word) and hand everything else to gh unchanged. git commands
   hub extends (`clone`, `remote`, `fetch`, `push`, `checkout`, `merge`, `am`,
-  `apply`, `cherry-pick`) know git's value-taking options only to find their
-  one shorthand operand; everything else goes to git as written, and nothing
-  after `--` is interpreted.
+  `apply`, `cherry-pick`) read git's options as the installed git does, only
+  to find their one shorthand operand; everything else goes to git as
+  written, and nothing after `--` is interpreted.
 - **Old hub option spellings for gh-backed commands are no longer translated**:
   `issue update`, `issue labels`, `-m`/`-F` as title and body, `release -a`,
   `-t REF`, `release download -i`, `gist --public`/`-o`, `pr checkout N BRANCH`,
@@ -83,6 +83,36 @@ is not.
   renamed fork's head as `OWNER:REPO:BRANCH`. `ci-status` keeps a failure it
   has seen whatever a later page does and encodes unresolved refs as one URL
   segment.
+- **The installed git says what its options mean.** The git commands hub
+  extends ask `git CMD --git-completion-helper-all` for the long options:
+  which take a value, and what an abbreviation stands for (`--dep 1`,
+  `--bra main`, `--tra main`); short options with values are read in clusters
+  (`-qj3`, `-3p`) and an attached optional value stops the cluster (`-Skey`).
+  An option git would refuse, unknown or ambiguous, leaves the whole command
+  line to git. `merge --file` and `remote add --mirror`, which git lists
+  otherwise than it reads them, are the two exceptions hub keeps by hand.
+- `checkout` runs `gh pr checkout` with `GH_HOST` set to the pull request
+  URL's host, so that gh fetches from a remote of that host. `cherry-pick`
+  fetches a pull request's head into a private ref of the run
+  (`refs/hub/cherry-pick/N-PID`, deleted at once, also when interrupted), as
+  `merge` does. `sync` writes exactly the ref it examined (`git update-ref
+  --no-deref`), never another branch through a symbolic ref.
+- `fetch` puts `--multiple` first on the command line when it expands a
+  list, so a list after `--` or before `--no-multiple` works, and leaves a
+  `--multiple` operand that names an existing path to git.
+- `pull-request` says why when `git push` would not push the branch as
+  configured (`remote.*.push` refspecs that map other branches, no such
+  remote, `push.default nothing`), refuses without `-p` or `-f` a remote that
+  fetches from one repository and pushes to another, passes `head_repo` to
+  the API when `-i` converts an issue for a head in another repository, and
+  compares owner and repository names without regard to case. `compare`
+  refuses the same split remote and asks for the head by name.
+- `ci-status` marks every page of check runs it reads: a refusal (403, 404,
+  422) leaves the statuses to decide only on the first page, and a page that
+  fails after an empty one is an error.
+- `--noop` prints a gh line as `(cd DIR && gh …)` when `-C` moved hub to
+  another directory, and as `env GH_HOST=HOST gh …` where hub sets one.
+  gh's `hosts.yml` is read in flow style too.
 - Remote identity: a remote's URL is read as git uses it; SSH hosts are
   resolved through the ssh git would run (`GIT_SSH_COMMAND`, `core.sshCommand`,
   `GIT_SSH`, then `ssh`), with the user and port, so `Match` blocks and
@@ -96,7 +126,8 @@ is not.
   local install; `make install` refuses to overwrite anything it did not
   create. Completions no longer replace a user's own git completion
   customizations and find hub's command word after any global option.
-  `script/release` names the canonical repository, pushes exact refspecs,
+  `script/release` names the canonical repository, which origin's fetch URL
+  and every push URL must agree on, pushes exact refspecs,
   publishes drafts and resumes after its formula commit; the formula workflow
   picks the highest version.
 - The test suite asserts effects with real git: a local github.com of bare
@@ -169,6 +200,26 @@ is not.
   reported success when a destination was a directory and broke on prefixes
   with an apostrophe; completions replaced existing git customizations and
   lost hub's commands after separate-valued global options.
+- Found by the review of the redesign: `checkout` of a pull request URL let
+  gh fetch a same-named repository from another host; `script/release`
+  checked the repository origin fetches from and pushed where origin pushes;
+  `pull-request -p -h OWNER:BRANCH` compared remote URLs with regard to case,
+  so it could push to another repository of OWNER's or refuse a mixed-case
+  one; `remote.*.push` refspecs that map other branches made `pull-request
+  -p` push a branch git would have left alone; `compare` and `pull-request`
+  took a remote-tracking branch fetched from one repository as proof that the
+  branch is in the one the remote pushes to; `-i` omitted `head_repo`, which
+  the API needs for a head in another repository of the same organization;
+  `sync` could move another branch through a symbolic ref created after it
+  looked; `ci-status` reported success when a check-runs page failed after an
+  empty one; `cherry-pick` read `FETCH_HEAD`, which another fetch could
+  replace meanwhile; `fetch --multiple NAME` added a remote for an existing
+  path, and a list after `--` or before `--no-multiple` put `--multiple`
+  where git could not read it; the values of abbreviated options (`clone
+  --bra main`, `fetch --dep 1`, `remote add --tra main`) were taken for
+  shorthands; `-Skeyp` and `-Skeym` hid a following URL; a flow-style
+  `hosts.yml` hid gh's hosts; `--noop` gh lines left out the directory `-C`
+  selected.
 
 ## v0.1.0 — 2026-10-29
 

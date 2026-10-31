@@ -14,9 +14,10 @@
 # you push (`gh pr merge` merges there). Without a pull request URL, or with --abort, --quit or
 # --continue, this is plain git merge, as given; arguments after -- are never read.
 #
-# hub finds the operands by knowing which of git merge's options take a value (git 2.54), in
-# clusters too: `-qm URL` is a message, not a pull request. An abbreviated long option (--mess
-# for --message) is not recognized, so its value would be taken for an operand: spell options out.
+# hub reads git merge's options as the installed git does, from the option table git keeps for
+# its completion: which ones take a value, in clusters too (`-qm URL` is a message, not a pull
+# request), and what an abbreviation stands for (--mess). An option git would refuse leaves the
+# command line to git.
 #
 #   $ hub merge https://github.com/jingweno/gh/pull/73
 #   > git fetch origin +refs/pull/73/head:refs/hub/merge/73-PID
@@ -26,7 +27,7 @@
 hub_ext_merge() {
   [[ ${1-} == --help ]] && hub::usage
   local -a args=("$@") opts=()
-  local arg c i j url='' url_i=0 extra='' owner repo host number ended=0 value=0 squash=0 ff_given=0 own_msg=0
+  local arg opt i url='' url_i=0 extra='' owner repo host number ended=0 value=0 squash=0 ff_given=0 own_msg=0
   for ((i = 0; i < $#; i++)); do
     arg=${args[i]}
     if ((value)); then
@@ -40,27 +41,20 @@ hub_ext_merge() {
     else
       case $arg in
         --) ended=1 ;;
-        --abort | --quit | --continue) hub::exec_git merge "$@" ;;
-        --squash) squash=1 ;;
-        --no-squash) squash=0 ;;
-        --ff | --no-ff | --ff-only) ff_given=1 ;;
-        -m | -F | --message | --file) own_msg=1 value=1 ;;
-        --message=* | --file=*) own_msg=1 ;;
-        -s | -X | --strategy | --strategy-option | --cleanup | --into-name) value=1 ;;
-        --*) ;; # flags, and --log[=<n>], --gpg-sign[=<key-id>], --strategy=<s>: their value is attached
         *)
-          # a cluster of short options: the first taking a value takes the rest of it, or the next argument
-          for ((j = 1; j < ${#arg}; j++)); do
-            c=${arg:j:1}
-            case $c in
-              m | F | s | X)
-                [[ $c == [mF] ]] && own_msg=1
-                ((j + 1 < ${#arg})) || value=1
-                break
-                ;;
-              S) break ;; # -S[<key-id>]: an attached value only
+          hub::git_option merge sXmF S "$arg" || hub::exec_git merge "$@" # an option git refuses
+          # git lists --file without its value (a low-level callback option), but reads one
+          [[ ${HUB_OPTS[-1]} == --file && $arg != *=* ]] && HUB_OPT_NEXT=1
+          for opt in "${HUB_OPTS[@]}"; do
+            case $opt in
+              --abort | --quit | --continue) hub::exec_git merge "$@" ;;
+              --squash) squash=1 ;;
+              --no-squash) squash=0 ;;
+              --ff | --no-ff | --ff-only) ff_given=1 ;;
+              -m | -F | --message | --file) own_msg=1 ;;
             esac
           done
+          ((HUB_OPT_NEXT)) && value=1
           ;;
       esac
     fi

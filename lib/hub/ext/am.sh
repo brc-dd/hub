@@ -7,9 +7,11 @@
 # .../pull/N/commits/SHA) or comparison (.../compare/BASE...HEAD), with or without the .patch or
 # .diff suffix of its raw form. Each such URL is downloaded through gh's API as a patch series
 # into a temporary file, which git am gets in its place, so the commits keep their authors and
-# messages; every other argument stays as given, and the value of an option (--exclude PATH) is
-# never taken for a URL. The temporary files are removed when git am ends, however it ends.
-# Without any URL, this is plain git am.
+# messages; every other argument stays as given, and the value of an option (--exclude PATH,
+# -p 1, -Skey) is never taken for a URL: hub reads git am's options as the installed git does,
+# from the option table git keeps for its completion, abbreviations included (--excl PATH). An
+# option git would refuse leaves the command line to git. The temporary files are removed when
+# git am ends, however it ends. Without any URL, this is plain git am.
 #
 #   $ hub am -3 https://github.com/jingweno/gh/pull/55
 #   > gh api --hostname github.com repos/jingweno/gh/pulls/55 -H 'Accept: application/vnd.github.v3.patch' > $TMPDIR/hub-am.XXXXXX/1.patch
@@ -37,9 +39,10 @@ _hub_am_run() {
         hub::module_doc "$HUB_LIB/ext/$cmd.sh"
         exit 0
         ;;
-      --exclude | --include | --directory | --whitespace | --build-fake-ancestor | --patch-format | --quoted-cr | --empty | --resolvemsg) value=1 ;;
-      --*) ;;
-      -?*) [[ ${args[i]} =~ ^-[^pC]*[pC]$ ]] && value=1 ;; # -p or -C last in a cluster takes the next argument
+      -?*)
+        hub::git_option "$cmd" pC S "${args[i]}" || hub::exec_git "$cmd" "$@" # an option git refuses
+        ((HUB_OPT_NEXT)) && value=1
+        ;;
       *) _hub_am_url "${args[i]}" && urls+=("$i") ;;
     esac
   done
@@ -56,7 +59,7 @@ _hub_am_run() {
     gh_args=(api --hostname "$HUB_URL_HOST" "$HUB_AM_ENDPOINT" -H "Accept: application/vnd.github.v3.$fmt")
     _hub_am_escapes && gh_args+=(--allow-escape-sequences)
     if ((HUB_NOOP)); then
-      printf '%s > %s\n' "$(hub::quote gh "${gh_args[@]}")" "$(hub::quote "$file")"
+      printf '%s > %s\n' "$(hub::gh_line gh "${gh_args[@]}")" "$(hub::quote "$file")"
     else
       hub::gh_query "${gh_args[@]}" >"$file" || hub::die "Aborted: could not download $url"
     fi

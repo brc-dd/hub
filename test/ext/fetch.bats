@@ -98,6 +98,63 @@ git fetch --multiple alice origin bob alice --prune --depth 1"
   assert_equals "$(git rev-parse refs/remotes/bob/main)" "$(server_ref bob/dotfiles main)"
 }
 
+@test "fetch --multiple leaves an operand that is an existing path to git, as without --multiple" {
+  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
+  mkdir alice
+  run hub --noop fetch --multiple alice origin
+  assert_success
+  assert_output_equals "git fetch --multiple alice origin"
+  run hub fetch --multiple alice origin
+  assert_failure
+  [[ -z $(git config remote.alice.url) ]]
+  run hub --noop fetch alice
+  assert_output_equals "git fetch alice"
+  assert_gh_not_called
+}
+
+@test "a list after -- or before --no-multiple keeps --multiple where git reads it" {
+  serve_github mislav/dotfiles carol/dotfiles dave/dotfiles
+  clone_served mislav/dotfiles
+  run hub --noop fetch --prune -- carol,dave
+  assert_success
+  assert_output_equals "git remote add carol https://github.com/carol/dotfiles.git
+git remote add dave https://github.com/dave/dotfiles.git
+git fetch --multiple --prune -- carol dave"
+  run hub fetch -- carol,dave
+  assert_success
+  assert_equals "$(git rev-parse refs/remotes/carol/main)" "$(server_ref carol/dotfiles main)"
+  assert_equals "$(git rev-parse refs/remotes/dave/main)" "$(server_ref dave/dotfiles main)"
+  # --no-multiple after the list: one repository named carol,dave, for git, and no remote added
+  cd .. && clone_served mislav/dotfiles again
+  run hub --noop fetch carol,dave --no-multiple
+  assert_success
+  assert_output_equals "git fetch carol,dave --no-multiple"
+  run hub fetch carol,dave --no-multiple
+  assert_failure
+  assert_equals "$(git remote)" origin
+}
+
+@test "abbreviated options are read as git reads them: their values are never users" {
+  serve_github mislav/dotfiles alice/dotfiles
+  clone_served mislav/dotfiles
+  run hub --noop fetch --dep 1 alice
+  assert_success
+  assert_output_equals $'git remote add alice https://github.com/alice/dotfiles.git\ngit fetch --dep 1 alice'
+  run hub --noop fetch --multiple --dep 1 origin
+  assert_success
+  assert_output_equals "git fetch --multiple --dep 1 origin"
+  run hub fetch --multiple --dep 1 origin
+  assert_success
+  assert_equals "$(git remote)" origin
+  # an option git would refuse, ambiguous here, leaves the command line to git
+  run hub --noop fetch --s 1 alice
+  assert_output_equals "git fetch --s 1 alice"
+  run hub fetch --s 1 alice
+  assert_failure
+  assert_output_contains "ambiguous option"
+  assert_equals "$(git remote)" origin
+}
+
 @test "the last of --multiple and --no-multiple counts, as in git" {
   serve_github mislav/dotfiles
   git -C "$(server_dir mislav/dotfiles)" branch feature main

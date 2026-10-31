@@ -13,9 +13,9 @@
 # repository whose name looks like a shorthand, write its path: ./NAME. URLs, and anything that
 # is not lexically a shorthand, go to git unchanged.
 #
-# hub finds the operand by knowing which of git clone's options take a value (git 2.54). An
-# abbreviated long option (--dep 1 for --depth 1) is not recognized, so its value would be taken
-# for the repository: spell options out when mixing them with a shorthand.
+# hub reads git clone's options as the installed git does, from the option table git keeps for
+# its completion: which ones take a value (--depth 1, -b main, in clusters too) and what an
+# abbreviation stands for (--dep 1). An option git would refuse leaves the command line to git.
 #
 # Options:
 #   -p   Clone over SSH. Otherwise hub.protocol, else gh's git_protocol, else HTTPS.
@@ -45,7 +45,10 @@ hub_ext_clone() {
           proto=ssh
           continue
           ;;
-        *) _hub_clone_takes_value "$arg" && value=1 ;;
+        *)
+          hub::git_option clone bcjou '' "$arg" || hub::exec_git clone "$@" # an option git refuses
+          ((HUB_OPT_NEXT)) && value=1
+          ;;
       esac
     fi
     args+=("$arg")
@@ -56,15 +59,4 @@ hub_ext_clone() {
   repo=$(hub::expand_project "${args[pos]}") || exit
   args[pos]=$(hub::git_url "${repo%.git}" '' "$proto") || exit
   hub::exec_git clone "${args[@]}"
-}
-
-# _hub_clone_takes_value OPTION : git clone's options whose value is the next argument (git 2.54).
-# Attached values (--depth=1, -bmain) and the optional value of --recurse-submodules take none.
-_hub_clone_takes_value() {
-  case $1 in
-    --branch | --bundle-uri | --config | --depth | --filter | --jobs | --origin | --ref-format) return 0 ;;
-    --reference | --reference-if-able | --revision | --separate-git-dir | --server-option) return 0 ;;
-    --shallow-exclude | --shallow-since | --template | --upload-pack) return 0 ;;
-  esac
-  [[ $1 =~ ^-[^-bcjou]*[bcjou]$ ]] # -b -c -j -o -u last in a cluster (-qb main)
 }

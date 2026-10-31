@@ -15,9 +15,10 @@
 # git could mean, so it is always expanded. When set-url's --delete is in effect (the last of
 # --delete and --no-delete counts, as in git), the operand is a regex for git, not a name.
 #
-# hub finds the operands by knowing which of git remote add's options take a value (git 2.54).
-# An abbreviated long option (--tra main for --track main) is not recognized, so its value would
-# be taken for an operand: spell options out when mixing them with a shorthand.
+# hub reads the subcommand's options as the installed git does, from the option table git keeps
+# for its completion: which ones take a value (--track main, -t main, in clusters too) and what
+# an abbreviation stands for (--tra main); --mirror, which git lists with a value, takes only an
+# attached one (--mirror=fetch). An option git would refuse leaves the command line to git.
 #
 # Options:
 #   -p   Use SSH. Otherwise hub.protocol, else gh's git_protocol, else HTTPS.
@@ -39,7 +40,8 @@ hub_ext_remote() {
     *) hub::exec_git remote "$@" ;;
   esac
   local -a args=() pos=()
-  local arg proto='' value=0 ended=0 delete=0 i name='' spec host repo
+  local arg opt shorts='' proto='' value=0 ended=0 delete=0 i name='' spec host repo
+  [[ $sub == add ]] && shorts=tm
   for arg in "$@"; do
     if ((value)); then
       value=0
@@ -49,13 +51,22 @@ hub_ext_remote() {
       case $arg in
         --) ended=1 ;;
         --help) hub::usage ;;
-        --delete) delete=1 ;;
-        --no-delete) delete=0 ;;
         -p)
           proto=ssh
           continue
           ;;
-        *) [[ $sub == add ]] && _hub_remote_takes_value "$arg" && value=1 ;;
+        *)
+          hub::git_option "remote $sub" "$shorts" '' "$arg" || hub::exec_git remote "$sub" "$@" # an option git refuses
+          # git lists --mirror with a value for its completion, but reads one only when it is attached
+          [[ ${HUB_OPTS[-1]} == --mirror ]] && HUB_OPT_NEXT=0
+          for opt in "${HUB_OPTS[@]}"; do
+            case $opt in
+              --delete) delete=1 ;;
+              --no-delete) delete=0 ;;
+            esac
+          done
+          ((HUB_OPT_NEXT)) && value=1
+          ;;
       esac
     fi
     args+=("$arg")
@@ -78,6 +89,3 @@ hub_ext_remote() {
   args[i]=$(hub::git_url "${spec%.git}" "$host" "$proto") || exit
   hub::exec_git remote "$sub" "${args[@]:0:i}" ${name:+"$name"} "${args[@]:i}"
 }
-
-# _hub_remote_takes_value OPTION : git remote add's options whose value is the next argument.
-_hub_remote_takes_value() { [[ $1 == --track || $1 == --master || $1 =~ ^-[^-tm]*[tm]$ ]]; }

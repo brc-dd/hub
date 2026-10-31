@@ -3,6 +3,14 @@ load ../test_helper
 
 SHA=a319d88b3f4b58a1b8d4a5ef2d1b8e5a6f7c8d9e
 
+# assert_no_private_refs : hub left no ref of its own (refs/hub/cherry-pick/N-PID) behind.
+assert_no_private_refs() {
+  [[ -z $(git for-each-ref refs/hub) ]] || {
+    printf 'refs left behind:\n%s\n' "$(git for-each-ref refs/hub)"
+    return 1
+  }
+}
+
 # served_commit OWNER/REPO NAME [REF] : from a scratch clone, push a commit adding NAME.txt to the served
 # repository's REF (default main, force-pushed), and print its id.
 served_commit() {
@@ -66,12 +74,15 @@ git cherry-pick $sha"
   clone_served mislav/dotfiles
   run hub --noop cherry-pick -x https://github.com/mislav/dotfiles/pull/12/commits/a319d88
   assert_success
-  assert_output_equals "git fetch --no-tags origin refs/pull/12/head
-git cherry-pick -x a319d88"
+  [[ ${lines[0]} == "git fetch --no-tags origin +refs/pull/12/head:refs/hub/cherry-pick/12-"* ]]
+  [[ ${lines[1]} == "git update-ref -d refs/hub/cherry-pick/12-"* ]]
+  assert_line_equals 2 "git cherry-pick -x a319d88"
+  [[ ${#lines[@]} -eq 3 ]]
   run hub cherry-pick "https://github.com/mislav/dotfiles/pull/12/commits/${sha:0:7}"
   assert_success
   [[ $(git log -1 --format=%s) == fix-build && -f fix-build.txt ]]
   [[ $(git rev-parse FETCH_HEAD) == "$sha" ]]
+  assert_no_private_refs
   assert_gh_not_called
 }
 
@@ -90,6 +101,7 @@ git cherry-pick -x a319d88"
   run hub cherry-pick "https://github.com/mislav/dotfiles/pull/12/commits/$sha"
   assert_success
   [[ $(git log -1 --format=%s) == intended && ! -e decoy.txt ]]
+  assert_no_private_refs
   assert_gh_not_called
 }
 
@@ -105,6 +117,7 @@ git cherry-pick -x a319d88"
   run hub cherry-pick "https://github.com/mislav/dotfiles/pull/12/commits/$old"
   assert_success
   [[ $(git log -1 --format=%s) == old-work && -f old-work.txt ]]
+  assert_no_private_refs
   assert_gh_not_called
   # a short id of such a commit is expanded through gh
   cd "$HUB_TEST_TMP" && clone_served mislav/dotfiles work2
@@ -118,6 +131,41 @@ git cherry-pick -x a319d88"
   assert_failure
   assert_output_contains "Aborted: could not find commit https://github.com/mislav/dotfiles/pull/12/commits/deadbee"
   [[ $(git log -1 --format=%s) == old-work ]]
+  assert_no_private_refs
+}
+
+@test "another fetch between hub's fetch and its lookup cannot hide the pull request's commit" {
+  serve_github mislav/dotfiles
+  local sha
+  sha=$(served_commit mislav/dotfiles fix-build refs/pull/12/head)
+  clone_served mislav/dotfiles
+  # another fetch in this work tree replaces FETCH_HEAD right before hub looks the commit up
+  shim_git 'merge-base --is-ancestor * refs/hub/cherry-pick/12-*' 'git fetch -q origin refs/heads/main'
+  stub_gh "api --hostname github.com repos/mislav/dotfiles/commits/${sha:0:7} --jq .sha" '' 1 # gh does not know it either
+  PATH=$SHIM_PATH run hub cherry-pick "https://github.com/mislav/dotfiles/pull/12/commits/${sha:0:7}"
+  assert_success
+  [[ -e $HUB_TEST_TMP/shim/done ]]
+  [[ $(git log -1 --format=%s) == fix-build && -f fix-build.txt ]]
+  [[ $(git rev-parse FETCH_HEAD) == "$(git rev-parse refs/remotes/origin/main)" ]] # the other fetch did replace it
+  assert_no_private_refs
+  assert_gh_not_called
+}
+
+@test "cherry-pick removes its private ref when it is interrupted" {
+  serve_github mislav/dotfiles
+  local sha
+  sha=$(served_commit mislav/dotfiles fix-build refs/pull/12/head)
+  clone_served mislav/dotfiles
+  # hub is told to terminate while its fetch runs: the fetch completes, then hub exits through its trap
+  shim_git 'fetch --no-tags origin +refs/pull/12/head:refs/hub/cherry-pick/12-*' 'kill -TERM "$(ps -o ppid= -p "$PPID" | tr -d " ")"'
+  PATH=$SHIM_PATH run hub cherry-pick "https://github.com/mislav/dotfiles/pull/12/commits/$sha"
+  [[ $status -eq 143 ]] || {
+    printf 'expected exit 143, got %s\noutput:\n%s\n' "$status" "$output"
+    return 1
+  }
+  [[ -e $HUB_TEST_TMP/shim/done ]]
+  assert_no_private_refs
+  [[ $(git log -1 --format=%s) == "initial commit" ]]
 }
 
 @test "cherry-pick USER@SHA fetches from USER's fork of the current project" {
@@ -179,7 +227,7 @@ git cherry-pick $sha"
   clone_served mislav/dotfiles
   run hub --noop cherry-pick -x -m 1 https://github.com/mislav/dotfiles/pull/12/commits/a319d88 --allow-empty
   assert_success
-  assert_line_equals 1 "git cherry-pick -x -m 1 a319d88 --allow-empty"
+  assert_line_equals 2 "git cherry-pick -x -m 1 a319d88 --allow-empty"
   run hub cherry-pick -x "https://github.com/jingweno/dotfiles/commit/$one" "jingweno@$two"
   assert_success
   [[ $(git rev-list --count HEAD) == 3 && -f first.txt && -f second.txt ]]
@@ -198,6 +246,24 @@ git cherry-pick $sha"
   run hub --noop cherry-pick -x -- alice@deadbee
   assert_output_equals "git cherry-pick -x -- alice@deadbee"
   assert_gh_not_called
+}
+
+@test "an attached -S value is -S's to its end, and the URL after it is picked" {
+  serve_github mislav/dotfiles jingweno/dotfiles
+  local sha
+  sha=$(served_commit jingweno/dotfiles fix-build)
+  clone_served mislav/dotfiles
+  run hub --noop cherry-pick -Skeym "https://github.com/jingweno/dotfiles/commit/$sha"
+  assert_success
+  assert_output_equals "git fetch --no-tags https://github.com/jingweno/dotfiles.git $sha
+git cherry-pick -Skeym $sha"
+  run hub --noop cherry-pick -xS "https://github.com/jingweno/dotfiles/commit/$sha"
+  assert_line_equals 1 "git cherry-pick -xS $sha"
+  run hub --noop cherry-pick -xm1 -Xours "https://github.com/jingweno/dotfiles/commit/$sha"
+  assert_line_equals 1 "git cherry-pick -xm1 -Xours $sha"
+  run hub --noop cherry-pick -xm 1 "https://github.com/jingweno/dotfiles/commit/$sha"
+  assert_line_equals 1 "git cherry-pick -xm 1 $sha"
+  [[ $(gh_calls) != *api* ]] # a full commit id needs no lookup
 }
 
 @test "cherry-pick always tells gh the commit's host" {

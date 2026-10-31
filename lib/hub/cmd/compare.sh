@@ -14,10 +14,12 @@
 # branch.*.remote, else origin), then on the main remote (fetch first if it was pushed from
 # elsewhere). The push URL of that remote names the repository the branch is in, which must be
 # on the compare page's host. A branch in another repository is written FORKOWNER:BRANCH, or
-# FORKOWNER:FORKREPO:BRANCH when that repository has another name. The branch is refused only
-# when it is the compared repository's own default branch; a fork's main compares as
-# FORKOWNER:main. The default branch is the one refs/remotes/REMOTE/HEAD names; when it is
-# unknown, hub asks gh for it, and assumes main when gh cannot answer.
+# FORKOWNER:FORKREPO:BRANCH when that repository has another name. A remote that pushes to one
+# repository and fetches from another cannot show that the branch is in the one it pushes to;
+# hub then asks you to name the head yourself. The branch is refused only when it is the
+# compared repository's own default branch; a fork's main compares as FORKOWNER:main. The
+# default branch is the one refs/remotes/REMOTE/HEAD names; when it is unknown, hub asks gh for
+# it, and assumes main when gh cannot answer.
 #
 # Options:
 #   -b, --base BASE   Compare against BASE: BASE...HEAD, HEAD defaulting to the current branch.
@@ -69,8 +71,11 @@ hub_cmd_compare() {
   if [[ -z $range ]]; then
     branch=$(hub::current_branch) \
       || hub::die "Aborted: not currently on any branch; name a branch or a BASE...HEAD range to compare."
-    _hub_compare_head "$branch" "$host" "$proj" \
-      || hub::die "Aborted: the branch '$branch' is not pushed to any GitHub remote; push it first or name a range"
+    HUB_COMPARE_SPLIT=''
+    _hub_compare_head "$branch" "$host" "$proj" || {
+      [[ -z $HUB_COMPARE_SPLIT ]] || hub::die "Aborted: $HUB_COMPARE_SPLIT fetches from one repository and pushes to another, so its remote-tracking branches cannot show whether '$branch' is pushed; name the head yourself: hub compare [BASE...]OWNER:$branch"
+      hub::die "Aborted: the branch '$branch' is not pushed to any GitHub remote; push it first or name a range"
+    }
     if [[ -z $base && ${HUB_COMPARE_PROJECT,,} == "${proj,,}" ]] \
       && [[ $HUB_COMPARE_BRANCH == "$(hub::default_branch "$HUB_COMPARE_REMOTE")" ]]; then
       hub::die "Aborted: $HUB_COMPARE_BRANCH is the default branch; name a branch or a BASE...HEAD range to compare, or use -b BASE."
@@ -125,19 +130,26 @@ _hub_compare_push_remote() {
 }
 
 # _hub_compare_head_in REMOTE BRANCH HOST OWNER/REPO : REMOTE's remote-tracking ref shows BRANCH,
-# and the repository REMOTE pushes to is on HOST; sets the HUB_COMPARE_* variables.
+# and the repository REMOTE pushes to is on HOST; sets the HUB_COMPARE_* variables. The
+# remote-tracking ref came from REMOTE's fetch URL: when that is another repository than the one
+# REMOTE pushes to, it shows nothing about the latter, and HUB_COMPARE_SPLIT names REMOTE.
 _hub_compare_head_in() {
-  local remote=$1 branch=$2 host=$3 base=$4
+  local remote=$1 branch=$2 host=$3 base=$4 proj phost
   hub::git_query show-ref --verify --quiet -- "refs/remotes/$remote/$branch" || return 1
   hub::remote_project "$remote" push >/dev/null || return 1
-  hub::same_host "$HUB_PROJECT_HOST" "$host" || return 1
-  HUB_COMPARE_REMOTE=$remote HUB_COMPARE_BRANCH=$branch HUB_COMPARE_PROJECT=$HUB_PROJECT
-  local head_repo=${HUB_PROJECT#*/} base_repo=${base#*/}
-  if [[ ${HUB_PROJECT,,} == "${base,,}" ]]; then
+  proj=$HUB_PROJECT phost=$HUB_PROJECT_HOST
+  hub::same_host "$phost" "$host" || return 1
+  if ! hub::remote_project "$remote" >/dev/null || [[ ${HUB_PROJECT,,} != "${proj,,}" ]] || ! hub::same_host "$HUB_PROJECT_HOST" "$phost"; then
+    HUB_COMPARE_SPLIT=$remote
+    return 1
+  fi
+  HUB_COMPARE_REMOTE=$remote HUB_COMPARE_BRANCH=$branch HUB_COMPARE_PROJECT=$proj
+  local head_repo=${proj#*/} base_repo=${base#*/}
+  if [[ ${proj,,} == "${base,,}" ]]; then
     HUB_COMPARE_HEAD=$branch
   elif [[ ${head_repo,,} == "${base_repo,,}" ]]; then
-    HUB_COMPARE_HEAD=${HUB_PROJECT%%/*}:$branch
+    HUB_COMPARE_HEAD=${proj%%/*}:$branch
   else
-    HUB_COMPARE_HEAD=${HUB_PROJECT%%/*}:$head_repo:$branch
+    HUB_COMPARE_HEAD=${proj%%/*}:$head_repo:$branch
   fi
 }

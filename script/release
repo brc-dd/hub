@@ -4,9 +4,10 @@
 # Releases hub from a clean main that is up to date with origin: make check,
 # script/bump VERSION, push main and the tag (those two refs and nothing else),
 # publish the GitHub release and point Formula/hub.rb at it (not for
-# pre-releases). The release goes to the repository that origin names; an SSH
-# alias in its URL is resolved the way ssh does (ssh -G), and gh must see that
-# repository before anything is pushed.
+# pre-releases). The release goes to the repository that origin names, which
+# its URL and every URL it pushes to must agree on; an SSH alias in a URL is
+# resolved the way ssh does (ssh -G), and gh must see that repository before
+# anything is pushed.
 #
 # Without VERSION, the release named by the VERSION file is resumed: HEAD must
 # be at its tag, or one "Formula: hub vX.Y.Z" commit past it that changes only
@@ -28,11 +29,27 @@ die() {
 step() { printf '==> %s\n' "$*"; }
 run() { if ((dry_run)); then echo "[dry-run]$(printf ' %q' "$@")"; else "$@"; fi; }
 
-# origin_repo : prints HOST/OWNER/REPO for the URL of origin. An SSH alias is resolved to the host
-# ssh connects to (ssh -G, with the URL's user and port), as gh does when it reads the remotes.
+# origin_repo : prints HOST/OWNER/REPO for origin, which its URL and the URL(s) it pushes to (git
+# remote get-url --push --all) must all name: the tag is pushed where origin pushes and the release
+# published where it fetches from, and those must be one repository.
 origin_repo() {
-  local url host='' path='' user='' port='' ssh=0
-  url=$(git remote get-url origin) || die "no origin remote"
+  local url repo='' r
+  while IFS= read -r url; do
+    r=$(url_repo "$url") || exit 1
+    if [[ -z $repo ]]; then
+      repo=$r # the fetch URL's spelling names the release
+    elif [[ ${r,,} != "${repo,,}" ]]; then
+      die "origin fetches from $repo but pushes to $r; the release must go to one repository (git remote get-url --push --all origin)"
+    fi
+  done < <(git remote get-url origin 2>/dev/null && git remote get-url --push --all origin 2>/dev/null)
+  [[ -n $repo ]] || die "no origin remote"
+  printf '%s\n' "$repo"
+}
+
+# url_repo URL : prints HOST/OWNER/REPO for a GitHub repository URL. An SSH alias is resolved to
+# the host ssh connects to (ssh -G, with the URL's user and port), as gh does when it reads the remotes.
+url_repo() {
+  local url=$1 host='' path='' user='' port='' ssh=0
   case $url in
     ssh://*) ssh=1 host=${url#ssh://} ;;
     http://* | https://*) host=${url#*://} ;;

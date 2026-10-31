@@ -222,21 +222,25 @@ failing_tools() {
   assert_output_equals "Aborted: 'mislav:feature' is both the base and the head; name a different BASE or HEAD"
 }
 
-@test "compare names the head after the repository its remote pushes to, not the one it fetches from" {
+@test "compare cannot read a remote-tracking branch as proof when its remote pushes to another repository" {
   make_repo repo origin=https://github.com/org/repo.git
   git remote set-url --push origin https://github.com/alice/renamed.git
   set_remote_head origin main
   git checkout -q -b feature
-  git update-ref refs/remotes/origin/feature HEAD
+  git update-ref refs/remotes/origin/feature HEAD # fetched from org/repo: it says nothing about alice/renamed
   git branch -q --set-upstream-to=origin/feature
   run hub compare -u
+  assert_failure
+  assert_output_equals "Aborted: origin fetches from one repository and pushes to another, so its remote-tracking branches cannot show whether 'feature' is pushed; name the head yourself: hub compare [BASE...]OWNER:feature"
+  run hub compare -u alice:renamed:feature
   assert_success
   assert_output_equals "https://github.com/org/repo/compare/alice:renamed:feature"
-  run hub compare -u -b main
+  run hub compare -u -b main alice:renamed:feature
   assert_output_equals "https://github.com/org/repo/compare/main...alice:renamed:feature"
-  # the same push URL as fetch URL again: the branch is the repository's own
-  git remote set-url --push origin https://github.com/org/repo.git
+  # the same repository as push URL, however it is spelled: the branch is the repository's own
+  git remote set-url --push origin https://github.com/ORG/Repo.git
   run hub compare -u
+  assert_success
   assert_output_equals "https://github.com/org/repo/compare/feature"
   assert_gh_not_called
 }

@@ -77,6 +77,7 @@ if [[ ${1-} == --run && -n ${HUB_REEXEC-} ]]; then
   # relative paths in the arguments and in GIT_WORK_TREE keep their meaning.
   cd -P -- "./${GIT_PREFIX:-.}" || exit 1
   unset GIT_PREFIX
+  export -n HUB_INVOKED_PWD # where hub was started: core.sh prints gh lines with a cd when -C moved it
   # git exports the git directory it discovered (a linked work tree, a bare repository). Without
   # GIT_WORK_TREE that would make the user's subdirectory the work tree, so it goes unless the
   # user set it, with --git-dir, --bare or in the environment.
@@ -187,7 +188,7 @@ if [[ -z $hub_kind ]]; then
 fi
 
 # Ours: git applies the global options, exports their environment and runs hub again.
-export HUB_REEXEC=1 HUB_NOOP
+export HUB_REEXEC=1 HUB_NOOP HUB_INVOKED_PWD=$PWD
 [[ -n $hub_keep_git_dir ]] && export HUB_KEEP_GIT_DIR=1
 hub_alias="!exec '${hub_self//\'/\'\\\'\'}' --run"
 exec git "${hub_globals[@]}" -c "alias.hubrun=$hub_alias" hubrun "${#hub_globals[@]}" "${hub_globals[@]}" "$hub_name" "${hub_rest[@]}"

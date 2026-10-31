@@ -14,11 +14,16 @@
 # git would push to (remote.*.push, branch.*.pushRemote, remote.pushDefault, branch.*.remote and
 # push.default), under its name there, in the repository that remote's push URL names, written
 # OWNER:BRANCH when that is not the base repository. A branch without an upstream goes to the
-# remote `git push -u` would take. Without -p, the branch must already be pushed there; -f skips
-# that check. -h BRANCH names a branch on that remote instead, pushed from HEAD with -p; -h
+# remote `git push -u` would take; one that `git push` would not push as configured (push.default
+# nothing, or remote.*.push refspecs that map other branches) is refused. Without -p, the branch
+# must already be pushed there, which its remote-tracking branch shows; a remote that fetches
+# from one repository and pushes to another shows nothing, and is refused without -p or -f. -f
+# skips that check. -h BRANCH names a branch on that remote instead, pushed from HEAD with -p; -h
 # OWNER:BRANCH names a branch in OWNER's repository, pushed with -p to the remote here whose push
-# URL names it. gh pr create cannot open a pull request from a repository owned by an
-# organization; the API that -i uses can.
+# URL names it (owner and repository names compare without regard to case, as on GitHub). gh pr
+# create cannot open a pull request from a repository owned by an organization; the API that -i
+# uses can, and gets the head repository's name (head_repo) when it is another repository than
+# the base and a remote here pushes to it, as the API requires within one organization.
 #
 # The base defaults to branch.BRANCH.gh-merge-base of the current branch, else the default branch
 # of the base repository (refs/remotes/REMOTE/HEAD when it points at a branch that still exists,
@@ -158,7 +163,7 @@ hub_cmd_pull_request() {
   [[ -z $base ]] || _hub_pull_request_branch_name "$base" -b
 
   # The head branch, and the remote it is (or with -p will be) on.
-  local branch head_owner='' head_name='' remote='' head_proj='' set_upstream=0
+  local branch head_owner='' head_name='' remote='' head_proj='' head_known=0 set_upstream=0
   branch=$(hub::current_branch) || branch=''
   case $head in
     '')
@@ -178,17 +183,21 @@ hub_cmd_pull_request() {
       remote=$(_hub_pull_request_remote_of "$head_owner" "$base_host" "${base_proj#*/}" "$branch") \
         || hub::die "Aborted: no remote here pushes to a repository of $head_owner's on $base_host; add one (git remote add $head_owner) or push the branch yourself."
       hub::remote_project "$remote" push >/dev/null
-      head_proj=$HUB_PROJECT
+      head_proj=$HUB_PROJECT head_known=1
     fi
   else
     if [[ -z $head ]]; then
       if hub::push_target "$branch"; then
         remote=$HUB_PUSH_REMOTE head_name=$HUB_PUSH_BRANCH
-      elif ! hub::git_query config --get "branch.$branch.merge" >/dev/null && [[ $(hub::git_query config --get push.default) != nothing ]]; then
-        remote=$(_hub_pull_request_push_remote "$branch") # no upstream yet: where `git push -u` would go
-        hub::remote_exists "$remote" || hub::die "Aborted: $branch has no upstream, and there is no remote $remote to push it to; add one, or name the head with -h [OWNER:]BRANCH."
+      elif [[ $HUB_PUSH_WHY == upstream ]] && ! hub::git_query config --get "branch.$branch.merge" >/dev/null; then
+        remote=$HUB_PUSH_REMOTE # no upstream yet: where `git push -u` would go
       else
-        hub::die "Aborted: git push would refuse to push $branch as configured (push.default, branch.$branch.remote and branch.$branch.merge); push it yourself, e.g. git push -u $(_hub_pull_request_push_remote "$branch") $branch, or name the head with -h [OWNER:]BRANCH."
+        case $HUB_PUSH_WHY in
+          remote) hub::die "Aborted: there is no remote $(_hub_pull_request_push_remote "$branch") to push $branch to; add one, or name the head with -h [OWNER:]BRANCH." ;;
+          refspec) hub::die "Aborted: git push would not push $branch: remote.$HUB_PUSH_REMOTE.push is configured, and none of its refspecs maps $branch; push it yourself (git push $HUB_PUSH_REMOTE $branch), or name the head with -h [OWNER:]BRANCH." ;;
+          destination) hub::die "Aborted: remote.$HUB_PUSH_REMOTE.push maps $branch to something that is not a branch; name the head with -h [OWNER:]BRANCH." ;;
+          *) hub::die "Aborted: git push would refuse to push $branch as configured (push.default, branch.$branch.remote and branch.$branch.merge); push it yourself, e.g. git push -u $HUB_PUSH_REMOTE $branch, or name the head with -h [OWNER:]BRANCH." ;;
+        esac
       fi
     else
       remote=$(_hub_pull_request_push_remote "$branch")
@@ -196,11 +205,11 @@ hub_cmd_pull_request() {
     fi
     hub::remote_project "$remote" push >/dev/null || hub::die "Aborted: remote $remote does not push to a GitHub repository hub knows (git remote get-url --push $remote; see hub.host)."
     hub::same_host "$HUB_PROJECT_HOST" "$base_host" || hub::die "Aborted: remote $remote pushes to $HUB_PROJECT_HOST, but the pull request is for $base_host/$base_proj."
-    head_proj=$HUB_PROJECT
+    head_proj=$HUB_PROJECT head_known=1
   fi
   [[ -n $branch ]] && ! hub::git_query config --get "branch.$branch.merge" >/dev/null && set_upstream=1
   local label=$head_name
-  [[ ${head_proj,,} == "${base_proj,,}" ]] || label=${head_proj%%/*}:$head_name
+  [[ ${head_proj,,} == "${base_proj,,}" ]] || label=${head_proj%%/*}:$head_name # as the remote spells the owner, when one is known
 
   # The base branch: -b, the current branch's gh-merge-base, else the base repository's default.
   local r
@@ -219,6 +228,11 @@ hub_cmd_pull_request() {
   # Checks that need no network before the ones that do.
   if ((! push && ! force)) && [[ -z $head ]]; then
     local track n
+    # The remote-tracking branches came from the fetch URL: when the remote pushes somewhere else,
+    # they show nothing about the repository the head is in.
+    if ! hub::remote_project "$remote" >/dev/null || [[ ${HUB_PROJECT,,} != "${head_proj,,}" ]] || ! hub::same_host "$HUB_PROJECT_HOST" "$base_host"; then
+      hub::die "Aborted: $remote pushes to $head_proj but fetches from another repository, so hub cannot tell whether $branch is pushed there (use -p to push it, or -f to skip this check)."
+    fi
     track=$(hub::git_query for-each-ref --format='%(push)' -- "refs/heads/$branch")
     if [[ -z $track ]] || ! hub::git_query show-ref --verify --quiet -- "$track"; then
       hub::die "Aborted: $branch seems not yet pushed to $remote (use -p to push it, or -f to skip this check)."
@@ -248,7 +262,10 @@ hub_cmd_pull_request() {
 
   local -a cmd
   if [[ -n $issue ]]; then
-    cmd=(api --hostname "$base_host" -X POST "repos/$base_proj/pulls" -F "issue=$number" -f "head=$label" -f "base=$base")
+    cmd=(api --hostname "$base_host" -X POST "repos/$base_proj/pulls" -F "issue=$number" -f "head=$label")
+    # the API needs the head repository's name when both belong to one organization; given whenever it is known
+    ((head_known)) && [[ ${head_proj,,} != "${base_proj,,}" ]] && cmd+=(-f "head_repo=${head_proj#*/}")
+    cmd+=(-f "base=$base")
     ((draft)) && cmd+=(-F draft=true)
     ((no_maint)) && cmd+=(-F maintainer_can_modify=false)
     cmd+=(--jq .html_url)
@@ -312,15 +329,16 @@ _hub_pull_request_push_remote() {
 # _hub_pull_request_remote_of OWNER HOST NAME [BRANCH] : the remote whose push URL names a repository
 # of OWNER's on HOST: the one BRANCH pushes to when it does, else one of the repository NAME, else any.
 _hub_pull_request_remote_of() {
-  local owner=${1,,} host=$2 name=${3,,} branch=${4-} r first='' any=''
+  local owner=${1,,} host=$2 name=${3,,} branch=${4-} r proj first='' any=''
   local -a remotes
   [[ -z $branch ]] || first=$(hub::git_query for-each-ref --format='%(push:remotename)' -- "refs/heads/$branch")
   mapfile -t remotes < <(hub::git_query remote)
   for r in ${first:+"$first"} "${remotes[@]}"; do
     hub::remote_project "$r" push >/dev/null || continue
     hub::same_host "$HUB_PROJECT_HOST" "$host" || continue
-    [[ ${HUB_PROJECT%%/*} == "$owner" ]] || continue
-    if [[ $r == "$first" || ${HUB_PROJECT#*/} == "$name" ]]; then
+    proj=${HUB_PROJECT,,} # GitHub names compare without regard to case
+    [[ ${proj%%/*} == "$owner" ]] || continue
+    if [[ $r == "$first" || ${proj#*/} == "$name" ]]; then
       printf '%s\n' "$r"
       return 0
     fi

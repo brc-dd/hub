@@ -11,12 +11,12 @@
 # one the upstream, github or origin remote points at), named to gh with its host.
 #
 # The statuses and the check runs are read with `gh api --paginate`. When GitHub refuses the
-# check runs outright with HTTP 403, 404 or 422 (not every token may read them), the commit
-# statuses alone count. A failing state, once seen, is final: when the check runs cannot be read
-# completely after one was seen (a later page fails, or they fail while a status already failed),
-# hub still reports it and prints gh's error as a warning. Without one, an unreadable page is an
-# error, since what is missing could still fail. For a pull request, `gh pr checks` has more to
-# offer.
+# check runs outright with HTTP 403, 404 or 422 on their first page (not every token may read
+# them), the commit statuses alone count. A failing state, once seen, is final: when the check
+# runs cannot be read completely after one was seen (a later page fails, or they fail while a
+# status already failed), hub still reports it and prints gh's error as a warning. Without one,
+# an unreadable page is an error, even after an empty page, since what is missing could still
+# fail. For a pull request, `gh pr checks` has more to offer.
 #
 # Options:
 #   -v, --verbose   Print STATE, NAME and URL for every check instead, failures first.
@@ -30,7 +30,7 @@
 
 hub_cmd_ci_status() {
   local verbose=0 ref commit path state line rc=0 seen
-  local -a operands=() api lines=()
+  local -a operands=() api lines=() pages=()
   hub::normalize_opts '' '' "$@"
   set -- "${HUB_ARGS[@]}"
   while (($#)); do
@@ -62,14 +62,16 @@ hub_cmd_ci_status() {
     exit "$rc"
   }
   mapfile -t lines < <(_hub_ci_status_lines status)
+  # every page read is marked, so that a page that fails after an empty one is still missing
   _hub_ci_status_api "${api[@]}" "$path/check-runs" \
-    --jq '.check_runs[] | ["check", (if .status == "completed" then .conclusion else "pending" end), .name, .html_url // ""] | @tsv' || rc=$?
+    --jq '(select((.check_runs | type) == "array") | ["page", ""]), (.check_runs // [] | .[] | ["check", (if .status == "completed" then .conclusion else "pending" end), .name, .html_url // ""]) | @tsv' || rc=$?
   seen=${#lines[@]}
   mapfile -t -O "$seen" lines < <(_hub_ci_status_lines check)
+  mapfile -t pages < <(_hub_ci_status_lines page)
   state=$(_hub_ci_status_state "${lines[@]}")
   if ((rc)); then
-    if ((${#lines[@]} == seen)) && _hub_ci_status_tolerated "$HUB_CI_ERR"; then
-      # refused before any check run was read: the commit statuses alone decide
+    if ((${#pages[@]} == 0)) && _hub_ci_status_tolerated "$HUB_CI_ERR"; then
+      # refused before any page of check runs was read: the commit statuses alone decide
       [[ -z ${HUB_VERBOSE:-} || -z $HUB_CI_ERR ]] || printf '%s\n' "$HUB_CI_ERR" >&2
       hub::debug "no check runs; counting the commit statuses only"
     elif _hub_ci_status_failing "$state"; then
@@ -126,7 +128,8 @@ _hub_ci_status_api() {
 }
 
 # _hub_ci_status_lines KIND : the lines of HUB_CI_OUT that gh's jq filter tagged KIND, untagged:
-# STATE, NAME and URL, tab-separated. Anything else gh printed there (an error document) is dropped.
+# STATE, NAME and URL, tab-separated, or an empty line per page read. Anything else gh printed
+# there (an error document) is dropped.
 _hub_ci_status_lines() {
   local line
   while IFS= read -r line; do

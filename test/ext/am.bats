@@ -132,6 +132,7 @@ git am TMP/1.patch TMP/2.patch"
 
 @test "am replaces each URL in place and keeps every other argument" {
   use_tmpdir
+  make_repo dotfiles # git lists am's options, which hub reads to find the URLs, only inside a repository
   run hub --noop am --signoff local.patch "$PR" -3 "https://github.com/mislav/dotfiles/commit/$SHA"
   assert_success
   untmp
@@ -142,6 +143,7 @@ git am --signoff local.patch TMP/1.patch -3 TMP/2.patch"
 
 @test "am never takes the value of an option for a URL" {
   use_tmpdir
+  make_repo dotfiles
   run hub --noop am --exclude "$PR" local.patch
   assert_success
   assert_output_equals "git am --exclude $PR local.patch"
@@ -161,6 +163,7 @@ git am --exclude $PR TMP/1.patch"
 
 @test "am still downloads a URL after an attached option value or -S" {
   use_tmpdir
+  make_repo dotfiles
   run hub --noop am --directory=x -p1 "$PR"
   assert_success
   untmp
@@ -174,6 +177,36 @@ git am --directory=x -p1 TMP/1.patch"
   assert_success
   untmp
   assert_line_equals 1 "git am --gpg-sign TMP/1.patch"
+  # an attached key id is -S's value to its end, whatever letters it ends in
+  run hub --noop am -Skeyp "$PR"
+  assert_success
+  untmp
+  assert_line_equals 1 "git am -Skeyp TMP/1.patch"
+  run hub --noop am -3S "$PR"
+  assert_success
+  untmp
+  assert_line_equals 1 "git am -3S TMP/1.patch"
+}
+
+@test "am reads abbreviated options as git does" {
+  use_tmpdir
+  make_repo dotfiles
+  run hub --noop am --excl "$PR" local.patch
+  assert_success
+  assert_output_equals "git am --excl $PR local.patch"
+  run hub --noop am --sign "$PR"
+  assert_success
+  untmp
+  assert_output_equals "gh api --hostname github.com repos/mislav/dotfiles/pulls/12 $PATCH > TMP/1.patch
+git am --sign TMP/1.patch"
+  # an option git would refuse, ambiguous here, leaves the command line to git
+  run hub --noop am --in "$PR"
+  assert_success
+  assert_output_equals "git am --in $PR"
+  run hub am --in "$PR"
+  assert_failure
+  assert_output_contains "ambiguous option"
+  assert_tmp_cleaned
 }
 
 @test "am leaves the arguments after -- alone" {

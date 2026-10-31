@@ -19,9 +19,14 @@
 # or fetch.pruneTags say, so nothing outside refs/remotes/REMOTE/ is ever pruned
 # and no local branch is written by it; tags follow as in any fetch. A branch is
 # updated or deleted only while it is still where sync saw it, never while it is
-# checked out in another work tree, and never through a symbolic ref. The current
-# branch is fast-forwarded with `git merge --ff-only`, which refuses when local
-# changes would be lost, and sync checks that HEAD arrived. A branch that tracks
+# checked out in another work tree, and never through a symbolic ref: one that
+# is a symbolic ref is skipped, and the ref sync names is the one it writes
+# (update-ref --no-deref), so no other branch ever moves in its place. Sync
+# assumes that nothing else rewrites branches or adds work trees while it runs;
+# as with git fetch, a work tree that checks a branch out between sync's look
+# and its update is not detected. The current branch is fast-forwarded with
+# `git merge --ff-only`, which refuses when local changes would be lost, and
+# sync checks that HEAD arrived. A branch that tracks
 # something other than a branch of REMOTE (refs/pull/N/head, from gh pr checkout)
 # is deleted once it is merged into the default branch and otherwise left alone.
 # When a branch could not be updated or deleted, sync carries on with the others
@@ -34,9 +39,9 @@
 #
 #   $ hub sync
 #   > git fetch --prune --quiet --refmap= origin +refs/heads/\*:refs/remotes/origin/\*
-#   > git update-ref -m hub\ sync:\ fast-forward\ to\ origin/topic refs/heads/topic NEW OLD
+#   > git update-ref --no-deref -m hub\ sync:\ fast-forward\ to\ origin/topic refs/heads/topic NEW OLD
 #   > git merge --ff-only --no-squash --quiet NEW        (the current branch)
-#   > git update-ref -d refs/heads/merged OLD            (deleted on origin, merged)
+#   > git update-ref --no-deref -d refs/heads/merged OLD (deleted on origin, merged)
 
 hub_ext_sync() {
   local arg remote='' color=auto ended=0
@@ -114,7 +119,7 @@ hub_ext_sync() {
         hub::warn "warning: '$name' is checked out in ${checked_out[$ref]}; not updating it"
         continue
       else
-        hub::git update-ref -m "hub sync: fast-forward to ${up_ref#refs/remotes/}" "$ref" "$up" "$oid" || {
+        hub::git update-ref --no-deref -m "hub sync: fast-forward to ${up_ref#refs/remotes/}" "$ref" "$up" "$oid" || {
           hub::warn "error: '$name' changed while syncing; leaving it alone"
           failed=1
           continue
@@ -151,7 +156,7 @@ hub_ext_sync() {
         hub::warn "warning: '$name' is checked out in ${checked_out[$ref]}; not deleting it"
         continue
       fi
-      hub::git update-ref -d "$ref" "$oid" || {
+      hub::git update-ref --no-deref -d "$ref" "$oid" || {
         hub::warn "error: '$name' changed while syncing; leaving it alone"
         failed=1
         continue

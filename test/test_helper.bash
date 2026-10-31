@@ -22,7 +22,7 @@ hub_test_setup() {
   # Nothing from the caller's environment may reach git, gh or hub: a developer's GIT_DIR,
   # GIT_INDEX_FILE or GIT_CONFIG_PARAMETERS would otherwise make the fixtures touch their repository.
   unset "${!GIT_@}" "${!GH_@}" "${!GITHUB_@}" CDPATH BROWSER
-  unset HUB_NOOP HUB_VERBOSE HUB_PROTOCOL HUB_REEXEC HUB_KEEP_GIT_DIR HUB_GIT_GLOBALS HUB_ROOT HUB_LIB HUB_VERSION HUB_GH_HOSTS
+  unset HUB_NOOP HUB_VERBOSE HUB_PROTOCOL HUB_REEXEC HUB_KEEP_GIT_DIR HUB_INVOKED_PWD HUB_GIT_GLOBALS HUB_ROOT HUB_LIB HUB_VERSION HUB_GH_HOSTS
   export HOME=$HUB_TEST_TMP/home
   mkdir -p "$HOME"
   export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=$HUB_TEST_TMP/gitconfig GIT_TERMINAL_PROMPT=0
@@ -143,13 +143,15 @@ assert_equals() { [[ $1 == "$2" ]] || {
 # in for github.com (or HOST). git reaches them through the ssh and git-remote-https stubs, so the
 # remote URLs stay the ones a user would have (https://github.com/OWNER/REPO.git,
 # git@github.com:OWNER/REPO.git, ssh://git@github.com/OWNER/REPO.git) and the effects land here.
+# The commit is the same in every served repository (a fixed date, not the clock's second), so
+# that they share history as a fork and its parent do.
 serve_github() {
   local spec dir tree
   for spec; do
     dir=$(server_dir "$spec")
     mkdir -p "$dir" && git init -q --bare "$dir" || return 1
     tree=$(git -C "$dir" hash-object -t tree -w --stdin </dev/null)
-    git -C "$dir" update-ref refs/heads/main "$(git -C "$dir" commit-tree -m "initial commit" "$tree")"
+    git -C "$dir" update-ref refs/heads/main "$(GIT_AUTHOR_DATE=2020-01-01T00:00:00Z GIT_COMMITTER_DATE=2020-01-01T00:00:00Z git -C "$dir" commit-tree -m "initial commit" "$tree")"
     git -C "$dir" symbolic-ref HEAD refs/heads/main
   done
 }
