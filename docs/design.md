@@ -167,11 +167,12 @@ exactly one of these three kinds and says so in its header.
   merge, am, apply, cherry-pick) take git's options. hub reads them as the
   installed git does, only so that it can find the operands: the long
   options, which of them take a value and what an abbreviation stands for
-  come from git's own option table (`git CMD --git-completion-helper-all`,
-  through `hub::git_option`), and each module names the few short options
-  that take a value (`-j 4`, `-Skey`). Among the operands hub recognizes its
-  GitHub shorthands (`clone OWNER/REPO`, `push a,b`, `fetch USER`, `remote
-  add USER`, pull-request and commit URLs, `USER@SHA`). Everything else,
+  come from git's own option table (`git CMD --git-completion-helper-all`),
+  the short options from the usage `git CMD -h` prints (both through
+  `hub::git_option`), and each module names the few short options that take
+  a value (`-j 4`, `-Skey`). Among the operands hub recognizes its GitHub
+  shorthands (`clone OWNER/REPO`, `push a,b`, `fetch USER`, `remote add
+  USER`, pull-request and commit URLs, `USER@SHA`). Everything else,
   anything ambiguous and an option git would refuse is `hub::exec_git` with
   the arguments as given.
 
@@ -267,6 +268,15 @@ Common rules:
   pushed there, and ask for the head by name instead.
 - **Owner and repository names** compare without regard to case, as on
   GitHub, and keep their spelling in output.
+- **hub's own fetches write one ref.** `merge` and `cherry-pick` fetch a pull
+  request into a private ref of the run with `--refmap=`, so the remote's
+  configured refspecs (a `+refs/pull/*/head:refs/heads/pull-*` mapping, say)
+  update nothing on the side.
+- **The default branch is known or unknown, never assumed** where something
+  changes: `hub::default_branch` reads `refs/remotes/REMOTE/HEAD`, else asks
+  gh, else fails. `pull-request` then requires `-b`, and `sync` leaves a
+  branch deleted upstream alone; `compare` and `browse`, which only build a
+  URL, assume `main`.
 - **Clone URLs** use `git config hub.protocol`, else gh's `git_protocol`, else
   https. On GHE.com hosts the SSH user is the tenant, whether or not `GH_HOST`
   carries a port.
@@ -341,11 +351,13 @@ work) and add hub's own commands without replacing what the user configured.
   option it has never heard of is read as git reads it, abbreviations
   included; two options git lists otherwise than it reads them (`merge
   --file`, which takes the next argument, and `remote add --mirror`, which
-  takes only an attached value) are special-cased. A short option git does
-  not know is left for git to reject. An option value that looks like a URL
-  (`--pathspec-from-file=https://...`) is a value, never an operand. Outside
-  a repository a command that needs one has no option table; hub then hands
-  the command line to git, which fails the same way.
+  takes only an attached value) are special-cased. A short option that git's
+  usage (`git CMD -h`) does not list leaves the whole command line to git,
+  before hub adds a remote or fetches anything. An option value that looks
+  like a URL (`--pathspec-from-file=https://...`) is a value, never an
+  operand. Outside a repository a command that needs one has no option table
+  (nor, for a subcommand, a usage); hub then hands the command line to git,
+  which fails the same way.
 - `merge` treats a pull-request URL anywhere among its arguments as the
   request to merge, and takes no other revision with it.
 - `sync` fetches with a fixed refspec (`--refmap=` and
@@ -369,8 +381,8 @@ work) and add hub's own commands without replacing what the user configured.
 (`hub::git`, `hub::gh`, `hub::exec_git`, `hub::exec_gh`, the `_query`
 variants, `hub::gh_line`), option parsing for hub-owned commands
 (`hub::normalize_opts`), git's own option tables for the commands hub extends
-(`hub::git_options`, `hub::git_option`) and the subcommand scan of gh-backed
-ones (`hub::gh_subcommand_args`),
+(`hub::git_options`, `hub::git_short_options`, `hub::git_option`) and the
+subcommand scan of gh-backed ones (`hub::gh_subcommand_args`),
 repository and host resolution (`hub::main_project`, `hub::parse_project`,
 `hub::remote_project`, `hub::remote_for_project`, `hub::project_or_dir`,
 `hub::push_target`, `hub::default_branch`, `hub::current_branch`,

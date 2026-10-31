@@ -140,6 +140,15 @@ is not.
   `.github/workflows/actions.lock` (`gh actions-lock`), verified in CI;
   Dependabot keeps both current.
 - MIT license.
+- `pull-request -h OWNER/REPO:BRANCH` names a head in a repository not called
+  like the base (a renamed fork); without `-p`, `-h OWNER:BRANCH` finds that
+  repository through the local branch of the head's name. The base is never
+  an assumed `main`: without `-b`, the default branch must come from
+  `refs/remotes/REMOTE/HEAD` or gh. `sync` likewise leaves a branch deleted
+  upstream alone when the default branch is unknown. The short options of the
+  git commands hub extends are read from `git CMD -h`, so an unknown one
+  leaves the command line to git. `script/stable-tag` picks the release the
+  formula follows, and fails when gh's list may be incomplete.
 
 ### Fixed
 
@@ -220,6 +229,20 @@ is not.
   shorthands; `-Skeyp` and `-Skeym` hid a following URL; a flow-style
   `hosts.yml` hid gh's hosts; `--noop` gh lines left out the directory `-C`
   selected.
+- Found by the review of the seventh round: `merge` and `cherry-pick` fetched
+  a pull request without `--refmap=`, so a remote's
+  `+refs/pull/*/head:refs/heads/pull-*` refspec force-updated the local branch
+  it maps to; `pull-request` opened a pull request against an assumed `main`
+  when neither the remote nor gh could tell the default branch; `create
+  --push` from a bare repository let gh mirror every ref where hub promised
+  the current branch; `-h OWNER:BRANCH` without `-p` dropped the head
+  repository's name even when the local branch of that name pushes to a
+  renamed repository of OWNER's, and nothing could name it (`-h
+  OWNER/REPO:BRANCH` now does); an unknown short option (`fetch -z alice`)
+  added the remote before git refused the command; a check-runs answer
+  without a `check_runs` array counted as an empty page; the formula job
+  listed at most 1000 releases and could miss the highest version
+  (`script/stable-tag` now fails when the list may be incomplete).
 
 ## v0.1.0 — 2026-10-29
 

@@ -129,9 +129,14 @@ hub_ext_sync() {
     elif ((tracks)); then
       # Deleted on REMOTE, or tracking something that is not one of its branches.
       if ((! have_default)); then
-        default=$(hub::default_branch "$remote")
-        default_oid=$(hub::git_query rev-parse --verify --quiet "refs/remotes/$remote/$default^{commit}") || default_oid=''
+        default=$(hub::default_branch "$remote") || default=''
+        default_oid=''
+        [[ -z $default ]] || default_oid=$(hub::git_query rev-parse --verify --quiet "refs/remotes/$remote/$default^{commit}") || default_oid=''
         have_default=1
+      fi
+      if [[ -z $default ]]; then
+        [[ -z $up_ref ]] || hub::warn "warning: '$name' was deleted on $remote, but the default branch of $remote is not known (git remote set-head $remote -a); leaving it alone"
+        continue
       fi
       if [[ $name == "$default" ]]; then
         hub::warn "warning: '$name' tracks a branch that is gone from $remote, but it is the default branch; leaving it alone"

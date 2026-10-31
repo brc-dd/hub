@@ -86,11 +86,7 @@ jobs:
           gh auth setup-git
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          # The highest vX.Y.Z among the published stable releases, by version and not by
-          # creation date: a maintenance release made after a higher version must not win.
-          tag=$(gh release list --exclude-drafts --exclude-pre-releases --limit 1000 --json tagName -q '.[].tagName' |
-            grep -Ex 'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)' | sort -t . -k 1.2,1n -k 2,2n -k 3,3n | tail -n 1 || true)
-          [[ -n $tag ]] || { echo 'no published stable release with a vX.Y.Z tag' >&2; exit 1; }
+          tag=$(script/stable-tag) # the highest published stable version; fails when unsure
           script/update-formula "$tag"
           git diff --quiet -- Formula/hub.rb && exit 0
           git commit -m "Formula: hub $tag" -- Formula/hub.rb

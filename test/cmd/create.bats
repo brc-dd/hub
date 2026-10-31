@@ -328,3 +328,16 @@ SH
   assert_output_contains "not a git repository"
   assert_gh_not_called
 }
+
+@test "create --push from a bare repository pushes the branch HEAD names, not every ref" {
+  git init -q --bare bare.git
+  cd bare.git
+  run hub --noop create --push
+  assert_success
+  assert_output_equals "gh repo create github.com/mislav/bare --source=$(pwd -P) --remote=origin --private
+git push --set-upstream origin HEAD"
+  run hub --noop create --push --remote-name fork --public
+  assert_success
+  assert_output_equals "gh repo create github.com/mislav/bare --source=$(pwd -P) --remote=fork --public
+git push --set-upstream fork HEAD"
+}

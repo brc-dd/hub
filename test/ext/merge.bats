@@ -67,7 +67,7 @@ assert_no_leftovers() {
   run hub --noop merge "$PR"
   assert_success
   [[ ${#lines[@]} -eq 3 ]]
-  [[ ${lines[0]} =~ ^git\ fetch\ origin\ \+refs/pull/12/head:(refs/hub/merge/12-[0-9]+)$ ]]
+  [[ ${lines[0]} =~ ^git\ fetch\ --refmap=\ origin\ \+refs/pull/12/head:(refs/hub/merge/12-[0-9]+)$ ]]
   local ref=${BASH_REMATCH[1]}
   assert_line_equals 1 "git merge --no-ff -m $(printf '%q' "$MSG") $ref"
   assert_line_equals 2 "git update-ref -d $ref"
@@ -89,7 +89,7 @@ assert_no_leftovers() {
   git remote set-url upstream git@github.com:Mislav/DotFiles.git
   run hub --noop merge "$PR"
   assert_success
-  [[ ${lines[0]} == "git fetch upstream +refs/pull/12/head:refs/hub/merge/12-"* ]]
+  [[ ${lines[0]} == "git fetch --refmap= upstream +refs/pull/12/head:refs/hub/merge/12-"* ]]
 }
 
 @test "merge fetches from the repository's URL when no remote points at it" {
@@ -103,7 +103,7 @@ assert_no_leftovers() {
   git config --global hub.protocol ssh
   run hub --noop merge "$PR"
   assert_success
-  [[ ${lines[0]} == "git fetch git@github.com:mislav/dotfiles.git +refs/pull/12/head:refs/hub/merge/12-"* ]]
+  [[ ${lines[0]} == "git fetch --refmap= git@github.com:mislav/dotfiles.git +refs/pull/12/head:refs/hub/merge/12-"* ]]
 }
 
 @test "merge matches remotes by host too" {
@@ -112,11 +112,11 @@ assert_no_leftovers() {
   stub_pr_message https://ghe.example.com/team/app/pull/7
   run hub --noop merge https://ghe.example.com/team/app/pull/7
   assert_success
-  [[ ${lines[0]} == "git fetch work +refs/pull/7/head:refs/hub/merge/7-"* ]]
+  [[ ${lines[0]} == "git fetch --refmap= work +refs/pull/7/head:refs/hub/merge/7-"* ]]
   git remote remove work
   run hub --noop merge https://ghe.example.com/team/app/pull/7
   assert_success
-  [[ ${lines[0]} == "git fetch https://ghe.example.com/team/app.git +refs/pull/7/head:refs/hub/merge/7-"* ]]
+  [[ ${lines[0]} == "git fetch --refmap= https://ghe.example.com/team/app.git +refs/pull/7/head:refs/hub/merge/7-"* ]]
 }
 
 @test "merge merges the commit it fetched, not what another fetch left in FETCH_HEAD meanwhile" {
@@ -325,4 +325,23 @@ assert_no_leftovers() {
   run hub merge --help
   assert_success
   assert_output_contains "Usage: hub merge [<git-merge options>] PULLREQ-URL"
+}
+
+@test "merge never writes what the remote's fetch refspecs map the pull request to" {
+  make_pr_fixture
+  # pull requests mapped onto local branches, as some configurations have it, with local work on one
+  git config --add remote.origin.fetch '+refs/pull/*/head:refs/heads/pull-*'
+  git branch pull-12 main
+  commit_on pull-12 "local work"
+  local before
+  before=$(tip pull-12)
+  stub_pr_message
+  run hub merge "$PR"
+  assert_success
+  [[ $(tip pull-12) == "$before" ]]
+  [[ -f build.txt ]]
+  [[ -z $(git for-each-ref refs/hub) ]]
+  # the mapping is git's, for git's own fetches
+  git fetch -q origin
+  [[ $(tip pull-12) == "$PR_HEAD" ]]
 }

@@ -27,7 +27,9 @@
 #   -d, --description TEXT  The repository description.
 #   -h, --homepage URL      The repository home page.
 #       --remote-name NAME  Add the repository as the remote NAME instead of origin.
-#       --push              Push the current branch to the new repository too (gh's --push).
+#       --push              Push the current branch to the new repository too (gh's --push; from
+#                           a bare repository, whose every ref gh's --push would mirror, hub
+#                           pushes the branch HEAD names itself).
 #   -o, --browse            Open the new repository, https://HOST/OWNER/NAME, in the browser.
 #   -c, --copy              Copy that URL to the clipboard.
 #
@@ -120,9 +122,12 @@ hub_cmd_create() {
   local -a cmd=(repo create "$host/$owner/$repo" --source="$src" --remote="$remote" "$visibility")
   [[ -z $description ]] || cmd+=(--description "$description")
   [[ -z $homepage ]] || cmd+=(--homepage "$homepage")
-  ((push)) && cmd+=(--push)
+  local bare=0
+  [[ $gitdir != . ]] || bare=1
+  ((push && ! bare)) && cmd+=(--push) # from a bare repository gh's --push mirrors every ref: see below
   hub::gh "${cmd[@]}" || exit
   if [[ -n $fix_url ]]; then hub::git remote set-url "$remote" "$fix_url" || exit; fi
+  if ((push && bare)); then hub::git push --set-upstream "$remote" HEAD || exit; fi
   local url=https://$host/$owner/$repo status=0
   if ((copy)); then hub::copy "$url" || status=$?; fi
   if ((browse)); then hub::open_url "$url" || status=$?; fi

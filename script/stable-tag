@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Usage: script/stable-tag
+#
+# Prints the tag of the highest published stable release, vX.Y.Z, of the repository gh is run in
+# (or GH_REPO), by version and not by date: a maintenance release made after a higher version
+# must not win. Fails when there is none, and when gh's list may be incomplete: gh lists releases
+# by date, and a list as long as the limit asked for could leave out the highest version.
+set -euo pipefail
+
+limit=1000
+die() {
+  printf 'script/stable-tag: %s\n' "$*" >&2
+  exit 1
+}
+(($# == 0)) || die "takes no arguments"
+tags=$(gh release list --exclude-drafts --exclude-pre-releases --limit "$limit" --json tagName -q '.[].tagName')
+n=$(grep -c . <<<"$tags") || n=0
+((n < limit)) || die "$n releases listed, as many as gh was asked for, so the highest version may be missing; raise the limit in script/stable-tag"
+tag=$(grep -Ex 'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)' <<<"$tags" | sort -t . -k 1.2,1n -k 2,2n -k 3,3n | tail -n 1) || true
+[[ -n $tag ]] || die "no published stable release with a vX.Y.Z tag"
+printf '%s\n' "$tag"

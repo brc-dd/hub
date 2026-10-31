@@ -57,7 +57,7 @@ hub_cmd_browse() {
     hub::main_project >/dev/null
     proj=$HUB_PROJECT host=$HUB_PROJECT_HOST
     if [[ -z ${GH_REPO:-} && $proj != */?*.wiki ]] && [[ -z $subpage || $subpage == tree || $subpage == commits ]] \
-      && branch=$(hub::current_branch) && [[ $branch != "$(hub::default_branch)" ]]; then
+      && branch=$(hub::current_branch) && [[ $branch != "$(hub::default_branch || echo main)" ]]; then
       if hub::push_target "$branch"; then
         if hub::remote_project "$HUB_PUSH_REMOTE" push >/dev/null; then
           proj=$HUB_PROJECT host=$HUB_PROJECT_HOST branch=$HUB_PUSH_BRANCH

@@ -267,9 +267,9 @@ branches() { server_branches "$1" | sort | tr '\n' ' '; }
   run hub --noop pull-request -h 'bad name'
   assert_failure
   assert_output_equals "Aborted: not a branch name: bad name (given with -h)"
-  run hub --noop pull-request -h alice/x:y
+  run hub --noop pull-request -h a/b/c:y
   assert_failure
-  assert_output_equals "Aborted: not a head: alice/x:y (use [OWNER:]BRANCH)"
+  assert_output_equals "Aborted: not a head: a/b/c:y (use [OWNER[/REPO]:]BRANCH)"
   run hub --noop pull-request -h other -b 'bad name'
   assert_failure
   assert_output_equals "Aborted: not a branch name: bad name (given with -b)"
@@ -771,4 +771,64 @@ SH
   run hub --noop pull-request -i 12 -h bob:feature
   assert_success
   assert_output_equals "gh api --hostname github.com -X POST repos/mislav/dotfiles/pulls -F issue=12 -f head=bob:feature -f base=main --jq .html_url"
+}
+
+@test "-h OWNER/REPO:BRANCH names the head repository, for the API and for the remote -p pushes to" {
+  feature_repo
+  serve_github alice/renamed alice/other
+  git remote add fork https://github.com/alice/renamed.git
+  git remote add other https://github.com/alice/other.git
+  run hub --noop pull-request -i 12 -h alice/renamed:feature
+  assert_success
+  assert_output_equals "gh api --hostname github.com -X POST repos/mislav/dotfiles/pulls -F issue=12 -f head=alice:feature -f head_repo=renamed -f base=main --jq .html_url"
+  run hub --noop pull-request -p -i 12 -h alice/renamed:feature
+  assert_success
+  assert_output_equals $'git push --set-upstream fork HEAD:refs/heads/feature\ngh api --hostname github.com -X POST repos/mislav/dotfiles/pulls -F issue=12 -f head=alice:feature -f head_repo=renamed -f base=main --jq .html_url'
+  run hub --noop pull-request -p -i 12 -h alice/dotfiles:feature
+  assert_failure
+  assert_output_equals "Aborted: no remote here pushes to alice/dotfiles on github.com; add one (git remote add alice alice/dotfiles) or push the branch yourself."
+  # gh pr create finds a user's one fork by its owner, whatever its name
+  stub_gh 'api --hostname github.com users/alice -q .type' 'User'
+  run hub --noop pull-request -h alice/renamed:feature -m Fix
+  assert_success
+  assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --base main --head alice:feature --title Fix --body ''"
+}
+
+@test "-h OWNER:BRANCH without -p takes the head repository from the local branch of that name" {
+  feature_repo
+  serve_github mislav/renamed
+  git remote add fork https://github.com/mislav/renamed.git
+  git config branch.feature.pushRemote fork # the local feature pushes to mislav's renamed copy
+  run hub --noop pull-request -i 12 -h mislav:feature
+  assert_success
+  assert_output_equals "gh api --hostname github.com -X POST repos/mislav/dotfiles/pulls -F issue=12 -f head=mislav:feature -f head_repo=renamed -f base=main --jq .html_url"
+  # no local branch of the head's name: the head is in the repository called like the base
+  run hub --noop pull-request -i 12 -h mislav:other
+  assert_success
+  assert_output_equals "gh api --hostname github.com -X POST repos/mislav/dotfiles/pulls -F issue=12 -f head=other -f base=main --jq .html_url"
+  # a local branch that pushes to another owner's repository says nothing about OWNER's
+  run hub --noop pull-request -i 12 -h alice:feature
+  assert_success
+  assert_output_equals "gh api --hostname github.com -X POST repos/mislav/dotfiles/pulls -F issue=12 -f head=alice:feature -f base=main --jq .html_url"
+}
+
+@test "without -b, the base is the default branch a remote or gh knows, never an assumed main" {
+  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
+  git checkout -q -b feature
+  stub_gh 'repo view github.com/mislav/dotfiles --json defaultBranchRef -q .defaultBranchRef.name' '' 1
+  run hub --noop pull-request -i 12 -h feature
+  assert_failure
+  assert_output_equals "Aborted: could not look up the default branch of mislav/dotfiles; give the base with -b BRANCH."
+  run hub --noop pull-request -i 12 -h feature -b main
+  assert_success
+  assert_output_equals "gh api --hostname github.com -X POST repos/mislav/dotfiles/pulls -F issue=12 -f head=feature -f base=main --jq .html_url"
+  stub_gh 'repo view github.com/mislav/dotfiles --json defaultBranchRef -q .defaultBranchRef.name' 'develop'
+  run hub --noop pull-request -i 12 -h feature
+  assert_success
+  assert_output_equals "gh api --hostname github.com -X POST repos/mislav/dotfiles/pulls -F issue=12 -f head=feature -f base=develop --jq .html_url"
+  set_remote_head origin trunk # the remote's own HEAD needs no lookup
+  stub_gh 'repo view github.com/mislav/dotfiles --json defaultBranchRef -q .defaultBranchRef.name' '' 1
+  run hub --noop pull-request -i 12 -h feature
+  assert_success
+  assert_output_equals "gh api --hostname github.com -X POST repos/mislav/dotfiles/pulls -F issue=12 -f head=feature -f base=trunk --jq .html_url"
 }

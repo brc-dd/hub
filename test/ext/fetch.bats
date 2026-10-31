@@ -455,3 +455,20 @@ git fetch --multiple --depth=1 carol -j4 alice --recurse-submodules bob --recurs
   assert_failure
   assert_equals "$(remote_url nobody)" https://github.com/nobody/dotfiles.git
 }
+
+@test "a short option git does not know leaves the command line to git, before any remote is added" {
+  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
+  run hub --noop fetch -z alice
+  assert_success
+  assert_output_equals "git fetch -z alice"
+  run hub --noop fetch -pz alice
+  assert_output_equals "git fetch -pz alice"
+  run hub fetch -z alice
+  assert_failure
+  assert_output_contains "unknown switch"
+  [[ -z $(git config remote.alice.url) ]]
+  # a cluster of options git knows is read, and the user's remote added
+  run hub --noop fetch -pq alice
+  assert_success
+  assert_output_equals $'git remote add alice https://github.com/alice/dotfiles.git\ngit fetch -pq alice'
+}

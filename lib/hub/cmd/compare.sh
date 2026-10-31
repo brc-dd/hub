@@ -77,7 +77,7 @@ hub_cmd_compare() {
       hub::die "Aborted: the branch '$branch' is not pushed to any GitHub remote; push it first or name a range"
     }
     if [[ -z $base && ${HUB_COMPARE_PROJECT,,} == "${proj,,}" ]] \
-      && [[ $HUB_COMPARE_BRANCH == "$(hub::default_branch "$HUB_COMPARE_REMOTE")" ]]; then
+      && [[ $HUB_COMPARE_BRANCH == "$(hub::default_branch "$HUB_COMPARE_REMOTE" || echo main)" ]]; then
       hub::die "Aborted: $HUB_COMPARE_BRANCH is the default branch; name a branch or a BASE...HEAD range to compare, or use -b BASE."
     fi
     range=$HUB_COMPARE_HEAD

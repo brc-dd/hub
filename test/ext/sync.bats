@@ -515,3 +515,21 @@ Updated branch main (was $(git rev-parse --short "$(server_ref mislav/dotfiles m
   assert_success
   assert_output_contains "Usage: hub sync [--color[=WHEN]] [REMOTE]"
 }
+
+@test "sync leaves a branch deleted upstream alone when the remote's default branch is unknown" {
+  make_sync_fixture
+  git remote set-head origin -d
+  git config remote.origin.followRemoteHEAD never # git 2.48+ would set refs/remotes/origin/HEAD again when fetching
+  stub_gh 'repo view github.com/mislav/dotfiles --json defaultBranchRef -q .defaultBranchRef.name' '' 1
+  local merged unmerged
+  merged=$(tip merged) unmerged=$(tip unmerged)
+  run hub sync
+  assert_success
+  assert_output_contains "warning: 'merged' was deleted on origin, but the default branch of origin is not known (git remote set-head origin -a); leaving it alone"
+  assert_output_contains "warning: 'unmerged' was deleted on origin, but the default branch of origin is not known"
+  assert_output_lacks "Deleted branch"
+  [[ $(tip merged) == "$merged" && $(tip unmerged) == "$unmerged" ]]
+  # everything else is synced as always
+  assert_output_contains "Updated branch behind"
+  assert_equals "$(tip behind)" "$(server_ref mislav/dotfiles behind)"
+}

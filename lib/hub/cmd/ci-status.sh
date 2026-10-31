@@ -62,9 +62,10 @@ hub_cmd_ci_status() {
     exit "$rc"
   }
   mapfile -t lines < <(_hub_ci_status_lines status)
-  # every page read is marked, so that a page that fails after an empty one is still missing
+  # every page read is marked, so that a page that fails after an empty one is still missing; a
+  # page without a check_runs array is no page of check runs, and fails the lookup
   _hub_ci_status_api "${api[@]}" "$path/check-runs" \
-    --jq '(select((.check_runs | type) == "array") | ["page", ""]), (.check_runs // [] | .[] | ["check", (if .status == "completed" then .conclusion else "pending" end), .name, .html_url // ""]) | @tsv' || rc=$?
+    --jq 'if (.check_runs | type) != "array" then error("not a page of check runs") else (["page", ""], (.check_runs[] | ["check", (if .status == "completed" then .conclusion else "pending" end), .name, .html_url // ""])) | @tsv end' || rc=$?
   seen=${#lines[@]}
   mapfile -t -O "$seen" lines < <(_hub_ci_status_lines check)
   mapfile -t pages < <(_hub_ci_status_lines page)

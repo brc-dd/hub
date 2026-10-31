@@ -183,7 +183,7 @@ EOF
   [[ $(hub::main_remote) == fork ]]
 }
 
-@test "default_branch reads a remote HEAD that still points at a branch, then asks gh, then falls back to main" {
+@test "default_branch reads a remote HEAD that still points at a branch, then asks gh, and fails when neither knows" {
   make_repo r origin=https://github.com/me/r.git
   stub_gh 'repo view github.com/me/r --json defaultBranchRef *' 'trunk'
   [[ $(hub::default_branch) == trunk ]]
@@ -195,8 +195,15 @@ EOF
   [[ $(hub::default_branch) == develop ]]
   git update-ref -d refs/remotes/origin/develop # the remote HEAD dangles after a rename and prune
   [[ $(hub::default_branch) == trunk ]]
+  stub_gh 'repo view github.com/me/r --json defaultBranchRef *' '' 1
+  run hub::default_branch
+  assert_failure
+  assert_output_equals ""
+  [[ $(hub::default_branch || echo main) == main ]] # what a command that only builds a URL does
   git remote remove origin
-  [[ $(hub::default_branch) == main ]]
+  run hub::default_branch
+  assert_failure
+  assert_output_equals ""
 }
 
 @test "current_branch is the full ref's name, even next to a tag of the same name" {
@@ -591,6 +598,26 @@ EOF
   [[ ${HUB_OPTS[*]} == --strategy-option && $HUB_OPT_NEXT == 1 ]]
   run hub::git_option cherry-pick mX S --strat
   assert_failure
+  # short options come from the usage git prints for -h: an unknown switch is git's to refuse
+  run hub::git_option fetch jo '' -z
+  assert_failure
+  run hub::git_option fetch jo '' -pz
+  assert_failure
+  hub::git_option fetch jo '' -pq
+  [[ ${HUB_OPTS[*]} == "-p -q" && $HUB_OPT_NEXT == 0 ]]
+  hub::git_option fetch jo '' -4
+  [[ ${HUB_OPTS[*]} == -4 && $HUB_OPT_NEXT == 0 ]]
+  hub::git_option am pC S -3
+  [[ ${HUB_OPTS[*]} == -3 && $HUB_OPT_NEXT == 0 ]]
+  run hub::git_option cherry-pick mX S -h
+  assert_failure
+  local c
+  hub::git_short_options remote add >/dev/null
+  [[ $HUB_GIT_SHORTS_FOR == "remote add" ]]
+  for c in f t m; do [[ $HUB_GIT_SHORTS == *"$c"* ]]; done
+  hub::git_short_options fetch >/dev/null
+  [[ $HUB_GIT_SHORTS_FOR == fetch && $HUB_GIT_SHORTS != *z* ]]
+  for c in j o p q 4 6; do [[ $HUB_GIT_SHORTS == *"$c"* ]]; done
   # the table of a command is read once, and another command's replaces it
   hub::git_options clone >/dev/null
   [[ $HUB_GIT_OPTIONS_FOR == clone && $'\n'$HUB_GIT_OPTIONS$'\n' == *$'\n--depth=\n'* ]]
@@ -605,6 +632,10 @@ EOF
   assert_failure
   hub::git_option clone bcjou '' --depth # clone needs none
   [[ ${HUB_OPTS[*]} == --depth && $HUB_OPT_NEXT == 1 ]]
+  hub::git_option fetch jo '' -q # fetch prints its usage anywhere
+  [[ ${HUB_OPTS[*]} == -q ]]
+  run hub::git_option 'remote add' tm '' -f # a subcommand prints none outside a repository
+  assert_failure
 }
 
 # push_why BRANCH : why hub::push_target would not push BRANCH (empty when git would push it).

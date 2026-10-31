@@ -21,11 +21,11 @@
 # option it does not know for its revision parser, and so does hub.
 #
 #   $ hub cherry-pick https://github.com/jingweno/gh/commit/a319d88
-#   > git fetch --no-tags https://github.com/jingweno/gh.git a319d88...
+#   > git fetch --no-tags --refmap= https://github.com/jingweno/gh.git a319d88...
 #   > git cherry-pick a319d88...
 #
 #   $ hub cherry-pick https://github.com/jingweno/gh/pull/73/commits/a319d88
-#   > git fetch --no-tags origin +refs/pull/73/head:refs/hub/cherry-pick/73-PID
+#   > git fetch --no-tags --refmap= origin +refs/pull/73/head:refs/hub/cherry-pick/73-PID
 #   > git update-ref -d refs/hub/cherry-pick/73-PID
 #   > git cherry-pick a319d88...
 
@@ -88,10 +88,12 @@ _hub_cherry_pick_resolve() {
   src=$(hub::remote_for_project "$owner/$repo" "$host") || src=$(hub::git_url "$owner/$repo" "$host")
   if [[ -n $number ]]; then
     # A ref of this run alone, gone once the commit is known: another fetch in this work tree
-    # could replace FETCH_HEAD between the fetch and the lookup.
+    # could replace FETCH_HEAD between the fetch and the lookup. --refmap= keeps git from also
+    # writing what the remote's configured refspecs map the pull request to (a
+    # +refs/pull/*/head:refs/heads/pull-* refspec would force-update a local branch).
     tmp=refs/hub/cherry-pick/$number-$$
     HUB_PICK_TMP=$tmp
-    hub::git fetch --no-tags "$src" "+refs/pull/$number/head:$tmp" || return
+    hub::git fetch --no-tags --refmap= "$src" "+refs/pull/$number/head:$tmp" || return
     if ((HUB_NOOP)); then # nothing was fetched to look the commit up in
       HUB_PICK_OID=$sha
     else
@@ -107,7 +109,7 @@ _hub_cherry_pick_resolve() {
       hub::die "Aborted: could not find commit $arg"
     fi
   fi
-  hub::git fetch --no-tags "$src" "$sha" || return
+  hub::git fetch --no-tags --refmap= "$src" "$sha" || return
   HUB_PICK_OID=$sha
 }
 

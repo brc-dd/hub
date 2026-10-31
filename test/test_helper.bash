@@ -212,7 +212,7 @@ shim_git() {
 dir='$dir'
 if [[ ! -e \$dir/done && \$* == \$(<"\$dir/pattern") ]]; then
   : >"\$dir/done"
-  PATH='${real%/*}':\$PATH bash -c "\$(<"\$dir/action")" >"\$dir/action.log" 2>&1
+  HUB_SHIM_CALLER=\$PPID PATH='${real%/*}':\$PATH bash -c "\$(<"\$dir/action")" >"\$dir/action.log" 2>&1
 fi
 exec '$real' "\$@"
 EOF

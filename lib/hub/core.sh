@@ -257,6 +257,22 @@ hub::git_options() {
   printf '%s\n' "$HUB_GIT_OPTIONS"
 }
 
+# hub::git_short_options CMD... : the short options of git CMD, as a string of their letters, from
+# the usage git prints for `CMD -h` (the completion table lists long options only). Asked once per
+# run. Fails when git prints no usage, as for a subcommand outside a repository.
+hub::git_short_options() {
+  local out line set=''
+  if [[ ${HUB_GIT_SHORTS_FOR-} != "$*" ]]; then
+    out=$(git "$@" -h 2>/dev/null) || true # the usage goes to standard output, with status 129
+    [[ $out == usage:* ]] || return 1
+    while IFS= read -r line; do
+      [[ $line =~ ^[[:space:]]+-([^-[:space:],]) ]] && set+=${BASH_REMATCH[1]}
+    done <<<"$out"
+    HUB_GIT_SHORTS_FOR=$* HUB_GIT_SHORTS=$set
+  fi
+  printf '%s\n' "$HUB_GIT_SHORTS"
+}
+
 # hub::git_option CMD SHORTS OPTIONAL ARG : how git CMD reads the option ARG (-x, a cluster -xyz,
 # --long or --long=VALUE; never -- itself). Sets HUB_OPTS to the options ARG spells, in order and
 # as git names them: the long option ARG spells or unambiguously abbreviates (--dep is --depth),
@@ -264,11 +280,11 @@ hub::git_options() {
 # HUB_OPT_NEXT to 1 when the last of them takes the next argument as its value. SHORTS lists CMD's
 # short options whose value is required ("jo"), OPTIONAL those whose value is optional, which git
 # reads only attached ("S", for -S[<key-id>]). Returns 1 when git would not know ARG: an unknown
-# or ambiguous long option, which git refuses, so callers leave the command line to it. For
-# cherry-pick and revert git keeps unknown long options for its revision parser and takes no
-# abbreviation, so only a spelled-out option is known.
+# or ambiguous long option, or a short one that CMD's usage does not list, which git refuses, so
+# callers leave the command line to it. For cherry-pick and revert git keeps unknown long options
+# for its revision parser and takes no abbreviation, so only a spelled-out option is known.
 hub::git_option() {
-  local cmd=$1 shorts=$2 optional=$3 arg=$4 name entry found='' n=0 c i table
+  local cmd=$1 shorts=$2 optional=$3 arg=$4 name entry found='' n=0 c i table known
   HUB_OPTS=() HUB_OPT_NEXT=0
   if [[ $arg == --* ]]; then
     name=${arg%%=*}
@@ -291,8 +307,11 @@ hub::git_option() {
     [[ $found == *= && $arg != *=* ]] && HUB_OPT_NEXT=1
     return 0
   fi
+  # shellcheck disable=SC2086  # CMD may be two words
+  known=$(hub::git_short_options $cmd) || return 1
   for ((i = 1; i < ${#arg}; i++)); do
     c=${arg:i:1}
+    [[ $known == *"$c"* ]] || return 1 # an unknown switch, which git refuses
     HUB_OPTS+=("-$c")
     if [[ -n $shorts && $shorts == *"$c"* ]]; then
       ((i + 1 < ${#arg})) || HUB_OPT_NEXT=1
@@ -300,7 +319,7 @@ hub::git_option() {
     fi
     [[ -n $optional && $optional == *"$c"* ]] && return 0 # the rest of the cluster is its value
   done
-  return 0 # short flags are not checked: git reports an unknown one itself
+  return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -681,13 +700,11 @@ hub::push_target() {
 }
 
 # hub::default_branch [REMOTE] : from refs/remotes/REMOTE/HEAD when it points at a branch that still
-# exists, else from gh, else "main".
+# exists, else from gh. Fails, printing nothing, when neither can tell: a command that only builds
+# a URL may then assume main (`|| echo main`); one that changes something must not.
 hub::default_branch() {
   local remote=${1:-} ref proj
-  [[ -n $remote ]] || remote=$(hub::main_remote) || {
-    printf 'main\n'
-    return 0
-  }
+  [[ -n $remote ]] || remote=$(hub::main_remote) || return 1
   if ref=$(hub::git_query symbolic-ref -q "refs/remotes/$remote/HEAD") && [[ $ref == "refs/remotes/$remote/"?* ]] \
     && hub::git_query show-ref --verify --quiet -- "$ref"; then
     printf '%s\n' "${ref#"refs/remotes/$remote/"}"
@@ -700,7 +717,7 @@ hub::default_branch() {
       return 0
     fi
   fi
-  printf 'main\n'
+  return 1
 }
 
 # hub::parse_github_url URL : sets HUB_URL_HOST, HUB_URL_OWNER, HUB_URL_REPO, HUB_URL_KIND, HUB_URL_NUMBER,

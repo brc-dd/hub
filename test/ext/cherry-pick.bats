@@ -31,7 +31,7 @@ served_commit() {
   clone_served mislav/dotfiles
   run hub --noop cherry-pick "https://github.com/jingweno/dotfiles/commit/$sha"
   assert_success
-  assert_output_equals "git fetch --no-tags https://github.com/jingweno/dotfiles.git $sha
+  assert_output_equals "git fetch --no-tags --refmap= https://github.com/jingweno/dotfiles.git $sha
 git cherry-pick $sha"
   run hub cherry-pick "https://github.com/jingweno/dotfiles/commit/$sha"
   assert_success
@@ -60,7 +60,7 @@ git cherry-pick $sha"
   git remote add jingweno git@github.com:jingweno/dotfiles.git
   run hub --noop cherry-pick "https://github.com/JingWeno/dotfiles/commit/$sha"
   assert_success
-  assert_line_equals 0 "git fetch --no-tags jingweno $sha"
+  assert_line_equals 0 "git fetch --no-tags --refmap= jingweno $sha"
   run hub cherry-pick "https://github.com/jingweno/dotfiles/commit/$sha"
   assert_success
   [[ $(git log -1 --format=%s) == fix-build ]]
@@ -74,7 +74,7 @@ git cherry-pick $sha"
   clone_served mislav/dotfiles
   run hub --noop cherry-pick -x https://github.com/mislav/dotfiles/pull/12/commits/a319d88
   assert_success
-  [[ ${lines[0]} == "git fetch --no-tags origin +refs/pull/12/head:refs/hub/cherry-pick/12-"* ]]
+  [[ ${lines[0]} == "git fetch --no-tags --refmap= origin +refs/pull/12/head:refs/hub/cherry-pick/12-"* ]]
   [[ ${lines[1]} == "git update-ref -d refs/hub/cherry-pick/12-"* ]]
   assert_line_equals 2 "git cherry-pick -x a319d88"
   [[ ${#lines[@]} -eq 3 ]]
@@ -157,7 +157,7 @@ git cherry-pick $sha"
   sha=$(served_commit mislav/dotfiles fix-build refs/pull/12/head)
   clone_served mislav/dotfiles
   # hub is told to terminate while its fetch runs: the fetch completes, then hub exits through its trap
-  shim_git 'fetch --no-tags origin +refs/pull/12/head:refs/hub/cherry-pick/12-*' 'kill -TERM "$(ps -o ppid= -p "$PPID" | tr -d " ")"'
+  shim_git 'fetch --no-tags --refmap= origin +refs/pull/12/head:refs/hub/cherry-pick/12-*' 'kill -TERM "$HUB_SHIM_CALLER"'
   PATH=$SHIM_PATH run hub cherry-pick "https://github.com/mislav/dotfiles/pull/12/commits/$sha"
   [[ $status -eq 143 ]] || {
     printf 'expected exit 143, got %s\noutput:\n%s\n' "$status" "$output"
@@ -175,7 +175,7 @@ git cherry-pick $sha"
   clone_served mislav/dotfiles
   run hub --noop cherry-pick "jingweno@$sha"
   assert_success
-  assert_output_equals "git fetch --no-tags https://github.com/jingweno/dotfiles.git $sha
+  assert_output_equals "git fetch --no-tags --refmap= https://github.com/jingweno/dotfiles.git $sha
 git cherry-pick $sha"
   stub_gh "api --hostname github.com repos/jingweno/dotfiles/commits/${sha:0:7} --jq .sha" "$sha"
   run hub cherry-pick "jingweno@${sha:0:7}"
@@ -191,7 +191,7 @@ git cherry-pick $sha"
   git remote add jingweno https://github.com/jingweno/dotfiles.git
   run hub --noop cherry-pick "jingweno@$sha"
   assert_success
-  assert_output_equals "git fetch --no-tags jingweno $sha
+  assert_output_equals "git fetch --no-tags --refmap= jingweno $sha
 git cherry-pick $sha"
   run hub cherry-pick "jingweno@$sha"
   assert_success
@@ -255,7 +255,7 @@ git cherry-pick $sha"
   clone_served mislav/dotfiles
   run hub --noop cherry-pick -Skeym "https://github.com/jingweno/dotfiles/commit/$sha"
   assert_success
-  assert_output_equals "git fetch --no-tags https://github.com/jingweno/dotfiles.git $sha
+  assert_output_equals "git fetch --no-tags --refmap= https://github.com/jingweno/dotfiles.git $sha
 git cherry-pick -Skeym $sha"
   run hub --noop cherry-pick -xS "https://github.com/jingweno/dotfiles/commit/$sha"
   assert_line_equals 1 "git cherry-pick -xS $sha"
@@ -273,17 +273,17 @@ git cherry-pick -Skeym $sha"
   stub_gh 'api --hostname ghe.example.com repos/team/app/commits/a319d88 --jq .sha' "$SHA"
   run hub --noop cherry-pick https://ghe.example.com/team/app/commit/a319d88
   assert_success
-  assert_output_equals "git fetch --no-tags origin $SHA
+  assert_output_equals "git fetch --no-tags --refmap= origin $SHA
 git cherry-pick $SHA"
   export GH_HOST=ghe.example.com
   run hub --noop cherry-pick https://ghe.example.com/team/app/commit/a319d88
   assert_success
-  assert_line_equals 0 "git fetch --no-tags origin $SHA"
+  assert_line_equals 0 "git fetch --no-tags --refmap= origin $SHA"
   stub_gh 'api --hostname ghe.example.com repos/alice/app/commits/a319d88 --jq .sha' "$SHA"
   stub_gh 'config get git_protocol -h ghe.example.com' 'https'
   run hub --noop cherry-pick alice@a319d88
   assert_success
-  assert_line_equals 0 "git fetch --no-tags https://ghe.example.com/alice/app.git $SHA"
+  assert_line_equals 0 "git fetch --no-tags --refmap= https://ghe.example.com/alice/app.git $SHA"
 }
 
 @test "cherry-pick looks up a github.com commit on github.com, whatever host gh defaults to" {
@@ -292,18 +292,18 @@ git cherry-pick $SHA"
   stub_gh 'api --hostname github.com repos/jingweno/dotfiles/commits/a319d88 --jq .sha' "$SHA"
   run hub --noop cherry-pick https://github.com/jingweno/dotfiles/commit/a319d88
   assert_success
-  assert_output_equals "git fetch --no-tags https://github.com/jingweno/dotfiles.git $SHA
+  assert_output_equals "git fetch --no-tags --refmap= https://github.com/jingweno/dotfiles.git $SHA
 git cherry-pick $SHA"
   run hub --noop cherry-pick jingweno@a319d88
   assert_success
-  assert_output_equals "git fetch --no-tags https://github.com/jingweno/dotfiles.git $SHA
+  assert_output_equals "git fetch --no-tags --refmap= https://github.com/jingweno/dotfiles.git $SHA
 git cherry-pick $SHA"
   unset GH_HOST
   mkdir -p "$GH_CONFIG_DIR"
   printf 'enterprise.example:\n    user: me\n' >"$GH_CONFIG_DIR/hosts.yml"
   run hub --noop cherry-pick https://github.com/jingweno/dotfiles/commit/a319d88
   assert_success
-  assert_line_equals 0 "git fetch --no-tags https://github.com/jingweno/dotfiles.git $SHA"
+  assert_line_equals 0 "git fetch --no-tags --refmap= https://github.com/jingweno/dotfiles.git $SHA"
 }
 
 @test "cherry-pick without a commit URL or USER@SHA is plain git cherry-pick" {
@@ -354,4 +354,20 @@ git cherry-pick $SHA"
   assert_success
   assert_line_equals 0 "Summary: Cherry-pick a commit from GitHub by its URL, or from a fork as USER@SHA."
   assert_output_contains "Usage: hub cherry-pick [<git-cherry-pick options>] (COMMIT-URL | USER@SHA | <commit>)..."
+}
+
+@test "cherry-pick never writes what the remote's fetch refspecs map the pull request to" {
+  serve_github mislav/dotfiles
+  local sha before
+  sha=$(served_commit mislav/dotfiles fix-build refs/pull/12/head)
+  clone_served mislav/dotfiles
+  git config --add remote.origin.fetch '+refs/pull/*/head:refs/heads/pull-*'
+  git branch pull-12 main
+  commit_on pull-12 "local work"
+  before=$(tip pull-12)
+  run hub cherry-pick "https://github.com/mislav/dotfiles/pull/12/commits/$sha"
+  assert_success
+  [[ $(tip pull-12) == "$before" ]]
+  [[ -f fix-build.txt && $(git log -1 --format=%s) == fix-build ]]
+  assert_no_private_refs
 }

@@ -186,7 +186,7 @@ ci_repo() { make_repo dotfiles origin=https://github.com/mislav/dotfiles.git; }
     success ci/travis https://ci.example/1 \
     neutral lint https://github.com/r/5)"
   assert_gh_called 'api --hostname github.com --paginate repos/mislav/dotfiles/commits/*/status --jq .statuses\[\] | \["status", .state, .context, .target_url // ""\] | @tsv'
-  assert_gh_called 'api --hostname github.com --paginate repos/mislav/dotfiles/commits/*/check-runs --jq (select((.check_runs | type) == "array") | \["page", ""\]), (.check_runs // \[\] | .\[\] | \["check", (if .status == "completed" then .conclusion else "pending" end), .name, .html_url // ""\]) | @tsv'
+  assert_gh_called 'api --hostname github.com --paginate repos/mislav/dotfiles/commits/*/check-runs --jq if (.check_runs | type) != "array" then error("not a page of check runs") else (\["page", ""\], (.check_runs\[\] | \["check", (if .status == "completed" then .conclusion else "pending" end), .name, .html_url // ""\])) | @tsv end'
 }
 
 @test "-v keeps the exit code and says 'no status' when there are no checks" {
@@ -443,4 +443,37 @@ ci_repo() { make_repo dotfiles origin=https://github.com/mislav/dotfiles.git; }
   assert_failure
   assert_output_contains "Aborted: could not find a GitHub remote"
   assert_gh_not_called
+}
+
+@test "an answer that is no page of check runs fails the lookup instead of counting as an empty page" {
+  ci_repo
+  shim_gh
+  export HUB_TEST_CHECKS='' HUB_TEST_CHECKS_ERROR='not a page of check runs'
+  run hub ci-status
+  assert_status 1
+  assert_output_equals "gh: not a page of check runs"
+  run hub ci-status -v
+  assert_status 1
+  assert_output_equals "gh: not a page of check runs"
+}
+
+@test "the check-runs filter marks every page and fails on anything that is not one" {
+  command -v jq >/dev/null || skip "jq is not installed"
+  ci_repo
+  shim_gh
+  run hub ci-status
+  local filter
+  filter=$(gh_calls | sed -n 's/.*check-runs --jq //p' | head -n 1)
+  [[ -n $filter ]]
+  run jq -r "$filter" <<<'{"check_runs":[]}'
+  assert_success
+  assert_output_equals $'page\t'
+  run jq -r "$filter" <<<'{"check_runs":[{"status":"completed","conclusion":"failure","name":"lint","html_url":"https://github.com/r/1"},{"status":"in_progress","name":"build"}]}'
+  assert_success
+  assert_output_equals $'page\t\ncheck\tfailure\tlint\thttps://github.com/r/1\ncheck\tpending\tbuild\t'
+  run jq -r "$filter" <<<'{"message":"not a checks document"}'
+  assert_failure
+  assert_output_contains "not a page of check runs"
+  run jq -r "$filter" <<<'{"check_runs":null,"total_count":0}'
+  assert_failure
 }

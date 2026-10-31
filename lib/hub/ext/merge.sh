@@ -20,7 +20,7 @@
 # command line to git.
 #
 #   $ hub merge https://github.com/jingweno/gh/pull/73
-#   > git fetch origin +refs/pull/73/head:refs/hub/merge/73-PID
+#   > git fetch --refmap= origin +refs/pull/73/head:refs/hub/merge/73-PID
 #   > git merge --no-ff -m 'Merge pull request #73 from jingweno/feature ...' SHA
 #   > git update-ref -d refs/hub/merge/73-PID
 
@@ -74,11 +74,13 @@ hub_ext_merge() {
   src=$(hub::remote_for_project "$owner/$repo" "$host") || src=$(hub::git_url "$owner/$repo" "$host")
   # A ref of this run alone: FETCH_HEAD is shared with every other fetch in this work tree, and a
   # remote-tracking ref with any other fetch of the same remote. The commit fetched is merged by
-  # its hash, and the ref goes on every way out.
+  # its hash, and the ref goes on every way out. --refmap= keeps git from also writing what the
+  # remote's configured refspecs map the pull request to (a +refs/pull/*/head:refs/heads/pull-*
+  # refspec would force-update a local branch).
   tmp=refs/hub/merge/$number-$$
   if ((HUB_NOOP)); then
     args[url_i]=$tmp
-    hub::git fetch "$src" "+refs/pull/$number/head:$tmp"
+    hub::git fetch --refmap= "$src" "+refs/pull/$number/head:$tmp"
     hub::git merge "${opts[@]}" "${args[@]}"
     hub::git update-ref -d "$tmp"
     exit 0
@@ -88,7 +90,7 @@ hub_ext_merge() {
   trap 'exit 129' HUP
   trap 'exit 130' INT
   trap 'exit 143' TERM
-  hub::git fetch "$src" "+refs/pull/$number/head:$tmp" || exit
+  hub::git fetch --refmap= "$src" "+refs/pull/$number/head:$tmp" || exit
   oid=$(hub::git_query rev-parse --verify --quiet "$tmp^{commit}") || hub::die "Aborted: could not fetch refs/pull/$number/head from $src"
   args[url_i]=$oid
   hub::git merge "${opts[@]}" "${args[@]}"
