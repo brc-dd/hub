@@ -921,6 +921,107 @@ SH
   assert_equals "$(server_ref mislav/dotfiles refs/heads/feature)" "$(git rev-parse HEAD~1)"
 }
 
+@test "-p asks git itself how remote.*.push sends the branch, and pushes nothing git would refuse" {
+  feature_repo
+  stub_gh 'pr create *' 'https://github.com/mislav/dotfiles/pull/1'
+  # a short source that names a branch and a tag at once
+  git tag feature
+  git config remote.origin.push feature:refs/heads/deploy
+  run git push --dry-run --porcelain origin
+  assert_failure
+  run hub pull-request -p -m Fix
+  assert_failure
+  assert_output_equals "Aborted: git push would not push feature as configured; git push --dry-run origin says: src refspec feature matches more than one; push it yourself, or name the head with -h [OWNER:]BRANCH."
+  assert_equals "$(branches mislav/dotfiles)" "main "
+  assert_gh_not_called
+  git tag -d feature >/dev/null
+  # a later source that names nothing
+  git config --add remote.origin.push refs/heads/missing:refs/heads/missing
+  run hub pull-request -p -m Fix
+  assert_failure
+  assert_output_equals "Aborted: git push would not push feature as configured; git push --dry-run origin says: src refspec refs/heads/missing does not match any; push it yourself, or name the head with -h [OWNER:]BRANCH."
+  assert_equals "$(branches mislav/dotfiles)" "main "
+  assert_gh_not_called
+  # two destinations, the first excluded by a negative refspec: the other is where git sends it
+  git config --replace-all remote.origin.push refs/heads/feature:refs/heads/skip
+  git config --add remote.origin.push refs/heads/feature:refs/heads/actual
+  git config --add remote.origin.push '^refs/heads/skip'
+  run hub --noop pull-request -p -m Fix
+  assert_success
+  assert_output_equals $'git push --set-upstream origin HEAD:refs/heads/actual\ngh pr create --repo github.com/mislav/dotfiles --base main --head actual --title Fix --body \'\''
+  run hub pull-request -p -m Fix
+  assert_success
+  assert_equals "$(branches mislav/dotfiles)" "actual main "
+  assert_equals "$(server_ref mislav/dotfiles refs/heads/actual)" "$(git rev-parse HEAD)"
+  assert_gh_called 'pr create --repo github.com/mislav/dotfiles --base main --head actual --title Fix*'
+}
+
+@test "a sole remote is where git pushes, whatever its name: -p pushes there, and -h BRANCH looks there" {
+  serve_github alice/project
+  clone_served alice/project
+  git remote rename origin fork
+  git checkout -q -b feature
+  git commit -q --allow-empty -m Fix
+  git config push.default current
+  run git push --dry-run --porcelain
+  assert_success
+  assert_output_contains "refs/heads/feature:refs/heads/feature"
+  run hub --noop pull-request -p -m Fix
+  assert_success
+  assert_output_equals $'git push --set-upstream fork HEAD:refs/heads/feature\ngh pr create --repo github.com/alice/project --base main --head feature --title Fix --body \'\''
+  run hub --noop pull-request -h other -f -m Fix
+  assert_success
+  assert_output_equals "gh pr create --repo github.com/alice/project --base main --head other --title Fix --body ''"
+  git config --unset push.default # simple, without an upstream yet: where `git push -u` would go
+  run hub --noop pull-request -p -m Fix
+  assert_success
+  assert_line_equals 0 "git push --set-upstream fork HEAD:refs/heads/feature"
+  # with two remotes, git's default is origin, and there is none here
+  git remote add second https://github.com/bob/project.git
+  run hub pull-request -p -m Fix
+  assert_failure
+  assert_output_equals "Aborted: there is no remote origin to push feature to; add one, or name the head with -h [OWNER:]BRANCH."
+  run hub pull-request -h other -f -m Fix
+  assert_failure
+  assert_output_equals "Aborted: there is no remote origin to find other on; name the head with -h OWNER:BRANCH."
+  assert_equals "$(branches alice/project)" "main "
+  assert_gh_not_called
+}
+
+@test "without -p, the pushed branch is the one remote.*.push sends the branch as, under the remote's fetch mapping" {
+  feature_repo
+  git config remote.origin.push HEAD:refs/heads/publish
+  [[ -z $(git for-each-ref --format='%(push)' refs/heads/feature) ]] # git's own atom knows no HEAD source
+  run hub --noop pull-request -m Fix
+  assert_failure
+  assert_output_equals "Aborted: feature seems not yet pushed to origin (use -p to push it, or -f to skip this check)."
+  git push -q origin HEAD:refs/heads/publish
+  run hub --noop pull-request -m Fix
+  assert_success
+  assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --base main --head publish --title Fix --body ''"
+  git config remote.origin.push feature:publish # a short source and destination
+  run hub --noop pull-request -m Fix
+  assert_success
+  assert_output_equals "gh pr create --repo github.com/mislav/dotfiles --base main --head publish --title Fix --body ''"
+  git commit -q --allow-empty -m More
+  run hub --noop pull-request -m Fix
+  assert_failure
+  assert_output_equals "Aborted: 1 commit of feature is not yet pushed to origin/publish (use -p to push it, or -f to skip this check)."
+  # the remote-tracking branch is where the remote's fetch refspecs put publish
+  git config --unset-all remote.origin.fetch
+  git config --add remote.origin.fetch '+refs/heads/*:refs/remotes/origin/mirror/*'
+  git fetch -q origin
+  run hub --noop pull-request -m Fix
+  assert_failure
+  assert_output_equals "Aborted: 1 commit of feature is not yet pushed to origin/mirror/publish (use -p to push it, or -f to skip this check)."
+  git config --unset-all remote.origin.fetch
+  git config --add remote.origin.fetch '+refs/heads/release:refs/remotes/origin/publish'
+  run hub --noop pull-request -m Fix
+  assert_failure
+  assert_output_equals "Aborted: remote.origin.fetch maps no remote-tracking branch to publish of origin, so hub cannot tell whether feature is pushed there (use -p to push it, or -f to skip this check)."
+  assert_gh_not_called
+}
+
 # no_gh_path : a PATH with everything hub needs but gh, to run hub where the GitHub CLI is not installed.
 no_gh_path() {
   local dir=$HUB_TEST_TMP/no-gh tool
@@ -1017,7 +1118,7 @@ no_gh_path() {
   assert_output_equals "Aborted: --no-edit needs alice/other locally; run git fetch alice first."
   run hub --noop pull-request --no-edit -h bob:other
   assert_failure
-  assert_output_equals "Aborted: --no-edit takes the message from the commits of bob:other, but no remote here points at github.com/bob/dotfiles to read them from; give the message with -m or -F."
+  assert_output_equals "Aborted: --no-edit takes the message from the commits of bob:other, but no remote here fetches from github.com/bob/dotfiles to read them from; give the message with -m or -F."
   # no commits of the head beyond the base
   git update-ref refs/remotes/origin/other main
   run hub --noop pull-request --no-edit -h other
@@ -1093,4 +1194,38 @@ no_gh_path() {
   assert_failure
   assert_output_equals "Aborted: --no-edit takes the message from the commits of other, but remote.origin.fetch maps no remote-tracking branch to other of origin; give the message with -m or -F."
   assert_gh_not_called
+}
+
+@test "--no-edit reads the head's commits from a remote that fetches from the head repository, not from one that only pushes there" {
+  make_repo fixture origin=https://github.com/alice/repo.git
+  git remote set-url --push origin https://github.com/bob/repo.git # fetches alice's, pushes bob's
+  git remote add fork https://github.com/bob/repo.git
+  set_remote_head origin main
+  git checkout -q -b topic
+  git commit -q --allow-empty -m "Upstream topic message"
+  git update-ref refs/remotes/origin/topic HEAD
+  git checkout -q main
+  git branch -q -D topic
+  git checkout -q -b fork-topic
+  git commit -q --allow-empty -m "Fork topic message" -m "From the fork."
+  git update-ref refs/remotes/fork/topic HEAD
+  git checkout -q main
+  stub_gh 'api --hostname github.com users/bob -q .type' User
+  # -h topic is bob's topic, where origin pushes: its commits are those fork fetched from bob
+  run hub --noop pull-request -h topic --no-edit
+  assert_success
+  assert_output_equals "gh pr create --repo github.com/alice/repo --base main --head bob:topic --title Fork\\ topic\\ message --body From\\ the\\ fork."
+  run hub --noop pull-request -h bob:topic --no-edit
+  assert_success
+  assert_output_equals "gh pr create --repo github.com/alice/repo --base main --head bob:topic --title Fork\\ topic\\ message --body From\\ the\\ fork."
+  # without a remote that fetches from bob's repository, there is nothing to read
+  git remote remove fork
+  run hub --noop pull-request -h topic --no-edit
+  assert_failure
+  assert_output_equals "Aborted: --no-edit takes the message from the commits of bob:topic, but no remote here fetches from github.com/bob/repo to read them from; give the message with -m or -F."
+  # a remote that fetches from and pushes to one repository reads its own remote-tracking branch
+  git remote set-url --push origin https://github.com/alice/repo.git
+  run hub --noop pull-request -h topic --no-edit
+  assert_success
+  assert_output_equals "gh pr create --repo github.com/alice/repo --base main --head topic --title Upstream\\ topic\\ message --body ''"
 }

@@ -63,19 +63,24 @@ is not.
   `.diff`) through `gh api`.
 - `pull-request` has hub's grammar only (`-R`, `--dry-run`, `--fill` and gh
   passthrough are gone): the head is named from where `git push` sends the
-  branch and from that remote's push URL; without `-p` the branch must be
-  pushed, which `-f` skips; `-p` checks everything, including what gh would
-  refuse without a terminal, and that gh is installed, before pushing
-  `HEAD:refs/heads/BRANCH`; under `push.default matching`, `-p` pushes only a
-  branch the destination already has, asked with `git ls-remote` as `git
-  push` asks; the current branch's `gh-merge-base` is the default base
-  whenever the pull request is for that branch (no `-h`, `-p`, or `-h` naming
-  the repository and branch `git push` sends it to, however spelled);
-  `--no-edit` takes the first commit of the head branch (HEAD's when the pull
-  request is for the current branch, else its remote-tracking branch's, the
-  one the remote's fetch refspecs map it to); `-i` converts an issue through
-  the API with string fields; `-o` and `-c` leave gh's prompts alone and look
-  the URL up afterwards.
+  branch (the sole remote, whatever its name, else `origin`, when none is
+  configured) and from that remote's push URL; without `-p` the branch must be
+  pushed, as the remote-tracking branch the remote's fetch refspecs map its
+  name there to shows, which `-f` skips; `-p` checks everything, including
+  what gh would refuse without a terminal, and that gh is installed, before
+  pushing `HEAD:refs/heads/BRANCH`; under `push.default matching`, `-p` pushes
+  only a branch the destination already has, asked with `git ls-remote` as
+  `git push` asks; with `remote.*.push` configured, `-p` asks git itself what
+  it would send the branch as (`git push --dry-run --porcelain` to the remote)
+  and pushes nothing git refuses; the current branch's `gh-merge-base` is the
+  default base whenever the pull request is for that branch (no `-h`, `-p`, or
+  `-h` naming the repository and branch `git push` sends it to, however
+  spelled); `--no-edit` takes the first commit of the head branch (HEAD's when
+  the pull request is for the current branch, else its remote-tracking
+  branch's, the one the fetch refspecs of a remote that fetches from the head
+  repository map it to); `-i` converts an issue through the API with string
+  fields; `-o` and `-c` leave gh's prompts alone and look the URL up
+  afterwards.
 - `create` runs `gh repo create HOST/OWNER/NAME --source=TOP --remote=REMOTE`
   without changing directory, takes `OWNER/NAME`, `HOST/OWNER/NAME` or a URL,
   gains `--push`, and no longer accepts gh's other options. `fork` runs
@@ -325,6 +330,28 @@ is not.
   user had for `git`; `hub help sync` claimed a `main` fallback that `sync`
   does not have (a branch deleted on the remote is left alone, with a
   warning, when the default branch is unknown).
+- Found by the review of the eleventh round: `pull-request -p` pushed where
+  its own reading of `remote.*.push` said, so it could push a branch that `git
+  push` refuses (a short source that names a branch and a tag at once, a later
+  source that names nothing, one destination fed by two sources), and refused
+  a branch that git sends to its second destination when a negative refspec
+  excludes the first; hub now reads every destination the refspecs give the
+  branch, drops the excluded ones, and, before pushing, asks git itself (`git
+  push --dry-run --porcelain` to the remote) what it would send the branch as,
+  refusing with git's own words what git refuses. A branch with no push remote
+  configured went to `origin` where git takes the sole remote, whatever its
+  name, so `pull-request -p`, `-h BRANCH`, `browse` and `compare` missed a
+  repository whose one remote is called otherwise. `--no-edit` for a head that
+  is another branch read the remote-tracking branch of the remote that pushes
+  to the head repository, which may fetch from another one, a fork's branch
+  from the upstream's refs, say; it reads a remote that fetches from the head
+  repository. The pushed-branch check read `%(push)`, which knows no `HEAD` or
+  short source in `remote.*.push`, so a branch pushed under
+  `HEAD:refs/heads/publish` was "not yet pushed"; it reads the remote-tracking
+  branch the remote's fetch refspecs map the destination to. `merge` took an
+  empty extra operand (`hub merge URL ''`) for none, fetched the pull request
+  and let git refuse the empty revision; it is refused before anything is
+  fetched.
 - The option table and the usage of a git command are read once per run, as
   documented; read through `hub::git_option`, they were asked of git again
   for every option on the command line.

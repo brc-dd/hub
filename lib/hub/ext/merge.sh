@@ -28,7 +28,7 @@
 hub_ext_merge() {
   [[ ${1-} == --help ]] && hub::usage
   local -a args=("$@") opts=()
-  local arg opt i url='' url_i=0 extra='' owner repo host number ended=0 value=0 squash=0 ff_given=0 own_msg=0
+  local arg opt i url='' url_i=0 extra='' has_extra=0 owner repo host number ended=0 value=0 squash=0 ff_given=0 own_msg=0
   for ((i = 0; i < $#; i++)); do
     arg=${args[i]}
     if ((value)); then
@@ -37,7 +37,7 @@ hub_ext_merge() {
       if [[ -z $url ]] && ((! ended)) && hub::parse_github_url "$arg" && [[ $HUB_URL_KIND == pull && -z $HUB_URL_SHA$HUB_URL_FORMAT ]]; then
         url=$arg url_i=$i owner=$HUB_URL_OWNER repo=$HUB_URL_REPO host=$HUB_URL_HOST number=$HUB_URL_NUMBER
       else
-        [[ -n $extra ]] || extra=$arg
+        ((has_extra)) || extra=$arg has_extra=1 # the first one, an empty word too
       fi
     else
       case $arg in
@@ -61,7 +61,10 @@ hub_ext_merge() {
     fi
   done
   [[ -n $url ]] || hub::exec_git merge "$@"
-  [[ -z $extra ]] || hub::die "Aborted: a pull request is merged on its own; unexpected argument: $extra"
+  if ((has_extra)); then
+    [[ -n $extra ]] || extra="''"
+    hub::die "Aborted: a pull request is merged on its own; unexpected argument: $extra"
+  fi
   hub::require_repo
   ((squash || ff_given)) || opts+=(--no-ff)
   if ((! squash && ! own_msg)); then

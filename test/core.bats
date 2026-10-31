@@ -918,6 +918,140 @@ push_why() {
   assert_output_contains "refs/heads/topic:refs/heads/topic"
 }
 
+@test "push_target sends a branch to the first destination its refspecs leave it, after the negative ones" {
+  serve_github o/r
+  clone_served o/r
+  git checkout -q -b topic
+  git commit -q --allow-empty -m t
+  # two destinations, the first excluded: git pushes to the other
+  git config remote.origin.push refs/heads/topic:refs/heads/skip
+  git config --add remote.origin.push refs/heads/topic:refs/heads/actual
+  git config --add remote.origin.push '^refs/heads/skip'
+  run git push --dry-run --porcelain origin
+  assert_success
+  assert_output_contains "refs/heads/topic:refs/heads/actual"
+  assert_output_lacks skip
+  hub::push_target topic
+  [[ $HUB_PUSH_BRANCH == actual ]]
+  hub::push_target topic verify
+  [[ $HUB_PUSH_BRANCH == actual ]]
+  git config --add remote.origin.push '^refs/heads/act*'
+  [[ $(push_why topic) == negative && $(push_why topic verify) == negative ]]
+  run git push --dry-run --porcelain origin
+  assert_success
+  assert_output_lacks refs/heads/topic
+  # an explicit destination beside a matching refspec: the explicit one, whether the remote has the branch or not
+  git config --replace-all remote.origin.push :
+  git config --add remote.origin.push refs/heads/topic:refs/heads/publish
+  hub::push_target topic
+  [[ $HUB_PUSH_BRANCH == publish ]]
+  hub::push_target topic verify
+  [[ $HUB_PUSH_BRANCH == publish ]]
+  # the matching one when every other destination is excluded, and only where the remote has the branch
+  git config --add remote.origin.push '^refs/heads/publish'
+  [[ $(push_why topic) == matching && $(push_why topic verify) == matching ]]
+  hub::push_target topic verify || [[ $HUB_PUSH_REMOTE == origin && $HUB_PUSH_BRANCH == topic ]]
+  git push -q origin refs/heads/topic:refs/heads/topic # `git push origin topic` would map topic through remote.origin.push
+  hub::push_target topic
+  [[ $HUB_PUSH_BRANCH == topic ]]
+  hub::push_target topic verify # up to date there: git lists it with --verbose alone
+  [[ $HUB_PUSH_BRANCH == topic ]]
+}
+
+@test "push_target asks git itself before a push through remote.*.push, and refuses what git refuses" {
+  serve_github o/r
+  clone_served o/r
+  git checkout -q -b topic
+  git commit -q --allow-empty -m t
+  # a short source that names a branch and a tag at once: git refuses the whole push
+  git tag topic
+  git config remote.origin.push topic:refs/heads/deploy
+  run git push --dry-run --porcelain origin
+  assert_failure
+  assert_output_contains "src refspec topic matches more than one"
+  hub::push_target topic # read here, the name is the branch's
+  [[ $HUB_PUSH_BRANCH == deploy ]]
+  [[ $(push_why topic verify) == refused ]]
+  hub::push_target topic verify || [[ $HUB_PUSH_ERROR == "src refspec topic matches more than one" && $HUB_PUSH_REMOTE == origin ]]
+  git tag -d topic >/dev/null
+  hub::push_target topic verify
+  [[ $HUB_PUSH_BRANCH == deploy ]]
+  # a later refspec whose source names nothing
+  git config --add remote.origin.push refs/heads/missing:refs/heads/missing
+  [[ $(push_why topic verify) == refused ]]
+  hub::push_target topic verify || [[ $HUB_PUSH_ERROR == "src refspec refs/heads/missing does not match any" ]]
+  hub::push_target topic
+  [[ $HUB_PUSH_BRANCH == deploy ]]
+  # one destination fed by two sources
+  git config --replace-all remote.origin.push refs/heads/topic:refs/heads/deploy
+  git config --add remote.origin.push refs/heads/main:refs/heads/deploy
+  [[ $(push_why topic verify) == refused ]]
+  hub::push_target topic verify || [[ $HUB_PUSH_ERROR == "dst ref refs/heads/deploy receives from more than one src" ]]
+  # the branch's own destination is not a fast-forward: refused with git's reason
+  git config --replace-all remote.origin.push refs/heads/topic:refs/heads/deploy
+  git push -q origin refs/heads/topic:refs/heads/deploy
+  git commit -q --amend --allow-empty -m amended
+  [[ $(push_why topic verify) == refused ]]
+  hub::push_target topic verify || [[ $HUB_PUSH_ERROR == "refs/heads/topic:refs/heads/deploy [rejected] (non-fast-forward)" ]]
+  # another branch's rejection is git's to report at push time: this branch goes
+  git push -q -f origin refs/heads/topic:refs/heads/deploy
+  git checkout -q -b other main
+  git commit -q --allow-empty -m o
+  git push -q origin other
+  git commit -q --amend --allow-empty -m o2
+  git checkout -q topic
+  git config --add remote.origin.push refs/heads/other:refs/heads/other
+  run git push --dry-run --porcelain origin
+  assert_failure
+  assert_output_contains "refs/heads/other:refs/heads/other"
+  hub::push_target topic verify
+  [[ $HUB_PUSH_BRANCH == deploy ]]
+  [[ $(server_branches o/r | sort | tr '\n' ' ') == "deploy main other " ]] # none of this pushed anything
+}
+
+@test "push_target and push_remote take the sole remote, whatever its name, as git does" {
+  make_repo lonely
+  [[ $(hub::default_remote) == origin && $(hub::push_remote main) == origin ]] # no remote at all
+  [[ $(push_why main) == remote ]]
+  cd ..
+  serve_github alice/project
+  clone_served alice/project
+  git remote rename origin fork
+  git checkout -q -b feature
+  git commit -q --allow-empty -m f
+  [[ $(hub::push_remote feature) == fork && $(hub::push_remote) == fork && $(hub::default_remote) == fork ]]
+  [[ $(push_why feature) == upstream ]] # simple: no upstream yet, on the remote `git push -u` would take
+  hub::push_target feature || [[ $HUB_PUSH_REMOTE == fork ]]
+  git config push.default current
+  run git push --dry-run --porcelain fork
+  assert_success
+  assert_output_contains "refs/heads/feature:refs/heads/feature"
+  hub::push_target feature
+  [[ $HUB_PUSH_REMOTE == fork && $HUB_PUSH_BRANCH == feature ]]
+  # with two remotes, git falls back to origin, and there is none here
+  git remote add second https://github.com/bob/project.git
+  [[ $(hub::push_remote feature) == origin && $(hub::default_remote) == origin ]]
+  [[ $(push_why feature) == remote ]]
+  run git push --dry-run
+  assert_failure
+  assert_output_contains "No configured push destination"
+  # the configured remote wins over the sole one, whether it exists or not
+  git remote remove second
+  git config remote.pushDefault elsewhere
+  [[ $(hub::push_remote feature) == elsewhere && $(push_why feature) == remote ]]
+  git config branch.feature.pushRemote fork
+  [[ $(hub::push_remote feature) == fork ]]
+  hub::push_target feature
+  [[ $HUB_PUSH_REMOTE == fork ]]
+  git config --unset branch.feature.pushRemote
+  git config --unset remote.pushDefault
+  git config --unset push.default
+  git config branch.feature.remote fork # simple, with the upstream on the sole remote
+  git config branch.feature.merge refs/heads/feature
+  hub::push_target feature
+  [[ $HUB_PUSH_REMOTE == fork && $HUB_PUSH_BRANCH == feature ]]
+}
+
 @test "push_target refuses a branch with several upstream branches, as git push does" {
   serve_github o/r o/fork
   clone_served o/r

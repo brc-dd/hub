@@ -101,6 +101,21 @@ failing_tools() {
   assert_gh_not_called
 }
 
+@test "browse opens a branch where the sole remote sends it, whatever that remote is called" {
+  make_repo dotfiles mislav=git@github.com:mislav/dotfiles.git
+  set_remote_head mislav main
+  git checkout -q -b feature
+  git config push.default current
+  run hub --noop browse
+  assert_success
+  assert_output_equals "open https://github.com/mislav/dotfiles/tree/feature"
+  git config remote.mislav.push refs/heads/feature:refs/heads/renamed
+  run hub --noop browse
+  assert_success
+  assert_output_equals "open https://github.com/mislav/dotfiles/tree/renamed"
+  assert_gh_not_called
+}
+
 @test "browse opens a branch in the repository its remote pushes to, not the one it fetches from" {
   make_repo repo origin=https://github.com/org/repo.git
   git remote set-url --push origin https://github.com/alice/renamed.git

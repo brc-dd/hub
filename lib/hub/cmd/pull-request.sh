@@ -13,16 +13,20 @@
 #
 # The head is the current branch, named for gh as it is where `git push` sends it: on the remote
 # git would push to (remote.*.push, branch.*.pushRemote, remote.pushDefault, branch.*.remote and
-# push.default), under its name there, in the repository that remote's push URL names, written
-# OWNER:BRANCH when that is not the base repository. remote.*.push is read as git reads it: the
-# first refspec whose source is the branch (in full, short, or HEAD while it is checked out) or a
-# pattern it matches names the destination, a matching refspec (`:`) sends it where the remote has
-# it, and a negative one (^PATTERN) excludes a destination. A branch without an upstream goes to
-# the remote `git push -u` would take; one that `git push` would not push as configured
-# (push.default nothing, refspecs that send other branches, several upstream branches in
-# branch.*.merge) is refused. Without -p, the branch must already be pushed there, which its
-# remote-tracking branch shows; a remote that fetches from one repository and pushes to another
-# shows nothing, and is refused without -p or -f. -f
+# push.default; with none of them, the sole remote, whatever its name, else origin), under its
+# name there, in the repository that remote's push URL names, written OWNER:BRANCH when that is
+# not the base repository. remote.*.push is read as git reads it: the first refspec whose source
+# is the branch (in full, short, or HEAD while it is checked out) or a pattern it matches names
+# the destination, a matching refspec (`:`) sends it where the remote has it, and a negative one
+# (^PATTERN) excludes a destination, leaving the next. With -p, git's own reading of the refspecs
+# counts (git push --dry-run to the remote): when git would refuse the push, for a source that
+# names a branch and a tag at once, say, hub says what git said and pushes nothing. A branch
+# without an upstream goes to the remote `git push -u` would take; one that `git push` would not
+# push as configured (push.default nothing, refspecs that send other branches, several upstream
+# branches in branch.*.merge) is refused. Without -p, the branch must already be pushed there,
+# which its remote-tracking branch shows: the one the remote's fetch refspecs map its name there
+# to; a remote that fetches from one repository and pushes to another shows nothing, and is
+# refused without -p or -f. -f
 # skips that check. -h BRANCH names a branch on that remote instead, pushed from HEAD with -p; -h
 # OWNER:BRANCH names a branch in OWNER's repository, pushed with -p to the remote here whose push
 # URL names it (owner and repository names compare without regard to case, as on GitHub). That
@@ -225,7 +229,8 @@ hub_cmd_pull_request() {
         remote=$HUB_PUSH_REMOTE # no upstream yet: where `git push -u` would go
       else
         case $HUB_PUSH_WHY in
-          remote) hub::die "Aborted: there is no remote $(_hub_pull_request_push_remote "$branch") to push $branch to; add one, or name the head with -h [OWNER:]BRANCH." ;;
+          remote) hub::die "Aborted: there is no remote $(hub::push_remote "$branch") to push $branch to; add one, or name the head with -h [OWNER:]BRANCH." ;;
+          refused) hub::die "Aborted: git push would not push $branch as configured; git push --dry-run $HUB_PUSH_REMOTE says: $HUB_PUSH_ERROR; push it yourself, or name the head with -h [OWNER:]BRANCH." ;;
           refspec) hub::die "Aborted: git push would not push $branch: remote.$HUB_PUSH_REMOTE.push is configured, and none of its refspecs maps $branch; push it yourself (git push $HUB_PUSH_REMOTE $branch), or name the head with -h [OWNER:]BRANCH." ;;
           negative) hub::die "Aborted: git push would not push $branch: a negative refspec in remote.$HUB_PUSH_REMOTE.push excludes where it would go; push it yourself (git push $HUB_PUSH_REMOTE $branch), or name the head with -h [OWNER:]BRANCH." ;;
           destination) hub::die "Aborted: remote.$HUB_PUSH_REMOTE.push maps $branch to something that is not a branch; name the head with -h [OWNER:]BRANCH." ;;
@@ -239,7 +244,7 @@ hub_cmd_pull_request() {
         esac
       fi
     else
-      remote=$(_hub_pull_request_push_remote "$branch")
+      remote=$(hub::push_remote "$branch")
       hub::remote_exists "$remote" || hub::die "Aborted: there is no remote $remote to find $head_name on; name the head with -h OWNER:BRANCH."
     fi
     hub::remote_project "$remote" push >/dev/null || hub::die "Aborted: remote $remote does not push to a GitHub repository hub knows (git remote get-url --push $remote; see hub.host)."
@@ -279,10 +284,12 @@ hub_cmd_pull_request() {
     if ! hub::remote_project "$remote" >/dev/null || [[ ${HUB_PROJECT,,} != "${head_proj,,}" ]] || ! hub::same_host "$HUB_PROJECT_HOST" "$base_host"; then
       hub::die "Aborted: $remote pushes to $head_proj but fetches from another repository, so hub cannot tell whether $branch is pushed there (use -p to push it, or -f to skip this check)."
     fi
-    track=$(hub::git_query for-each-ref --format='%(push)' -- "refs/heads/$branch")
-    if [[ -z $track ]] || ! hub::git_query show-ref --verify --quiet -- "$track"; then
-      hub::die "Aborted: $branch seems not yet pushed to $remote (use -p to push it, or -f to skip this check)."
-    fi
+    # The remote-tracking branch is the one the remote's fetch refspecs map the head's name to, as
+    # `git fetch` writes it; %(push) knows no HEAD or short source in remote.*.push.
+    track=$(hub::tracking_ref "$remote" "$head_name") \
+      || hub::die "Aborted: remote.$remote.fetch maps no remote-tracking branch to $head_name of $remote, so hub cannot tell whether $branch is pushed there (use -p to push it, or -f to skip this check)."
+    hub::git_query show-ref --verify --quiet -- "$track" \
+      || hub::die "Aborted: $branch seems not yet pushed to $remote (use -p to push it, or -f to skip this check)."
     n=$(hub::git_query rev-list --count "$track..HEAD")
     if ((n == 1)); then
       hub::die "Aborted: 1 commit of $branch is not yet pushed to ${track#refs/remotes/} (use -p to push it, or -f to skip this check)."
@@ -299,9 +306,15 @@ hub_cmd_pull_request() {
   if ((no_edit)); then
     local msg_ref=HEAD msg_head=HEAD
     if ((! head_is_current)); then # another branch is the head: its commits are its remote-tracking ref's
-      local head_remote=$remote
-      [[ -n $head_remote ]] || head_remote=$(hub::remote_for_project "$head_proj" "$base_host") \
-        || hub::die "Aborted: --no-edit takes the message from the commits of $label, but no remote here points at $base_host/$head_proj to read them from; give the message with -m or -F."
+      # The remote-tracking branches come from the fetch URL: the head's are those of a remote that
+      # fetches from the head repository, which the remote that pushes there need not be.
+      local head_remote=''
+      if [[ -n $remote ]] && hub::remote_project "$remote" >/dev/null && [[ ${HUB_PROJECT,,} == "${head_proj,,}" ]] && hub::same_host "$HUB_PROJECT_HOST" "$base_host"; then
+        head_remote=$remote
+      else
+        head_remote=$(hub::remote_for_project "$head_proj" "$base_host") \
+          || hub::die "Aborted: --no-edit takes the message from the commits of $label, but no remote here fetches from $base_host/$head_proj to read them from; give the message with -m or -F."
+      fi
       msg_ref=$(hub::tracking_ref "$head_remote" "$head_name") \
         || hub::die "Aborted: --no-edit takes the message from the commits of $label, but remote.$head_remote.fetch maps no remote-tracking branch to $head_name of $head_remote; give the message with -m or -F."
       msg_head=$head_remote/$head_name
@@ -375,22 +388,14 @@ _hub_pull_request_branch_name() {
   hub::git_query check-ref-format "refs/heads/$1" || hub::die "Aborted: not a branch name: $1 (given with $2)"
 }
 
-# _hub_pull_request_push_remote [BRANCH] : the remote `git push` would take for BRANCH
-# (branch.*.pushRemote, remote.pushDefault, branch.*.remote), else remote.pushDefault, else origin.
-_hub_pull_request_push_remote() {
-  local r=''
-  [[ -z ${1-} ]] || r=$(hub::git_query for-each-ref --format='%(push:remotename)' -- "refs/heads/$1")
-  [[ -n $r ]] || r=$(hub::git_query config --get remote.pushDefault) || r=origin
-  printf '%s\n' "$r"
-}
-
 # _hub_pull_request_remote_of OWNER HOST NAME [BRANCH] [EXACT] : the remote here that pushes to a
-# repository of OWNER's on HOST: the one BRANCH pushes to when that is OWNER's, else the one whose
-# push URL names OWNER/NAME, else any of OWNER's. With EXACT, only one that pushes to OWNER/NAME.
+# repository of OWNER's on HOST: the one BRANCH pushes to (hub::push_remote) when that is OWNER's,
+# else the one whose push URL names OWNER/NAME, else any of OWNER's. With EXACT, only one that
+# pushes to OWNER/NAME.
 _hub_pull_request_remote_of() {
   local owner=${1,,} host=$2 name=${3,,} branch=${4-} exact=${5-} r proj first='' any=''
   local -a remotes
-  [[ -z $branch ]] || first=$(hub::git_query for-each-ref --format='%(push:remotename)' -- "refs/heads/$branch")
+  [[ -z $branch ]] || first=$(hub::push_remote "$branch")
   mapfile -t remotes < <(hub::git_query remote)
   for r in ${first:+"$first"} "${remotes[@]}"; do
     hub::remote_project "$r" push >/dev/null || continue
@@ -409,11 +414,12 @@ _hub_pull_request_remote_of() {
 }
 
 # _hub_pull_request_branch_remote_of OWNER HOST BRANCH : the remote the local branch BRANCH pushes
-# to, when that is a repository of OWNER's on HOST: where a head given as OWNER:BRANCH is.
+# to (hub::push_remote), when there is such a branch and that is a repository of OWNER's on HOST:
+# where a head given as OWNER:BRANCH is.
 _hub_pull_request_branch_remote_of() {
   local r proj
-  r=$(hub::git_query for-each-ref --format='%(push:remotename)' -- "refs/heads/$3")
-  [[ -n $r ]] || return 1
+  hub::git_query show-ref --verify --quiet -- "refs/heads/$3" || return 1
+  r=$(hub::push_remote "$3")
   hub::remote_project "$r" push >/dev/null || return 1
   hub::same_host "$HUB_PROJECT_HOST" "$2" || return 1
   proj=${HUB_PROJECT,,}

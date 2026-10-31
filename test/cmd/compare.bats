@@ -44,6 +44,24 @@ failing_tools() {
   assert_gh_not_called
 }
 
+@test "compare looks for a branch on the sole remote, whatever its name, as git pushes there" {
+  make_repo dotfiles fork=https://github.com/mislav/dotfiles.git
+  set_remote_head fork main
+  git checkout -q -b feature
+  git update-ref refs/remotes/fork/feature HEAD # pushed without -u: git push took the sole remote
+  run hub --noop compare
+  assert_success
+  assert_output_equals "open https://github.com/mislav/dotfiles/compare/feature"
+  # the sole remote's push refspecs rename the branch there
+  git config remote.fork.push refs/heads/feature:refs/heads/renamed
+  git update-ref refs/remotes/fork/renamed HEAD
+  git update-ref -d refs/remotes/fork/feature
+  run hub --noop compare
+  assert_success
+  assert_output_equals "open https://github.com/mislav/dotfiles/compare/renamed"
+  assert_gh_not_called
+}
+
 @test "compare refuses a branch that is not pushed to a GitHub remote" {
   make_repo dotfiles origin=https://github.com/mislav/dotfiles.git backup=../backup.git
   set_remote_head origin main

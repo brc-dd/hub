@@ -269,30 +269,44 @@ Common rules:
   changes something (sync, pull-request) does not, and says so.
 - **Where a branch pushes** (`hub::push_target`) follows git's own rules:
   `remote.*.push` refspecs when there are any, read as `git push` reads them
-  (`hub::push_refspec_dest`: the first refspec whose source is the branch, in
-  full, short or as `HEAD` while it is checked out, or a pattern it matches,
-  names the destination; a short destination is a branch; a matching `:`
-  sends the branch where the remote has it; a negative `^PATTERN` excludes a
-  destination, not a source. `%(push:remoteref)` is not consulted: it knows
+  (`hub::push_refspec_dest`: a refspec sends the branch when its source is the
+  branch, in full, short or as `HEAD` while it is checked out, or a pattern it
+  matches; a short destination is a branch; the branch goes to every
+  destination the refspecs give it, less those a negative `^PATTERN` matches,
+  which git applies to destinations, not sources, and the first left, in the
+  refspecs' order, names it; a matching `:` sends it where the remote has it,
+  when nothing else sends it. `%(push:remoteref)` is not consulted: it knows
   neither short sources nor matching refspecs, and applies negatives to the
   source), else a mirror remote, else `branch.*.pushRemote`,
   `remote.pushDefault`, `branch.*.remote` and `push.default`, with the
   upstream read from `branch.*.remote` and every `branch.*.merge` value
-  (`simple` and `upstream` need exactly one). When git would refuse, or would
-  push other branches and leave this one alone (refspecs that send none of
-  it, exclude its destination or send it to something other than a branch;
-  `push.default nothing`; `simple` with a differently named upstream; no
-  upstream, or several; `matching`, by `push.default` or by refspec, when the
-  remote has no branch of that name, as its remote-tracking ref shows, or,
-  for a caller about to push, as every push URL answers `git ls-remote`), hub
-  says why (`HUB_PUSH_WHY`) before pushing anywhere. Branch-aware commands
-  (browse, compare, pull-request) use it, so a branch that tracks your fork
-  is opened in, compared from and published to the fork.
+  (`simple` and `upstream` need exactly one). The remote, when none is
+  configured, is the sole remote when there is exactly one, whatever its name,
+  else `origin`, as git takes it (`hub::push_remote`; `%(push:remotename)` is
+  empty for both). When git would refuse, or would push other branches and
+  leave this one alone (refspecs that send none of it, exclude every
+  destination or send it to something other than a branch; `push.default
+  nothing`; `simple` with a differently named upstream; no upstream, or
+  several; `matching`, by `push.default` or by refspec, when the remote has no
+  branch of that name, as its remote-tracking ref shows, or, for a caller
+  about to push, as every push URL answers `git ls-remote`), hub says why
+  (`HUB_PUSH_WHY`) before pushing anywhere. A caller about to push through
+  `remote.*.push` asks git itself as well (`hub::push_dry_run`: `git push
+  --dry-run --porcelain --verbose` to the remote reads the refspecs and the
+  remote as the push would, and pushes nothing): the branch's own line says
+  what git sends it as, and what git refuses, a short source that names a
+  branch and a tag at once, a source that names nothing, a destination two
+  sources feed, a non-fast-forward, hub refuses with git's words
+  (`HUB_PUSH_ERROR`) rather than push by its own reading. Branch-aware
+  commands (browse, compare, pull-request) use it, so a branch that tracks
+  your fork is opened in, compared from and published to the fork.
 - **A remote's fetch URL and push URL** may name different repositories. The
   remote-tracking branches come from the fetch URL, so they show nothing
   about the repository the remote pushes to: `compare` and `pull-request`
   (without `-p` or `-f`) refuse to read them as evidence that a branch is
-  pushed there, and ask for the head by name instead.
+  pushed there, and ask for the head by name instead; `pull-request
+  --no-edit` reads the commits of a head that is another branch from a remote
+  that fetches from the head repository, not from the one that pushes there.
 - **Owner and repository names** compare without regard to case, as on
   GitHub, and keep their spelling in output.
 - **hub's own fetches write one ref.** `merge` and `cherry-pick` fetch a pull

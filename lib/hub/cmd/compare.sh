@@ -9,20 +9,20 @@
 # OWNER/REPO/wiki/_compare/RANGE.
 #
 # Without a range, the current branch is compared with the repository's default branch, or with
-# BASE. The branch must be pushed: hub looks for its remote-tracking ref on the remote it pushes
-# to (the one `git push` would use: remote.*.push, branch.*.pushRemote, remote.pushDefault,
-# branch.*.remote, else origin), then on the main remote (fetch first if it was pushed from
-# elsewhere). The remote-tracking ref is the one the remote's fetch refspecs (remote.REMOTE.fetch)
-# map the branch to, as `git fetch` writes it, not refs/remotes/REMOTE/BRANCH by name; a remote
-# whose refspecs do not fetch the branch shows nothing about it. The push URL of that remote names
-# the repository the branch is in, which must be on the compare page's host. A branch in another
-# repository is written FORKOWNER:BRANCH, or FORKOWNER:FORKREPO:BRANCH when that repository has
-# another name. A remote that pushes to one repository and fetches from another cannot show that
-# the branch is in the one it pushes to; like one whose refspecs do not fetch the branch, it makes
-# hub ask you to name the head yourself. The branch is refused only when it is the
-# compared repository's own default branch; a fork's main compares as FORKOWNER:main. The
-# default branch is the one refs/remotes/REMOTE/HEAD names; when it is unknown, hub asks gh for
-# it, and assumes main when gh cannot answer.
+# BASE. The branch must be pushed: hub looks for its remote-tracking ref on the remote it pushes to
+# (the one `git push` would use: remote.*.push, branch.*.pushRemote, remote.pushDefault,
+# branch.*.remote, else the sole remote, else origin), then on the main remote (fetch first if it
+# was pushed from elsewhere). The remote-tracking ref is the one the remote's fetch refspecs
+# (remote.REMOTE.fetch) map the branch to, as `git fetch` writes it, not refs/remotes/REMOTE/BRANCH
+# by name; a remote whose refspecs do not fetch the branch shows nothing about it. The push URL of
+# that remote names the repository the branch is in, which must be on the compare page's host. A
+# branch in another repository is written FORKOWNER:BRANCH, or FORKOWNER:FORKREPO:BRANCH when that
+# repository has another name. A remote that pushes to one repository and fetches from another
+# cannot show that the branch is in the one it pushes to; like one whose refspecs do not fetch the
+# branch, it makes hub ask you to name the head yourself. The branch is refused only when it is the
+# compared repository's own default branch; a fork's main compares as FORKOWNER:main. The default
+# branch is the one refs/remotes/REMOTE/HEAD names; when it is unknown, hub asks gh for it, and
+# assumes main when gh cannot answer.
 #
 # Options:
 #   -b, --base BASE   Compare against BASE: BASE...HEAD, HEAD defaulting to the current branch.
@@ -123,13 +123,12 @@ _hub_compare_head() {
   _hub_compare_head_in "$remote" "$branch" "$host" "$base"
 }
 
-# _hub_compare_push_remote BRANCH : the remote git is configured to push BRANCH to
-# (branch.*.pushRemote, remote.pushDefault, branch.*.remote), else origin, when it exists; for a
-# branch `git push` alone would refuse to push, such as one without an upstream.
+# _hub_compare_push_remote BRANCH : the remote git would push BRANCH to (branch.*.pushRemote,
+# remote.pushDefault, branch.*.remote, else the sole remote, else origin: hub::push_remote), when
+# it exists; for a branch `git push` alone would refuse to push, such as one without an upstream.
 _hub_compare_push_remote() {
   local remote
-  remote=$(hub::git_query for-each-ref --format='%(push:remotename)' -- "refs/heads/$1")
-  [[ -n $remote ]] || remote=origin
+  remote=$(hub::push_remote "$1")
   hub::remote_exists "$remote" && printf '%s\n' "$remote"
 }
 

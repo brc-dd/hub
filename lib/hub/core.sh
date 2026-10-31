@@ -818,35 +818,62 @@ hub::remote_for_project() {
   return 1
 }
 
+# hub::default_remote : the remote git takes for a branch that names none (branch.*.remote): the
+# sole remote when there is exactly one, whatever it is called, else origin.
+hub::default_remote() {
+  local -a names
+  mapfile -t names < <(hub::git_query remote)
+  if ((${#names[@]} == 1)); then
+    printf '%s\n' "${names[0]}"
+  else
+    printf 'origin\n'
+  fi
+}
+
+# hub::push_remote [BRANCH] : the remote `git push` would take for BRANCH (branch.*.pushRemote,
+# remote.pushDefault, branch.*.remote), or for no branch in particular (remote.pushDefault), else
+# the remote git takes by default (hub::default_remote). It may not exist (hub::remote_exists).
+hub::push_remote() {
+  local r=''
+  [[ -z ${1-} ]] || r=$(hub::git_query for-each-ref --format='%(push:remotename)' -- "refs/heads/$1")
+  [[ -n $r ]] || r=$(hub::git_query config --get remote.pushDefault) || r=$(hub::default_remote)
+  printf '%s\n' "$r"
+}
+
 # hub::push_target BRANCH [verify] : where `git push` with no arguments would send BRANCH, by
 # git's rules: remote.*.push refspecs when there are any (hub::push_refspec_dest), else every ref
 # as it is for a mirror (remote.*.mirror), else push.default; to the remote of branch.*.pushRemote,
-# remote.pushDefault or branch.*.remote (origin when unset). Sets HUB_PUSH_REMOTE (the remote git
-# would push to, when it exists, whatever the outcome) and HUB_PUSH_BRANCH (BRANCH's name on it).
-# Returns 1 when git would not push BRANCH there, so that callers fail before pushing anywhere,
-# with the reason in HUB_PUSH_WHY: remote (no such remote), refspec (remote.*.push is configured
-# and none of its refspecs sends BRANCH, so `git push` would push other branches and leave this
-# one alone), negative (one sends it, and a negative refspec there, ^PATTERN, excludes its
-# destination: git applies them to what it would update), destination (it is sent to something
-# other than a branch), nothing (push.default), upstream (push.default simple or upstream, and the
-# branch has no upstream on that remote, has several, as a branch.*.merge with more than one value
-# gives it, or, for simple, one of another name: git refuses each) or matching (push.default
-# matching, or a matching refspec `:` in remote.*.push, and the remote has no branch of that name:
-# they push only branches both sides have). Whether the remote has the branch is read from its
-# remote-tracking ref here, as of the last fetch, or, with VERIFY, asked of every URL git pushes
-# the remote to (git ls-remote), as git asks at push time; a caller about to push verifies. The
-# upstream is read as git push reads it, from branch.*.remote and branch.*.merge: %(upstream) has
-# nothing to say when the remote's fetch refspecs map the upstream branch to no remote-tracking
-# ref, and git pushes by the names all the same.
+# remote.pushDefault or branch.*.remote, else the sole remote when there is exactly one, else
+# origin (hub::push_remote). Sets HUB_PUSH_REMOTE (the remote git would push to, when it exists,
+# whatever the outcome) and HUB_PUSH_BRANCH (BRANCH's name on it). Returns 1 when git would not
+# push BRANCH there, so that callers fail before pushing anywhere, with the reason in
+# HUB_PUSH_WHY: remote (no such remote), refspec (remote.*.push is configured and none of its
+# refspecs sends BRANCH, so `git push` would push other branches and leave this one alone),
+# negative (refspecs send it, and negative refspecs there, ^PATTERN, exclude every destination:
+# git applies them to what it would update), destination (it is sent to something other than a
+# branch), nothing (push.default), upstream (push.default simple or upstream, and the branch has
+# no upstream on that remote, has several, as a branch.*.merge with more than one value gives it,
+# or, for simple, one of another name: git refuses each), matching (push.default matching, or a
+# matching refspec `:` in remote.*.push, and the remote has no branch of that name: they push
+# only branches both sides have) or refused (git itself would refuse the push; what it said is in
+# HUB_PUSH_ERROR). Whether the remote has the branch is read from its remote-tracking ref here, as
+# of the last fetch, or, with VERIFY, asked of every URL git pushes the remote to (git ls-remote),
+# as git asks at push time; a caller about to push verifies. With VERIFY and remote.*.push
+# configured, git's own reading of the refspecs is the one that counts: `git push --dry-run` to
+# the remote (hub::push_dry_run) says what git would send the branch as, and what it refuses, a
+# source that names a branch and a tag at once, say, or one that names nothing. The upstream is
+# read as git push reads it, from branch.*.remote and branch.*.merge: %(upstream) has nothing to
+# say when the remote's fetch refspecs map the upstream branch to no remote-tracking ref, and git
+# pushes by the names all the same.
 hub::push_target() {
-  local branch=$1 verify=${2-} push_remote up_remote mode track spec rc=0
+  local branch=$1 verify=${2-} push_remote up_remote mode track rc=0 dry=0
   local -a up_refs specs
-  HUB_PUSH_REMOTE='' HUB_PUSH_BRANCH='' HUB_PUSH_WHY=''
+  HUB_PUSH_REMOTE='' HUB_PUSH_BRANCH='' HUB_PUSH_WHY='' HUB_PUSH_ERROR=''
   push_remote=$(hub::git_query for-each-ref --format='%(push:remotename)' -- "refs/heads/$branch") || push_remote=''
   up_remote=$(hub::git_query config --get "branch.$branch.remote") || up_remote=''
   mapfile -t up_refs < <(hub::git_query config --get-all "branch.$branch.merge")
-  [[ -n $up_remote ]] || up_refs=() # an upstream is both settings, or none
-  [[ -n $up_remote ]] || up_remote=origin
+  [[ -n $up_remote ]] || up_refs=()                       # an upstream is both settings, or none
+  [[ -n $up_remote ]] || up_remote=$(hub::default_remote) # the sole remote, else origin, as git takes it
   [[ -n $push_remote ]] || push_remote=$up_remote
   hub::remote_exists "$push_remote" || {
     HUB_PUSH_WHY=remote
@@ -856,16 +883,25 @@ hub::push_target() {
   mapfile -t specs < <(hub::git_query config --get-all "remote.$push_remote.push")
   if ((${#specs[@]})); then # remote.NAME.push decides, whatever push.default says
     hub::push_refspec_dest "$branch" "${specs[@]}" || rc=$?
-    if ((rc == 1)); then
-      HUB_PUSH_WHY=refspec # configured, and none of them sends this branch
-      return 1
-    fi
-    for spec in "${specs[@]}"; do # a negative refspec excludes what it names on the remote
-      if [[ $spec == ^?* ]] && hub::ref_matches "${spec#^}" "$HUB_PUSH_DEST"; then
-        HUB_PUSH_WHY=negative
+    if [[ -n $verify ]]; then # about to push: git's own reading of the refspecs, against the remote, decides
+      hub::push_dry_run "$push_remote" "$branch" || dry=$?
+      if ((dry == 2)); then # git sends the branch nowhere: hub's reading says why
+        case $rc in
+          2) HUB_PUSH_WHY=matching HUB_PUSH_BRANCH=$branch ;; # the remote has no branch of that name
+          3) HUB_PUSH_WHY=negative ;;
+          *) HUB_PUSH_WHY=refspec ;;
+        esac
         return 1
       fi
-    done
+      ((dry == 0)) || return 1 # refused: HUB_PUSH_WHY and HUB_PUSH_ERROR say what git said
+      rc=0                     # git sends the branch to HUB_PUSH_DEST, the remote asked
+    elif ((rc == 1)); then
+      HUB_PUSH_WHY=refspec # configured, and none of them sends this branch
+      return 1
+    elif ((rc == 3)); then
+      HUB_PUSH_WHY=negative # sent somewhere, and a negative refspec excludes every destination
+      return 1
+    fi
     [[ $HUB_PUSH_DEST == refs/heads/?* ]] || {
       HUB_PUSH_WHY=destination
       return 1
@@ -914,23 +950,30 @@ hub::push_target() {
 }
 
 # hub::push_refspec_dest BRANCH REFSPEC... : the destination that push refspecs (remote.*.push)
-# send refs/heads/BRANCH to, as `git push` reads them, in HUB_PUSH_DEST. The first refspec whose
-# source is the branch decides: its name in full (refs/heads/BRANCH), from refs/ (heads/BRANCH) or
-# short (BRANCH), HEAD while the branch is checked out, or a pattern it matches (refs/heads/*).
-# The destination is the source's own name when the refspec has none, refs/heads/NAME for a NAME
-# outside refs/, as git completes it for a branch, and the pattern's destination with the matched
-# part filled in. Returns 0 then; 2 when only a matching refspec (`:` or `+:`) sends it, to
-# refs/heads/BRANCH, which git pushes only where the remote has that branch already; 1 when no
-# refspec sends it. A negative refspec (^PATTERN) is the caller's to apply: git applies it to the
-# destinations, not the sources.
+# send refs/heads/BRANCH to, as `git push` reads them, in HUB_PUSH_DEST. A refspec sends the branch
+# when its source is the branch: its name in full (refs/heads/BRANCH), from refs/ (heads/BRANCH)
+# or short (BRANCH), HEAD while the branch is checked out, or a pattern it matches (refs/heads/*;
+# the first pattern that does). The destination is the source's own name when the refspec has
+# none, refs/heads/NAME for a NAME outside refs/, as git completes it for a branch, and the
+# pattern's destination with the matched part filled in. Git sends the branch to every destination
+# the refspecs give it, less those a negative refspec (^PATTERN) matches, which git applies to the
+# destinations, not the sources: the first destination left, in the refspecs' order, is the one.
+# Returns 0 then; 2 when only a matching refspec (`:` or `+:`) sends it, to refs/heads/BRANCH,
+# which git pushes only where the remote has that branch already; 3 when negative refspecs exclude
+# every destination; 1 when no refspec sends it. Whether a short source names a tag as well, which
+# makes git refuse the whole push, is git's to say (hub::push_dry_run).
 hub::push_refspec_dest() {
-  local branch=$1 src=refs/heads/$1 head='' have_head=0 spec lhs rhs mid matching=0
+  local branch=$1 src=refs/heads/$1 head='' have_head=0 spec lhs rhs mid dest pattern='' have_pattern=0 matching=0 excluded=0 i
+  local -a dests=() negatives=()
   shift
   HUB_PUSH_DEST=''
   for spec in "$@"; do
     spec=${spec#+}
     case $spec in
-      ^*) continue ;;
+      ^?*)
+        negatives+=("${spec#^}")
+        continue
+        ;;
       :)
         matching=1
         continue
@@ -938,17 +981,21 @@ hub::push_refspec_dest() {
     esac
     lhs=${spec%%:*}
     if [[ $lhs == *'*'* ]]; then # a pattern matches the full name alone, as in git
-      hub::ref_matches "$lhs" "$src" || continue
-      if [[ $spec != *:* ]]; then
-        HUB_PUSH_DEST=$src
-        return 0
+      if ((have_pattern)) || ! hub::ref_matches "$lhs" "$src"; then
+        continue # the first pattern that matches is the one, as in git
       fi
-      rhs=${spec#*:}
-      [[ $rhs == *'*'* ]] || return 1 # git refuses a * on one side alone
-      mid=${src#"${lhs%%\**}"}
-      mid=${mid%"${lhs#*\*}"}
-      HUB_PUSH_DEST=${rhs%%\**}$mid${rhs#*\*}
-      return 0
+      have_pattern=1
+      if [[ $spec != *:* ]]; then
+        pattern=$src
+      else
+        rhs=${spec#*:}
+        [[ $rhs == *'*'* ]] || return 1 # git refuses a * on one side alone
+        mid=${src#"${lhs%%\**}"}
+        mid=${mid%"${lhs#*\*}"}
+        pattern=${rhs%%\**}$mid${rhs#*\*}
+      fi
+      dests+=("$pattern")
+      continue
     fi
     case $lhs in
       "$src" | "heads/$branch" | "$branch") ;;
@@ -962,21 +1009,80 @@ hub::push_refspec_dest() {
       *) continue ;;
     esac
     if [[ $spec != *:* ]]; then
-      HUB_PUSH_DEST=$src # no destination: the source's own name
+      dest=$src # no destination: the source's own name
     else
       rhs=${spec#*:}
       case $rhs in
-        '') HUB_PUSH_DEST='' ;; # git refuses the refspec itself: nothing to call a branch
-        refs/*) HUB_PUSH_DEST=$rhs ;;
-        *) HUB_PUSH_DEST=refs/heads/$rhs ;; # a short destination is a branch, for a branch source
+        '') dest='' ;; # git refuses the refspec itself: nothing to call a branch
+        refs/*) dest=$rhs ;;
+        *) dest=refs/heads/$rhs ;; # a short destination is a branch, for a branch source
       esac
+    fi
+    dests+=("$dest")
+  done
+  if ((matching)); then
+    dests+=("$src") # last: git sends it so only where the remote has it, when nothing else sends it
+  fi
+  for ((i = 0; i < ${#dests[@]}; i++)); do
+    dest=${dests[i]}
+    for spec in "${negatives[@]}"; do
+      if hub::ref_matches "$spec" "$dest"; then
+        excluded=$((excluded + 1))
+        continue 2
+      fi
+    done
+    HUB_PUSH_DEST=$dest
+    if ((matching && i == ${#dests[@]} - 1)); then
+      return 2 # the matching refspec's destination
     fi
     return 0
   done
-  if ((matching)); then
-    HUB_PUSH_DEST=$src
-    return 2
+  if ((excluded)); then
+    return 3
   fi
+  return 1
+}
+
+# hub::push_dry_run REMOTE BRANCH : what `git push REMOTE` would do with refs/heads/BRANCH, asked
+# of git itself: `git push --dry-run --porcelain` reads the refspecs and the remote as the push
+# would, and pushes nothing. Returns 0 with the ref git would update from the branch in
+# HUB_PUSH_DEST (the one HUB_PUSH_DEST names already when git sends the branch there too, else the
+# first git lists); 2 when git would push the branch nowhere; 1, with HUB_PUSH_WHY refused and
+# what git said in HUB_PUSH_ERROR (its first error line, or the branch's own rejection), when git
+# would refuse the push as configured: a source that names a branch and a tag at once or names
+# nothing, a destination that two sources feed, one that is not a fast-forward, a remote that
+# cannot be reached. The branch's own line decides, as git pushes a branch it accepts beside one it
+# rejects. The pre-push hook is left to the push itself (--no-verify).
+hub::push_dry_run() {
+  local remote=$1 src=refs/heads/$2 head out line from to summary first='' rc=0
+  head=$(hub::git_query symbolic-ref --quiet HEAD) || head=''
+  out=$(git push --dry-run --porcelain --no-verify --verbose "$remote" 2>&1) || rc=$?
+  HUB_PUSH_ERROR=''
+  while IFS= read -r line; do
+    case $line in
+      ?$'\t'*:*$'\t'*) # FLAG, FROM:TO and a summary; up-to-date refs are listed with --verbose
+        from=${line#?$'\t'}
+        summary=${from#*$'\t'}
+        from=${from%%$'\t'*}
+        to=${from#*:} from=${from%%:*}
+        [[ $from == "$src" || ($from == HEAD && $head == "$src") ]] || continue
+        if [[ $line == '!'* ]]; then
+          HUB_PUSH_WHY=refused HUB_PUSH_ERROR="$from:$to $summary"
+          return 1
+        fi
+        [[ -n $first && $to != "$HUB_PUSH_DEST" ]] || first=$to
+        ;;
+      'error: failed to push some refs'*) ;; # the sum of the rejections, read one by one above
+      error:\ * | fatal:\ *) [[ -n $HUB_PUSH_ERROR ]] || HUB_PUSH_ERROR=${line#*: } ;;
+    esac
+  done <<<"$out"
+  if [[ -n $first ]]; then
+    HUB_PUSH_DEST=$first
+    return 0
+  fi
+  ((rc)) || return 2
+  HUB_PUSH_WHY=refused
+  [[ -n $HUB_PUSH_ERROR ]] || HUB_PUSH_ERROR="git push --dry-run $remote failed (exit $rc)"
   return 1
 }
 

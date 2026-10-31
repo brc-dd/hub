@@ -292,6 +292,13 @@ assert_no_leftovers() {
   run hub merge topic "$PR" -- other
   assert_failure
   assert_output_equals "Aborted: a pull request is merged on its own; unexpected argument: topic"
+  # an empty operand is one too, refused before anything is fetched
+  run hub merge --squash "$PR" ''
+  assert_failure
+  assert_output_equals "Aborted: a pull request is merged on its own; unexpected argument: ''"
+  run hub merge '' "$PR"
+  assert_failure
+  assert_output_equals "Aborted: a pull request is merged on its own; unexpected argument: ''"
   [[ ! -e .git/FETCH_HEAD ]]
   assert_gh_not_called
   assert_no_leftovers
