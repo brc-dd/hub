@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Test stub for ssh. A -G query (how hub resolves SSH aliases) goes to the real ssh. A connection,
+# `[OPTIONS] [USER@]HOST COMMAND` as git makes one, is served from $HUB_TEST_SRV/HOST/PATH, so a
+# remote's URL stays git@github.com:OWNER/REPO.git while its effects land in a local repository.
+set -u
+for arg; do
+  if [[ $arg == -G ]]; then
+    real=$(PATH=$(getconf PATH) command -v ssh) || {
+      echo 'hub tests: no ssh to answer -G' >&2
+      exit 255
+    }
+    exec "$real" "$@"
+  fi
+done
+(($# >= 2)) || {
+  echo 'hub tests: ssh stub: no command given' >&2
+  exit 255
+}
+host=${*: -2:1} cmd=${*: -1}
+host=${host#*@} host=${host,,}
+[[ $host != ssh.github.com ]] || host=github.com
+eval "set -- $cmd" || exit 255
+case ${1-} in
+  git-upload-pack | git-receive-pack | git-upload-archive) ;;
+  *) printf 'hub tests: ssh stub refuses: %s\n' "$cmd" >&2 && exit 255 ;;
+esac
+path=${2-} path=${path#/} path=${path%/} path=${path%.git}.git
+dir=${HUB_TEST_SRV-}/$host/$path
+[[ -d $dir ]] || { printf 'hub tests: nothing is served at %s:%s (%s)\n' "$host" "${2-}" "$dir" >&2 && exit 255; }
+for v in "${!GIT_@}"; do # the server is another machine: the client's git context stays behind
+  case $v in GIT_PROTOCOL | GIT_CONFIG_GLOBAL | GIT_CONFIG_NOSYSTEM | GIT_EXEC_PATH | GIT_TERMINAL_PROMPT) ;; *) unset "$v" ;; esac
+done
+exec git "${1#git-}" "$dir"

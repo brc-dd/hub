@@ -28,9 +28,18 @@ through `hub::git`, `hub::gh`, `hub::exec_git` and `hub::exec_gh` so that
 `hub::gh_query`.
 
 Releases: `script/release X.Y.Z` runs the checks, bumps `VERSION` and
-`CHANGELOG.md`, tags, pushes, creates the GitHub release and updates the
-Homebrew formula's URL and checksum. See `script/bump`, `script/release` and
-`script/update-formula` for the individual steps.
+`CHANGELOG.md`, tags, pushes exactly `main` and the new tag (never other local
+tags), publishes the GitHub release and updates the Homebrew formula's URL and
+checksum. The release targets the repository `origin` names: an SSH alias in
+its URL is resolved with `ssh -G`, and `gh repo view` must see the repository
+before anything is pushed. An existing draft release for the tag is published,
+not taken for a published one. After a failure, fix the cause and run
+`script/release` without a version: it resumes the release named by `VERSION`,
+with HEAD at its tag or at the formula commit that follows it, and skips the
+steps that are done. `script/release --dry-run` checks the local state and
+prints the commands instead of running them; `make check` is printed, not run.
+See `script/bump`, `script/release` and `script/update-formula` for the
+individual steps.
 
 ## Testing approach
 
@@ -44,13 +53,23 @@ commands instead of running them. See `test/test_helper.bash` for the helpers.
 Releases are documented in `script/release --help`; the design and the
 module contract are in [design.md](design.md).
 
+The completions are tested by hand in the shells themselves: hub's commands
+must appear after git's global options (`hub -C dir <TAB>`, `hub -c k=v <TAB>`,
+`hub --config-env k=v <TAB>`), plain `git <TAB>` must keep the user's own git
+aliases, `_git_CMD`/`_git-CMD` functions and zsh `user-commands` style, and
+`alias git=hub` must add hub's commands and arguments on top of git's.
+
 ## Workflows
 
 The GitHub Actions workflows keep readable version tags in the YAML; the
 commits they resolve to are recorded in `.github/workflows/actions.lock` by the
 [`gh actions-lock`](https://github.com/github/gh-actions-lock) extension, which
 GitHub Actions enforces at run time. After changing a `uses:` line run
-`gh actions-lock`; CI runs `gh actions-lock --verify`. To lint the workflows:
+`gh actions-lock`; CI runs `gh actions-lock --verify`. The release workflow
+runs on every `v*` tag: it publishes the GitHub release (or publishes the draft
+that exists for the tag) and, for stable versions, points the formula at the
+highest published stable version by SemVer precedence, whatever the creation
+order of the releases. To lint the workflows:
 
 ```sh
 actionlint .github/workflows/*.yml                       # rhysd/actionlint or the kjanat fork

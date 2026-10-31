@@ -1,31 +1,51 @@
 #!/usr/bin/env bats
 load ../test_helper
 
-# serve_github OWNER/REPO... : make https://github.com/OWNER/REPO.git resolve to a local bare repo
+# serve_github OWNER/REPO makes https://github.com/OWNER/REPO.git a local bare repository, so the
+# forks hub adds remotes for are really fetched and the effects (remotes, refs, FETCH_HEAD) are checked.
 @test "fetch USER adds a remote for USER's fork and fetches it" {
-  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
-  run hub --noop fetch alice
+  serve_github mislav/dotfiles alice/dotfiles
+  clone_served mislav/dotfiles
+  run hub fetch alice
   assert_success
-  assert_output_equals $'git remote add alice https://github.com/alice/dotfiles.git\ngit fetch alice'
+  assert_equals "$(remote_url alice)" https://github.com/alice/dotfiles.git
+  assert_equals "$(git rev-parse refs/remotes/alice/main)" "$(server_ref alice/dotfiles main)"
+  run hub --noop fetch bob
+  assert_output_equals $'git remote add bob https://github.com/bob/dotfiles.git\ngit fetch bob'
 }
 
-@test "fetch a comma-separated list of users with --multiple" {
-  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
-  run hub --noop fetch alice,bob
+@test "fetch a comma-separated list of users adds their remotes and fetches them with --multiple" {
+  serve_github mislav/dotfiles alice/dotfiles bob/dotfiles
+  clone_served mislav/dotfiles
+  run hub fetch alice,bob
   assert_success
-  assert_output_equals $'git remote add alice https://github.com/alice/dotfiles.git\ngit remote add bob https://github.com/bob/dotfiles.git\ngit fetch --multiple alice bob'
+  assert_equals "$(remote_url alice)" https://github.com/alice/dotfiles.git
+  assert_equals "$(remote_url bob)" https://github.com/bob/dotfiles.git
+  assert_equals "$(git rev-parse refs/remotes/alice/main)" "$(server_ref alice/dotfiles main)"
+  assert_equals "$(git rev-parse refs/remotes/bob/main)" "$(server_ref bob/dotfiles main)"
+  run hub --noop fetch carol,dave --prune
+  assert_success
+  assert_output_equals "git remote add carol https://github.com/carol/dotfiles.git
+git remote add dave https://github.com/dave/dotfiles.git
+git fetch --multiple carol dave --prune"
 }
 
 @test "fetch --multiple USER USER2 adds the missing remotes, then fetches with the arguments as given" {
-  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
+  serve_github mislav/dotfiles alice/dotfiles bob/dotfiles
+  clone_served mislav/dotfiles
   run hub --noop fetch --multiple alice origin bob alice --prune --depth 1
   assert_success
   assert_output_equals "git remote add alice https://github.com/alice/dotfiles.git
 git remote add bob https://github.com/bob/dotfiles.git
 git fetch --multiple alice origin bob alice --prune --depth 1"
-  run hub --noop fetch -m alice
+  run hub fetch --multiple alice origin bob --prune
   assert_success
-  assert_output_equals $'git remote add alice https://github.com/alice/dotfiles.git\ngit fetch -m alice'
+  assert_equals "$(git remote | tr '\n' ' ')" "alice bob origin "
+  assert_equals "$(git rev-parse refs/remotes/alice/main)" "$(server_ref alice/dotfiles main)"
+  assert_equals "$(git rev-parse refs/remotes/bob/main)" "$(server_ref bob/dotfiles main)"
+  run hub --noop fetch -m carol
+  assert_success
+  assert_output_equals $'git remote add carol https://github.com/carol/dotfiles.git\ngit fetch -m carol'
 }
 
 @test "fetch --multiple finds the names before, between and after the options, and keeps their order" {
@@ -49,8 +69,9 @@ git fetch --multiple alice origin bob alice --prune --depth 1"
   assert_output_equals "git fetch --multiple"
 }
 
-@test "fetch --multiple counts anywhere among the options before the first name" {
-  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
+@test "fetch --multiple counts anywhere on the command line, in option clusters too" {
+  serve_github mislav/dotfiles alice/dotfiles bob/dotfiles
+  clone_served mislav/dotfiles
   local alice='git remote add alice https://github.com/alice/dotfiles.git' bob='git remote add bob https://github.com/bob/dotfiles.git'
   run hub --noop fetch --prune --multiple alice bob
   assert_success
@@ -61,45 +82,43 @@ git fetch --multiple alice origin bob alice --prune --depth 1"
   run hub --noop fetch -q --upload-pack ./pack -m --prune alice bob
   assert_success
   assert_output_equals "$alice"$'\n'"$bob"$'\ngit fetch -q --upload-pack ./pack -m --prune alice bob'
-  # -m in a short option cluster, also before an option that takes the next argument (-mj 4)
   run hub --noop fetch -pm alice bob
   assert_success
   assert_output_equals "$alice"$'\n'"$bob"$'\ngit fetch -pm alice bob'
   run hub --noop fetch -mj 4 alice
   assert_success
   assert_output_equals "$alice"$'\ngit fetch -mj 4 alice'
+  # after the first name as well, as git reads it: every operand is a remote
+  run hub --noop fetch alice --multiple bob
+  assert_success
+  assert_output_equals "$alice"$'\n'"$bob"$'\ngit fetch alice --multiple bob'
+  run hub fetch alice --multiple bob
+  assert_success
+  assert_equals "$(git rev-parse refs/remotes/alice/main)" "$(server_ref alice/dotfiles main)"
+  assert_equals "$(git rev-parse refs/remotes/bob/main)" "$(server_ref bob/dotfiles main)"
 }
 
-@test "fetch takes the last of --multiple and --no-multiple before the first name, as git does" {
-  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
-  # git fetches origin's main here, so main is no remote to add
-  run hub --noop fetch --multiple --no-multiple origin main
+@test "the last of --multiple and --no-multiple counts, as in git" {
+  serve_github mislav/dotfiles
+  git -C "$(server_dir mislav/dotfiles)" branch feature main
+  clone_served mislav/dotfiles
+  # single mode after all: origin is the remote and feature a refspec, not a user to add a remote for
+  run hub fetch --multiple origin --no-multiple feature
   assert_success
-  assert_output_equals "git fetch --multiple --no-multiple origin main"
+  assert_equals "$(git remote)" origin
+  [[ $(<.git/FETCH_HEAD) == "$(server_ref mislav/dotfiles feature)"*"branch 'feature'"* ]]
+  run hub --noop fetch --multiple --no-multiple origin feature
+  assert_success
+  assert_output_equals "git fetch --multiple --no-multiple origin feature"
   run hub --noop fetch -pm --depth 1 --no-multiple alice main
   assert_success
-  assert_output_equals "git fetch -pm --depth 1 --no-multiple alice main"
-  assert_gh_not_called
+  assert_output_equals $'git remote add alice https://github.com/alice/dotfiles.git\ngit fetch -pm --depth 1 --no-multiple alice main'
   run hub --noop fetch --no-multiple --prune -m alice bob
   assert_success
   assert_output_equals "git remote add alice https://github.com/alice/dotfiles.git
 git remote add bob https://github.com/bob/dotfiles.git
 git fetch --no-multiple --prune -m alice bob"
-}
-
-@test "fetch reads --multiple only before the first name, else it is a fetch of one remote" {
-  serve_github mislav/dotfiles alice/dotfiles bob/dotfiles
-  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
-  run hub --noop fetch alice --multiple bob
-  assert_success
-  assert_output_equals $'git remote add alice https://github.com/alice/dotfiles.git\ngit fetch alice --multiple bob'
-  # git reads the --multiple and stops at bob, which hub did not add
-  run hub fetch alice --multiple bob
-  assert_failure
-  assert_output_contains "no such remote or remote group: bob"
-  [[ $(git config remote.alice.url) == https://github.com/alice/dotfiles.git ]]
-  run git config remote.bob.url
-  assert_failure
+  assert_gh_called 'config get git_protocol -h github.com'
 }
 
 @test "fetch --multiple after --, or as an option's value, is not the option" {
@@ -110,21 +129,26 @@ git fetch --no-multiple --prune -m alice bob"
   run hub --noop fetch --prune -- --multiple alice
   assert_success
   assert_output_equals "git fetch --prune -- --multiple alice"
-  run hub --noop fetch --depth --multiple alice
-  assert_output_equals "git fetch --depth --multiple alice"
-  run hub --noop fetch -jm alice # -j's value is m
-  assert_output_equals "git fetch -jm alice"
   assert_gh_not_called
+  # the value of --depth is --multiple; alice is then the one repository
+  run hub --noop fetch --depth --multiple alice
+  assert_output_equals $'git remote add alice https://github.com/alice/dotfiles.git\ngit fetch --depth --multiple alice'
+  run hub --noop fetch -jm alice # -j's value is m
+  assert_output_equals $'git remote add alice https://github.com/alice/dotfiles.git\ngit fetch -jm alice'
 }
 
 @test "fetch adds the missing remotes even with git fetch's --dry-run" {
-  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
+  serve_github mislav/dotfiles alice/dotfiles bob/dotfiles
+  clone_served mislav/dotfiles
   run hub --noop fetch alice --dry-run
   assert_success
   assert_output_equals $'git remote add alice https://github.com/alice/dotfiles.git\ngit fetch alice --dry-run'
-  run hub --noop fetch --dry-run --multiple alice
+  run hub fetch --dry-run --multiple alice bob
   assert_success
-  assert_output_equals $'git remote add alice https://github.com/alice/dotfiles.git\ngit fetch --dry-run --multiple alice'
+  assert_equals "$(remote_url alice)" https://github.com/alice/dotfiles.git
+  assert_equals "$(remote_url bob)" https://github.com/bob/dotfiles.git
+  run git rev-parse --verify -q refs/remotes/alice/main
+  assert_failure
 }
 
 @test "fetch --multiple never takes an option's value for a name" {
@@ -154,11 +178,16 @@ git fetch --multiple --depth=1 carol -j4 alice --recurse-submodules bob --recurs
 }
 
 @test "fetch --multiple leaves remotes and remote groups as they are, and URLs and paths to git" {
-  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git upstream=https://github.com/github/dotfiles.git
+  serve_github mislav/dotfiles github/dotfiles
+  clone_served mislav/dotfiles
+  git remote add upstream https://github.com/github/dotfiles.git
   git config remotes.everyone "origin upstream"
   run hub --noop fetch --multiple origin everyone upstream --prune
   assert_success
   assert_output_equals "git fetch --multiple origin everyone upstream --prune"
+  run hub fetch --multiple everyone
+  assert_success
+  assert_equals "$(git rev-parse refs/remotes/upstream/main)" "$(server_ref github/dotfiles main)"
   run hub --noop fetch --multiple alice https://github.com/bob/dotfiles.git --prune
   assert_success
   assert_output_equals "git fetch --multiple alice https://github.com/bob/dotfiles.git --prune"
@@ -171,26 +200,39 @@ git fetch --multiple --depth=1 carol -j4 alice --recurse-submodules bob --recurs
   assert_gh_not_called
 }
 
-@test "existing remotes in the list are not added again" {
-  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
-  run hub --noop fetch origin,alice
+@test "existing remotes in the list are not added again, and a list of existing remotes asks gh nothing" {
+  serve_github mislav/dotfiles alice/dotfiles github/dotfiles
+  clone_served mislav/dotfiles
+  run hub fetch origin,alice
   assert_success
-  assert_output_equals $'git remote add alice https://github.com/alice/dotfiles.git\ngit fetch --multiple origin alice'
-}
-
-@test "a list of existing remotes is fetched without asking gh" {
-  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git upstream=https://github.com/github/dotfiles.git
-  run hub --noop fetch origin,upstream
+  assert_equals "$(git remote | tr '\n' ' ')" "alice origin "
+  assert_equals "$(git rev-parse refs/remotes/alice/main)" "$(server_ref alice/dotfiles main)"
+  git remote add upstream https://github.com/github/dotfiles.git
+  : >"$HUB_TEST_LOG"
+  run hub fetch origin,upstream
   assert_success
-  assert_output_equals "git fetch --multiple origin upstream"
+  assert_equals "$(git rev-parse refs/remotes/upstream/main)" "$(server_ref github/dotfiles main)"
   assert_gh_not_called
 }
 
 @test "a name given twice gets one remote" {
   make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
-  run hub --noop fetch alice,alice,
+  run hub --noop fetch alice,alice
   assert_success
   assert_output_equals $'git remote add alice https://github.com/alice/dotfiles.git\ngit fetch --multiple alice alice'
+}
+
+@test "a list with an empty member, or one that is neither a remote nor a GitHub user, is refused before anything changes" {
+  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
+  local list
+  for list in 'alice,' ',alice' 'alice,,bob' 'alice,--prune' 'alice,-' 'alice,not.a.login' 'alice,../other.git'; do
+    run hub fetch "$list"
+    assert_failure
+    assert_output_contains "hub fetch: "
+    assert_output_contains "'$list'"
+  done
+  assert_equals "$(git remote)" origin
+  assert_gh_not_called
 }
 
 @test "arguments after the list stay in place" {
@@ -204,14 +246,32 @@ git fetch --multiple --depth=1 carol -j4 alice --recurse-submodules bob --recurs
 }
 
 @test "remote groups are not mistaken for users" {
-  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
-  git config remotes.everyone "origin"
-  run hub --noop fetch everyone
+  serve_github mislav/dotfiles github/dotfiles alice/dotfiles
+  clone_served mislav/dotfiles
+  git remote add upstream https://github.com/github/dotfiles.git
+  git config remotes.everyone "origin upstream" # git fetches a group of one member only with --multiple
+  run hub fetch everyone
   assert_success
-  assert_output_equals "git fetch everyone"
-  run hub --noop fetch everyone,alice
+  assert_equals "$(git remote | tr '\n' ' ')" "origin upstream "
+  assert_equals "$(git rev-parse refs/remotes/upstream/main)" "$(server_ref github/dotfiles main)"
+  run hub fetch everyone,alice
   assert_success
-  assert_output_equals $'git remote add alice https://github.com/alice/dotfiles.git\ngit fetch --multiple everyone alice'
+  assert_equals "$(git remote | tr '\n' ' ')" "alice origin upstream "
+  assert_equals "$(git rev-parse refs/remotes/alice/main)" "$(server_ref alice/dotfiles main)"
+}
+
+@test "an existing remote is fetched as it is, whatever its name" {
+  serve_github o/r
+  make_repo work
+  git remote add alpha,beta https://github.com/o/r.git
+  run hub fetch alpha,beta
+  assert_success
+  assert_equals "$(git remote)" "alpha,beta"
+  assert_equals "$(git rev-parse 'refs/remotes/alpha,beta/main')" "$(server_ref o/r main)"
+  git remote add origin.backup https://github.com/o/r.git
+  run hub --noop fetch origin.backup,alice
+  assert_success
+  assert_output_equals $'git remote add alice https://github.com/alice/r.git\ngit fetch --multiple origin.backup alice'
 }
 
 @test "options, URLs, paths and existing remotes pass through" {
@@ -223,46 +283,62 @@ git fetch --multiple --depth=1 carol -j4 alice --recurse-submodules bob --recurs
   assert_output_equals "git fetch origin main --prune"
   run hub --noop fetch --all
   assert_output_equals "git fetch --all"
-  run hub --noop fetch --prune bob
-  assert_output_equals "git fetch --prune bob"
+  run hub --noop fetch --all bob
+  assert_output_equals "git fetch --all bob"
   run hub --noop fetch https://github.com/bob/dotfiles.git main
   assert_output_equals "git fetch https://github.com/bob/dotfiles.git main"
   run hub --noop fetch git@github.com:bob/dotfiles.git
   assert_output_equals "git fetch git@github.com:bob/dotfiles.git"
   run hub --noop fetch ../other.git
   assert_output_equals "git fetch ../other.git"
-  run hub --noop fetch alice
+  run hub --noop fetch alice # an existing path
   assert_output_equals "git fetch alice"
+  run hub --noop fetch alice.bob # not a GitHub login
+  assert_output_equals "git fetch alice.bob"
   run hub --noop fetch
   assert_output_equals "git fetch"
   assert_gh_not_called
 }
 
-@test "a name that cannot be a GitHub login makes it plain git fetch" {
-  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
-  run hub --noop fetch alice,not.a.login
+@test "a NAME.git repository in the work tree is git's source, not a user's fork" {
+  serve_github repo/project # what the shorthand would fetch instead
+  make_repo project origin=https://github.com/mislav/project.git
+  git init -q -b main "$HUB_TEST_TMP/local" && git -C "$HUB_TEST_TMP/local" commit -q --allow-empty -m "local source"
+  git clone -q --bare "$HUB_TEST_TMP/local" repo.git
+  run hub fetch repo
   assert_success
-  assert_output_equals "git fetch alice,not.a.login"
-  run hub --noop fetch alice.bob
-  assert_success
-  assert_output_equals "git fetch alice.bob"
+  assert_equals "$(git remote)" origin
+  assert_equals "$(git log -1 --format=%s FETCH_HEAD)" "local source"
   assert_gh_not_called
 }
 
-@test "an existing remote with a dot in its name can be in the list" {
-  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git origin.backup=../backup.git
-  run hub --noop fetch origin.backup,alice
+@test "a remote defined in the legacy .git/remotes or .git/branches files is fetched as git does" {
+  serve_github o/r
+  make_repo work
+  mkdir -p .git/remotes .git/branches
+  printf 'URL: https://github.com/o/r.git\nPull: refs/heads/main:refs/remotes/legacy/main\n' >.git/remotes/legacy
+  printf 'https://github.com/o/r.git#main\n' >.git/branches/older
+  run hub fetch legacy
   assert_success
-  assert_output_equals $'git remote add alice https://github.com/alice/dotfiles.git\ngit fetch --multiple origin.backup alice'
+  assert_equals "$(git rev-parse refs/remotes/legacy/main)" "$(server_ref o/r main)"
+  run hub fetch older
+  assert_success
+  [[ $(<.git/FETCH_HEAD) == "$(server_ref o/r main)"* ]]
+  run hub fetch --multiple legacy older
+  assert_success
+  [[ -z $(git remote) ]]
+  assert_gh_not_called
 }
 
 @test "fetch uses SSH when hub.protocol is ssh, without asking gh" {
-  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
+  serve_github mislav/dotfiles alice/dotfiles bob/dotfiles
+  clone_served mislav/dotfiles
   git config --global hub.protocol ssh
-  run hub --noop fetch alice,bob
+  run hub fetch alice,bob
   assert_success
-  assert_line_equals 0 "git remote add alice git@github.com:alice/dotfiles.git"
-  assert_line_equals 1 "git remote add bob git@github.com:bob/dotfiles.git"
+  assert_equals "$(remote_url alice)" git@github.com:alice/dotfiles.git
+  assert_equals "$(remote_url bob)" git@github.com:bob/dotfiles.git
+  assert_equals "$(git rev-parse refs/remotes/bob/main)" "$(server_ref bob/dotfiles main)"
   assert_gh_not_called
 }
 
@@ -277,70 +353,48 @@ git fetch --multiple --depth=1 carol -j4 alice --recurse-submodules bob --recurs
 
 @test "the fork is on the current project's host, under the project's name" {
   git config --global hub.host ghe.example.com
+  serve_github ghe.example.com/alice/tool
   make_repo work-copy origin=https://ghe.example.com/me/fork-name.git upstream=git@ghe.example.com:tools/tool.git
-  run hub --noop fetch alice
+  stub_gh 'config get git_protocol -h ghe.example.com' 'https'
+  run hub fetch alice
   assert_success
-  assert_output_equals $'git remote add alice https://ghe.example.com/alice/tool.git\ngit fetch alice'
+  assert_equals "$(remote_url alice)" https://ghe.example.com/alice/tool.git
+  assert_equals "$(git rev-parse refs/remotes/alice/main)" "$(server_ref ghe.example.com/alice/tool main)"
   assert_gh_called 'config get git_protocol -h ghe.example.com'
 }
 
-@test "without a GitHub remote, the work tree's directory name is the repository name" {
+@test "without a GitHub remote, the work tree's directory name is the repository name, without a .git suffix" {
+  serve_github alice/tool
   make_repo tool
-  run hub --noop fetch alice
+  run hub fetch alice
   assert_success
-  assert_output_equals $'git remote add alice https://github.com/alice/tool.git\ngit fetch alice'
+  assert_equals "$(remote_url alice)" https://github.com/alice/tool.git
+  assert_equals "$(git rev-parse refs/remotes/alice/main)" "$(server_ref alice/tool main)"
+  cd "$HUB_TEST_TMP"
+  git init -q --bare tool.git && cd tool.git
+  run hub fetch alice
+  assert_success
+  assert_equals "$(remote_url alice)" https://github.com/alice/tool.git
+  assert_equals "$(git rev-parse refs/remotes/alice/main)" "$(server_ref alice/tool main)"
 }
 
 @test "fetch --help prints the manual; -h is git's" {
   run hub fetch --help
   assert_success
   assert_line_equals 0 "Summary: Fetch from GitHub users' forks, adding remotes for them first."
-  assert_output_contains "Usage: hub fetch USER[,USER2...]"
+  assert_output_contains "Usage: hub fetch [<git-fetch options>] USER[,USER...]"
   run hub fetch alice,bob --help
   assert_success
-  assert_output_contains "Usage: hub fetch USER[,USER2...]"
+  assert_output_contains "Usage: hub fetch [<git-fetch options>] USER[,USER...]"
   run hub --noop fetch -h
   assert_output_equals "git fetch -h"
   assert_gh_not_called
 }
 
-@test "fetch really adds the remotes and fetches the forks" {
-  serve_github mislav/dotfiles alice/dotfiles bob/dotfiles
-  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
-  run hub fetch alice,bob
-  assert_success
-  [[ $(git config remote.alice.url) == https://github.com/alice/dotfiles.git ]]
-  [[ $(git config remote.bob.url) == https://github.com/bob/dotfiles.git ]]
-  git rev-parse --verify -q refs/remotes/alice/main
-  git rev-parse --verify -q refs/remotes/bob/main
-}
-
-@test "fetch --multiple really adds the remotes and fetches the forks" {
-  serve_github mislav/dotfiles alice/dotfiles bob/dotfiles
-  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
-  run hub fetch --multiple alice --prune bob
-  assert_success
-  [[ $(git config remote.alice.url) == https://github.com/alice/dotfiles.git ]]
-  [[ $(git config remote.bob.url) == https://github.com/bob/dotfiles.git ]]
-  git rev-parse --verify -q refs/remotes/alice/main
-  git rev-parse --verify -q refs/remotes/bob/main
-}
-
-@test "fetch --dry-run really adds the remotes, and only the fetch is a dry run" {
-  serve_github mislav/dotfiles alice/dotfiles bob/dotfiles
-  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
-  run hub fetch --dry-run --multiple alice bob
-  assert_success
-  [[ $(git config remote.alice.url) == https://github.com/alice/dotfiles.git ]]
-  [[ $(git config remote.bob.url) == https://github.com/bob/dotfiles.git ]]
-  run git rev-parse --verify -q refs/remotes/alice/main
-  assert_failure
-}
-
 @test "a fork that does not exist fails in git and its remote stays" {
   serve_github mislav/dotfiles
-  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
+  clone_served mislav/dotfiles
   run hub fetch nobody
   assert_failure
-  [[ $(git config remote.nobody.url) == https://github.com/nobody/dotfiles.git ]]
+  assert_equals "$(remote_url nobody)" https://github.com/nobody/dotfiles.git
 }

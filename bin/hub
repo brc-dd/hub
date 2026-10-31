@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # hub — git + GitHub, powered by gh. Safe to alias as git: eval "$(hub alias -s)"
 #
-#   hub <name> ...   lib/hub/cmd/<name>.sh or lib/hub/ext/<name>.sh handles it
-#   anything else    exec git "$@" (nothing is loaded)
+#   hub [--noop] [GIT-OPTIONS...] COMMAND [ARGS...]
 #
-# Leading options: --noop prints the git/gh commands instead of running them; -C, -c,
-# --config-env and git's other global options are honored and forwarded.
+# A COMMAND with a module in lib/hub/cmd or lib/hub/ext is hub's: git itself applies the global
+# options in front of it (-C, -c, --git-dir, --bare, ...) and re-enters hub through a one-off
+# alias, so hub never interprets git's command line. Anything else is exec git with the command
+# line as given. --noop prints the git and gh commands instead of running them. See docs/design.md.
 
 if ((BASH_VERSINFO[0] < 5)); then
   printf 'hub: bash 5 or newer is required, but this is bash %s.\n' "$BASH_VERSION" >&2
@@ -32,123 +33,161 @@ hub_dir=${hub_self%/*}
 [[ $hub_dir == /* ]] || hub_dir=$PWD/$hub_dir
 hub_dir=${hub_dir//\/.\//\/}
 hub_dir=${hub_dir%/.}
+hub_self=$hub_dir/${hub_self##*/}
 HUB_ROOT=${hub_dir%/*} # strip the trailing /bin
 HUB_LIB=${HUB_LIB:-$HUB_ROOT/lib/hub}
 export HUB_ROOT HUB_LIB
 
+# hub_module NAME : sets hub_kind to cmd or ext when lib/hub/<kind>/NAME.sh exists, else to nothing.
+hub_module() {
+  hub_kind=''
+  [[ $1 =~ ^[a-z][a-z0-9-]*$ ]] || return 1
+  if [[ -f $HUB_LIB/cmd/$1.sh ]]; then
+    hub_kind=cmd
+  elif [[ -f $HUB_LIB/ext/$1.sh ]]; then
+    hub_kind=ext
+  else
+    return 1
+  fi
+}
+
+# hub_quote ARGS... : one line, shell-quoted only where needed (the same rule as hub::quote).
+hub_quote() {
+  local out='' arg
+  for arg in "$@"; do
+    [[ $arg =~ ^[A-Za-z0-9_./:@%+=,^-]+$ ]] || printf -v arg '%q' "$arg"
+    out+="${out:+ }$arg"
+  done
+  printf '%s\n' "$out"
+}
+
+# ---------------------------------------------------------------------------
+# Re-entry: git ran `hub --run N GIT-OPTIONS... COMMAND ARGS...` from its alias, with the
+# global options applied and their environment exported.
+# ---------------------------------------------------------------------------
+if [[ ${1-} == --run && -n ${HUB_REEXEC-} ]]; then
+  unset HUB_REEXEC
+  shift
+  # shellcheck disable=SC2034  # read by core.sh, for faithful command lines under --noop
+  HUB_GIT_GLOBALS=("${@:2:$1}")
+  shift "$(($1 + 1))"
+  hub_cmd=$1
+  shift
+  # git runs aliases from the top of the work tree; go back to where the user was, so that
+  # relative paths in the arguments and in GIT_WORK_TREE keep their meaning.
+  cd -P -- "./${GIT_PREFIX:-.}" || exit 1
+  unset GIT_PREFIX
+  # git exports the git directory it discovered (a linked work tree, a bare repository). Without
+  # GIT_WORK_TREE that would make the user's subdirectory the work tree, so it goes unless the
+  # user set it, with --git-dir, --bare or in the environment.
+  [[ -n ${HUB_KEEP_GIT_DIR-} ]] || unset GIT_DIR
+  unset HUB_KEEP_GIT_DIR
+  # the alias is the last of the -c parameters git exported; its children don't need it
+  if [[ ${GIT_CONFIG_PARAMETERS-} == *"'alias.hubrun'="* ]]; then
+    GIT_CONFIG_PARAMETERS=${GIT_CONFIG_PARAMETERS%"'alias.hubrun'="*}
+    GIT_CONFIG_PARAMETERS=${GIT_CONFIG_PARAMETERS% }
+    [[ -n $GIT_CONFIG_PARAMETERS ]] || unset GIT_CONFIG_PARAMETERS
+  fi
+  hub_module "$hub_cmd" || {
+    printf 'hub: no module for %s\n' "$hub_cmd" >&2
+    exit 1
+  }
+  # shellcheck source=lib/hub/core.sh
+  source "$HUB_LIB/core.sh"
+  # shellcheck source=/dev/null
+  source "$HUB_LIB/$hub_kind/$hub_cmd.sh"
+  hub_fn="hub_${hub_kind}_${hub_cmd//-/_}"
+  declare -F "$hub_fn" >/dev/null || hub::die "hub: $HUB_LIB/$hub_kind/$hub_cmd.sh does not define $hub_fn()"
+  "$hub_fn" "$@"
+  exit
+fi
+
+# ---------------------------------------------------------------------------
+# Find the command word without interpreting anything.
+# ---------------------------------------------------------------------------
 HUB_NOOP=${HUB_NOOP:-0}
-HUB_GIT_OPTS=() # git global options to forward on every git invocation
-hub_cmd=
-
-# gh runs git itself without hub's -c flags, so they are mirrored into the environment of
-# hub's gh calls only (HUB_GH_ENV); git called by hub gets the flags and nothing twice.
-HUB_GH_ENV=()
-hub_gh_env_count=${GIT_CONFIG_COUNT:-0}
-hub_config_mirror() { # KEY[=VALUE]
-  local key=${1%%=*} value=${1#*=}
-  [[ $1 == *=* ]] || value=true
-  HUB_GH_ENV+=("GIT_CONFIG_KEY_$hub_gh_env_count=$key" "GIT_CONFIG_VALUE_$hub_gh_env_count=$value")
-  hub_gh_env_count=$((hub_gh_env_count + 1))
-  HUB_GH_ENV+=("GIT_CONFIG_COUNT=$hub_gh_env_count")
-}
-hub_config_mirror_env() { # KEY=ENVVAR
-  local key=${1%%=*} var=${1#*=} value
-  if [[ $1 != *=* || -z $key || -z $var ]]; then
-    printf 'fatal: invalid config format: %s\n' "$1" >&2
-    exit 128
-  fi
-  if ! value=$(printenv -- "$var"); then
-    printf "fatal: missing environment variable '%s' for configuration '%s'\n" "$var" "$key" >&2
-    exit 128
-  fi
-  hub_config_mirror "$key=$value"
-}
-
-while (($#)); do
-  case $1 in
+hub_argv=("$@")
+hub_globals=() # everything before the command word, except --noop
+hub_cmd=''
+hub_has_cmd=0
+hub_immediate=0               # an option git answers by itself and exits
+hub_keep_git_dir=${GIT_DIR+1} # the user set GIT_DIR: git's view of it must stay
+hub_i=0
+while ((hub_i < ${#hub_argv[@]})); do
+  hub_arg=${hub_argv[hub_i]}
+  case $hub_arg in
     --noop)
       HUB_NOOP=1
-      shift
+      ((hub_i++))
       ;;
-    --version | -v)
-      hub_cmd=version
-      shift
+    --version | -v | --help | -h) # git treats these as the command word
+      hub_cmd=$hub_arg hub_has_cmd=1
+      ((hub_i++))
       break
       ;;
-    --help | -h)
-      hub_cmd=help
-      shift
+    -C | -c | --config-env | --git-dir | --work-tree | --namespace | --attr-source | --super-prefix | --shallow-file)
+      [[ $hub_arg == --git-dir ]] && hub_keep_git_dir=1
+      hub_globals+=("$hub_arg")
+      ((hub_i++))
+      if ((hub_i < ${#hub_argv[@]})); then # its value, whatever it looks like
+        hub_globals+=("${hub_argv[hub_i]}")
+        ((hub_i++))
+      fi
+      ;;
+    --exec-path | --html-path | --man-path | --info-path | --list-cmds=*)
+      hub_immediate=1
       break
       ;;
-    -C)
-      (($# >= 2)) || break
-      if [[ -n $2 ]]; then cd -- "$2" || exit 1; fi # git -C '' is a no-op too
-      shift 2
+    -*)
+      case $hub_arg in --git-dir=* | --bare) hub_keep_git_dir=1 ;; esac
+      hub_globals+=("$hub_arg")
+      ((hub_i++))
       ;;
-    -c | --config-env | --git-dir | --work-tree | --namespace | --attr-source)
-      (($# >= 2)) || break
-      HUB_GIT_OPTS+=("$1" "$2")
-      case $1 in
-        -c) hub_config_mirror "$2" ;;
-        --config-env) hub_config_mirror_env "$2" ;;
-        --git-dir) HUB_GH_ENV+=("GIT_DIR=$2") ;;
-        --work-tree) HUB_GH_ENV+=("GIT_WORK_TREE=$2") ;;
-        --namespace) HUB_GH_ENV+=("GIT_NAMESPACE=$2") ;;
-      esac
-      shift 2
-      ;;
-    --config-env=* | --git-dir=* | --work-tree=* | --namespace=*)
-      HUB_GIT_OPTS+=("$1")
-      case $1 in
-        --config-env=*) hub_config_mirror_env "${1#--config-env=}" ;;
-        --git-dir=*) HUB_GH_ENV+=("GIT_DIR=${1#--git-dir=}") ;;
-        --work-tree=*) HUB_GH_ENV+=("GIT_WORK_TREE=${1#--work-tree=}") ;;
-        --namespace=*) HUB_GH_ENV+=("GIT_NAMESPACE=${1#--namespace=}") ;;
-      esac
-      shift
-      ;;
-    --exec-path=* | --attr-source=* | --list-cmds=*)
-      HUB_GIT_OPTS+=("$1")
-      shift
-      ;;
-    -p | --paginate | -P | --no-pager | --no-replace-objects | --no-lazy-fetch | --no-optional-locks | --no-advice | --bare | --literal-pathspecs | --glob-pathspecs | --noglob-pathspecs | --icase-pathspecs)
-      HUB_GIT_OPTS+=("$1")
-      shift
-      ;;
-    -*) break ;; # an option we don't know: let git deal with everything
     *)
-      hub_cmd=$1
-      shift
+      hub_cmd=$hub_arg hub_has_cmd=1
+      ((hub_i++))
       break
       ;;
   esac
 done
+hub_rest=("${hub_argv[@]:hub_i}")
 
-hub_kind=
-if [[ $hub_cmd =~ ^[a-z][a-z0-9-]*$ ]]; then
-  if [[ -f $HUB_LIB/cmd/$hub_cmd.sh ]]; then
-    hub_kind=cmd
-  elif [[ -f $HUB_LIB/ext/$hub_cmd.sh ]]; then
-    hub_kind=ext
-  fi
+hub_kind=''
+if ((hub_has_cmd && ! hub_immediate)); then
+  case $hub_cmd in
+    --version | -v) hub_name=version ;;
+    --help | -h) hub_name=help ;;
+    *) hub_name=$hub_cmd ;;
+  esac
+  hub_module "$hub_name"
 fi
+
+# Not ours: git gets the command line as given (minus --noop). Nothing is loaded.
 if [[ -z $hub_kind ]]; then
+  if ((hub_has_cmd)); then
+    set -- "${hub_globals[@]}" "$hub_cmd" "${hub_rest[@]}"
+  else
+    set -- "${hub_globals[@]}" "${hub_rest[@]}"
+  fi
   if ((HUB_NOOP)); then
-    hub_out=git
-    for hub_arg in "${HUB_GIT_OPTS[@]}" ${hub_cmd:+"$hub_cmd"} "$@"; do
-      if [[ $hub_arg =~ ^[A-Za-z0-9_./:@%+=,^~-]+$ ]]; then hub_out+=" $hub_arg"; else hub_out+=" $(printf '%q' "$hub_arg")"; fi
-    done
-    printf '%s\n' "$hub_out"
+    hub_quote git "$@"
     exit 0
   fi
-  exec git "${HUB_GIT_OPTS[@]}" ${hub_cmd:+"$hub_cmd"} "$@"
+  # hub installed under the name git would run itself forever
+  IFS=: read -r -a hub_path <<<"$PATH"
+  for hub_dir in "${hub_path[@]}"; do
+    [[ -f ${hub_dir:-.}/git && -x ${hub_dir:-.}/git ]] || continue
+    [[ ${hub_dir:-.}/git -ef $hub_self ]] && {
+      printf 'hub: git in PATH is hub itself (%s); install hub under its own name and alias git to it\n' "${hub_dir:-.}/git" >&2
+      exit 1
+    }
+    break
+  done
+  exec git "$@"
 fi
 
-# shellcheck source=lib/hub/core.sh
-source "$HUB_LIB/core.sh"
-hub::find_git
-# shellcheck source=/dev/null
-source "$HUB_LIB/$hub_kind/$hub_cmd.sh"
-hub_fn="hub_${hub_kind}_${hub_cmd//-/_}"
-declare -F "$hub_fn" >/dev/null || hub::die "hub: $HUB_LIB/$hub_kind/$hub_cmd.sh does not define $hub_fn()"
-"$hub_fn" "$@"
+# Ours: git applies the global options, exports their environment and runs hub again.
+export HUB_REEXEC=1 HUB_NOOP
+[[ -n $hub_keep_git_dir ]] && export HUB_KEEP_GIT_DIR=1
+hub_alias="!exec '${hub_self//\'/\'\\\'\'}' --run"
+exec git "${hub_globals[@]}" -c "alias.hubrun=$hub_alias" hubrun "${#hub_globals[@]}" "${hub_globals[@]}" "$hub_name" "${hub_rest[@]}"

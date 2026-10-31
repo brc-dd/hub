@@ -29,17 +29,28 @@ network. `hub --noop <command>` shows what would run.
 
 ## Install
 
-Requirements: bash 5.3 or newer (macOS ships 3.2; the Homebrew formula brings
-its own), git, and `gh` logged in (`gh auth login`). macOS and Linux.
+Requirements, each with the reason for its floor (macOS and Linux):
+
+- **bash 5.3 or newer**: the version hub is developed and tested with; `bin/hub`
+  refuses to run on bash 4 and older. macOS ships 3.2; the Homebrew formula
+  brings its own.
+- **git 2.41 or newer**: hub relies on `%(push:remoteref)` in for-each-ref,
+  `--end-of-options`, `git switch` and `--config-env`.
+- **gh 2.40 or newer**, logged in (`gh auth login`): hub uses `gh repo create
+  --source --remote --push`, `gh repo fork --remote --remote-name`, `gh pr
+  create --head/--fill-first`, `gh pr checkout -b/--detach`, `--json` output and
+  `gh api -F/--jq`, which older 2.x releases lack in part.
 
 ```sh
 brew tap brc-dd/hub https://github.com/brc-dd/hub
 brew install brc-dd/hub/hub
 ```
 
-Or from a checkout: `make install PREFIX=~/.local` symlinks `bin/hub` and the
-completions. Then add to `~/.zshrc`, `~/.bashrc` or `~/.config/fish/config.fish`,
-after the lines that set up your `PATH` (Homebrew's, for instance):
+Or from a checkout: `make install PREFIX="$HOME/.local"` symlinks `bin/hub` and
+the completions into the prefix (write it with `$HOME`, not `~`: zsh and sh
+pass a `~` inside a `PREFIX=` argument on literally, and make does not expand
+it). Then add to `~/.zshrc`, `~/.bashrc` or `~/.config/fish/config.fish`, after
+the lines that set up your `PATH` (Homebrew's, for instance):
 
 ```sh
 eval "$(hub alias -s)"
@@ -56,24 +67,24 @@ Extended git commands, triggered by a GitHub shorthand or URL:
 
 | Command | What hub adds |
 |---|---|
-| `clone [-p] [OWNER/]REPO [DIR]` | expands `owner/repo`, `repo` (yours) and `repo.wiki` to a clone URL |
+| `clone [-p] [OWNER/]REPO [DIR]` | expands `owner/repo`, `repo` (yours) and `repo.wiki` to a clone URL; existing paths stay git's |
 | `remote add [-p] [NAME] USER[/REPO]`, `remote set-url` | adds a remote by GitHub name; `remote add origin` alone means your fork |
 | `fetch USER[,USER2…]` | adds missing remotes for those users' forks, then fetches |
 | `push REMOTE1,REMOTE2 [ARGS…]` | one `git push` per remote, stops at the first failure |
 | `checkout PR-URL [BRANCH]` | `gh pr checkout` |
 | `merge PR-URL` | merges the PR locally with GitHub's merge-button message (never merges on GitHub) |
-| `am URL`, `apply URL` | fetches the PR or commit as a patch and applies it |
+| `am URL`, `apply URL` | fetches a PR, commit or compare URL (also `.patch`/`.diff`) as a patch and applies it |
 | `cherry-pick COMMIT-URL`, `USER@SHA` | fetches the commit, then cherry-picks it |
-| `sync [REMOTE]` | fast-forwards branches that are behind, deletes merged ones, warns about the rest |
+| `sync [--color] [REMOTE]` | fast-forwards branches that are behind, deletes merged ones, warns about the rest; never touches a branch that moved meanwhile |
 
 New commands:
 
 | Command | What it does |
 |---|---|
 | `pull-request [-m MSG] [-b BASE] [-h HEAD] [-p] [-d] …` | `gh pr create` with hub's flags; `-p` pushes first, `-i ISSUE` converts an issue |
-| `pr`, `issue`, `release`, `api`, `gist` | `gh` with the same name and flags; hub maps old subcommand names such as `show` → `view` |
+| `pr`, `issue`, `release`, `api`, `gist` | `gh` with the same name and flags; hub maps only the old subcommand names: `show` → `view`, none → `list` |
 | `browse [-u] [REPO] [SUBPAGE]`, `compare [-u] [-b BASE] [RANGE]` | open repository pages; `-u` prints the URL |
-| `create [-p] [-d DESC] [NAME]`, `fork`, `delete NAME` | `gh repo create --source=.` (private by default), fork with a remote named after you, delete |
+| `create [-p] [-d DESC] [NAME]`, `fork`, `delete NAME` | `gh repo create --source=TOP` (private by default), `gh repo fork --remote` with a remote named after you, delete |
 | `ci-status [-v] [COMMIT]` | one word for a commit's CI state; exit 0 success, 1 failure, 2 pending, 3 no status |
 | `alias [-s] [SHELL]`, `help [COMMAND]`, `version` | shell setup, manuals, versions |
 
@@ -93,6 +104,20 @@ gh's flags and output; commands only hub has use hub's flags.
 
 Which remote is "the" repository: `upstream`, then `github`, then `origin`,
 then any other GitHub remote. Authentication is gh's; `gh auth login` once per host.
+
+**SSH aliases and certificates.** A remote whose host is an alias from
+`~/.ssh/config` (`git@gh-work:org/repo.git`, `ssh://gh-work/org/repo.git`) is a
+GitHub remote for hub when the alias resolves to a GitHub host: hub asks the ssh
+git would use (`ssh -G`, with the URL's user and port, so `Match` rules apply).
+The alias has to resolve; one whose `HostName` is missing or points elsewhere
+makes the remote an ordinary git remote that hub leaves alone. Shorthands such as
+`owner/repo` always expand to `git@HOST:owner/repo.git` (with `hub.protocol
+ssh`). An organization that requires SSH certificates needs its
+repository-specific URL instead, shown under the repository's Code → SSH menu
+(it carries the organization ID): clone or `git remote add` with that URL as
+given, or point an alias at it (`HostName github.com` and that URL's `User`) and
+use the alias in the URL. hub never rewrites a full URL, and recognizes the
+remote either way.
 
 ## More
 

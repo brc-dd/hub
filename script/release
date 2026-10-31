@@ -2,13 +2,22 @@
 # Usage: script/release [--dry-run] [VERSION]
 #
 # Releases hub from a clean main that is up to date with origin: make check,
-# script/bump VERSION, push main and the tag, create the GitHub release unless
-# it exists, and point Formula/hub.rb at it (not for pre-releases). Without
-# VERSION, HEAD must be at the tag named by the VERSION file; after a failure,
-# fix it and run script/release again.
+# script/bump VERSION, push main and the tag (those two refs and nothing else),
+# publish the GitHub release and point Formula/hub.rb at it (not for
+# pre-releases). The release goes to the repository that origin names; an SSH
+# alias in its URL is resolved the way ssh does (ssh -G), and gh must see that
+# repository before anything is pushed.
+#
+# Without VERSION, the release named by the VERSION file is resumed: HEAD must
+# be at its tag, or one "Formula: hub vX.Y.Z" commit past it that changes only
+# Formula/hub.rb. Steps that are done already are skipped, so after fixing what
+# failed, run script/release again.
 #
 # Options:
-#   -n, --dry-run   run the checks and print the commands instead of running them
+#   -n, --dry-run   check the local state (branch, clean tree, tag, bump) and
+#                   print the other commands instead of running them: make check
+#                   is printed, not run, and nothing is fetched, pushed or
+#                   published
 #   -h, --help      show this help
 set -euo pipefail
 
@@ -18,6 +27,55 @@ die() {
 }
 step() { printf '==> %s\n' "$*"; }
 run() { if ((dry_run)); then echo "[dry-run]$(printf ' %q' "$@")"; else "$@"; fi; }
+
+# origin_repo : prints HOST/OWNER/REPO for the URL of origin. An SSH alias is resolved to the host
+# ssh connects to (ssh -G, with the URL's user and port), as gh does when it reads the remotes.
+origin_repo() {
+  local url host='' path='' user='' port='' ssh=0
+  url=$(git remote get-url origin) || die "no origin remote"
+  case $url in
+    ssh://*) ssh=1 host=${url#ssh://} ;;
+    http://* | https://*) host=${url#*://} ;;
+    *://* | /* | ./* | ../*) die "origin is not a GitHub repository URL: $url" ;;
+    *:*) ssh=1 host=${url%%:*} path=${url#*:} ;; # scp-like [USER@]HOST:PATH
+    *) die "origin is not a GitHub repository URL: $url" ;;
+  esac
+  [[ $url != *://* ]] || path=${host#*/} host=${host%%/*}
+  [[ $host != *@* ]] || user=${host%%@*} host=${host#*@}
+  [[ $host != *:* ]] || port=${host##*:} host=${host%%:*}
+  path=${path#/} path=${path%/} path=${path%.git}
+  [[ $path =~ ^[^/]+/[^/]+$ && $host != -* && -n $host ]] || die "origin does not name a GitHub repository: $url"
+  if ((ssh)); then
+    host=$(ssh -G ${port:+-p "$port"} "${user:+$user@}$host" 2>/dev/null | awk '$1 == "hostname" { print $2; exit }') \
+      && [[ -n $host ]] || die "ssh -G cannot resolve the host of $url"
+  fi
+  host=${host,,}
+  [[ $host != ssh.github.com ]] || host=github.com
+  printf '%s/%s\n' "$host" "$path"
+}
+
+# release_state : sets state to published, draft or none for the release of $tag (gh finds a
+# draft by the tag it is waiting for, so a successful view does not mean a published release).
+release_state() {
+  local out
+  if out=$(gh release view "$tag" --repo "$repo" --json isDraft -q .isDraft 2>&1); then
+    if [[ $out == true ]]; then state=draft; else state=published; fi
+  elif [[ $out == *'release not found'* ]]; then
+    state=none
+  else
+    die "gh release view $tag --repo $repo: $out"
+  fi
+}
+
+# formula_commit_at_head TAGGED : HEAD is the formula commit for v$version, right after TAGGED, and
+# changes nothing but Formula/hub.rb, which it points at that version.
+formula_commit_at_head() {
+  [[ $version != *-* ]] \
+    && [[ $(git rev-parse --quiet --verify HEAD^) == "$1" ]] \
+    && [[ $(git log -1 --format=%s HEAD) == "Formula: hub v$version" ]] \
+    && [[ $(git diff --name-only "$1" HEAD) == Formula/hub.rb ]] \
+    && grep -q "/v$version\.tar\.gz\"" Formula/hub.rb
+}
 
 dry_run=0 version=
 for arg; do
@@ -32,46 +90,78 @@ done
 cd "$(dirname "$0")/.."
 [[ $(git symbolic-ref --quiet --short HEAD) == main ]] || die "check out main first"
 [[ -z $(git status --porcelain) ]] || die "the working tree is not clean (git status)"
-repo=$(git remote get-url origin)
+repo=$(origin_repo)
 run git fetch --quiet origin
 git merge-base --is-ancestor origin/main HEAD || die "main is behind origin/main; pull first"
 [[ -z $version ]] || script/bump --dry-run "$version" >/dev/null # fail before make check
 
+step "Releasing to $repo"
+if ((dry_run)); then
+  run gh repo view "$repo" --json nameWithOwner -q .nameWithOwner
+else
+  # gh must see the repository behind origin before anything is pushed to it; the name it answers
+  # is the canonical one, which every gh call below targets explicitly.
+  name=$(gh repo view "$repo" --json nameWithOwner -q .nameWithOwner) \
+    || die "gh cannot see $repo (is gh logged in to ${repo%%/*}?)"
+  repo=${repo%%/*}/$name
+fi
+
 step "Checking"
 run make check
 
+formula_done=0
 if [[ -n $version ]]; then
   step "Bumping to $version"
   run script/bump "$version"
 else
   version=$(<VERSION)
-  [[ $(git rev-parse --quiet --verify "refs/tags/v$version^{commit}") == "$(git rev-parse HEAD)" ]] \
-    || die "HEAD is not at v$version; to release a new version: script/release X.Y.Z"
+  tagged=$(git rev-parse --quiet --verify "refs/tags/v$version^{commit}") \
+    || die "no tag v$version; to release a new version: script/release X.Y.Z"
+  if [[ $(git rev-parse HEAD) != "$tagged" ]]; then
+    # Resuming after the formula commit was made: only its push is left.
+    formula_commit_at_head "$tagged" \
+      || die "HEAD is not at v$version, nor one formula commit past it; to release a new version: script/release X.Y.Z"
+    formula_done=1
+  fi
 fi
 tag=v$version
 
 step "Pushing main and $tag"
-run git push origin main --follow-tags
+run git push --atomic origin refs/heads/main:refs/heads/main "refs/tags/$tag:refs/tags/$tag"
 
 step "Publishing the GitHub release $tag"
 create=(gh release create "$tag" --repo "$repo" --verify-tag --generate-notes --title "hub $version")
 [[ $version != *-* ]] || create+=(--prerelease)
 if ((dry_run)); then
   run "${create[@]}"
-elif ! gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
-  # The release workflow that the tag push started may have created it first.
-  "${create[@]}" || gh release view "$tag" --repo "$repo" >/dev/null
+else
+  release_state
+  if [[ $state == none ]]; then
+    # The release workflow that the tag push started may have created it first.
+    "${create[@]}" || echo "gh release create failed; checking whether the release exists anyway" >&2
+    release_state
+    [[ $state != none ]] || die "the release $tag was not created"
+  fi
+  if [[ $state == draft ]]; then
+    echo "$tag is a draft release: publishing it"
+    gh release edit "$tag" --repo "$repo" --draft=false
+  fi
 fi
 
 if [[ $version == *-* ]]; then
   step "Leaving Formula/hub.rb alone: $tag is a pre-release"
 else
   step "Pointing Formula/hub.rb at $tag"
-  run script/update-formula "$tag"
-  if ((dry_run)) || ! git diff --quiet -- Formula/hub.rb; then
-    run git commit --quiet -m "Formula: hub $tag" -- Formula/hub.rb
-    # The release workflow may have pushed the same formula commit first.
-    run git push origin main || { git pull --rebase origin main && git push origin main; }
+  if ((formula_done)); then
+    echo "HEAD is the formula commit for $tag already"
+  else
+    run script/update-formula "$tag"
+    if ((dry_run)) || ! git diff --quiet -- Formula/hub.rb; then
+      run git commit --quiet -m "Formula: hub $tag" -- Formula/hub.rb
+    fi
   fi
+  # The release workflow may have pushed the same formula commit first; the rebase then drops ours.
+  run git push origin refs/heads/main:refs/heads/main \
+    || { run git pull --rebase origin main && run git push origin refs/heads/main:refs/heads/main; }
 fi
 ((dry_run)) || step "Released hub $version"

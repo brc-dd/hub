@@ -1,110 +1,119 @@
 # shellcheck shell=bash
-# Summary: Fork the current repository on GitHub and add the fork as a remote.
-# Usage: hub fork [--no-remote] [--remote-name NAME] [--org ORG] [--fork-name NAME] [--default-branch-only]
+# Summary: Fork the current project on GitHub and add the fork as a remote.
+# Usage: hub fork [--no-remote] [--remote-name REMOTE] [--org ORGANIZATION] [--fork-name NAME] [--default-branch-only] [ORGANIZATION]
 #
-# Forks the current project (GH_REPO, else the upstream, github or origin remote) on its host
-# with `gh api -X POST repos/OWNER/REPO/forks`, adds the fork GitHub returns as a remote named
-# after your login (or ORG), and fetches it, fetching again for a while if GitHub is still
-# creating it. An existing remote of that name is kept if it points at the fork; otherwise hub
-# stops, before forking when it can tell. Other remotes, origin included, are left alone.
+# A hub-owned command: these are all of its options, and anything else is an error. Forks the
+# current project (GH_REPO, else the upstream, github or origin remote) under your account, or
+# under ORGANIZATION, with gh's compound command `gh repo fork --remote --remote-name REMOTE`,
+# run with GH_REPO set to that project so that gh forks exactly it. gh adds the fork as the remote
+# REMOTE: your login, or ORGANIZATION, unless --remote-name says otherwise. A fork that already
+# exists is reused, and a remote that already points at the fork is kept instead of adding one.
+# Nothing is fetched: run `git fetch REMOTE` once GitHub has finished creating the fork.
+#
+# The remote gets the clone URL hub's protocol gives (git config hub.protocol, else gh's
+# git_protocol, else https); gh takes the protocol of the remote that points at the forked
+# repository, so when its choice differs, hub sets the URL right after gh is done.
+#
+# Everything local is checked before gh runs: that this is a repository, that REMOTE is a remote
+# name, and that no remote of that name exists yet. --no-remote only forks, with
+# `gh repo fork HOST/OWNER/REPO --clone=false`, and works outside a repository when GH_REPO names
+# the project.
 #
 # Options:
-#   --no-remote            Fork without adding a remote; print the fork's OWNER/REPO.
-#   --remote-name NAME     Name the new remote NAME.
-#   --org ORG              Fork into the organization ORG.
-#   --fork-name NAME       Name a new fork NAME instead of after the repository.
+#   --no-remote            Fork without adding a remote.
+#   --remote-name REMOTE   Name the new remote REMOTE.
+#   --org ORGANIZATION     Fork into ORGANIZATION; an ORGANIZATION operand means the same.
+#   --fork-name NAME       Ask GitHub to name the fork NAME.
 #   --default-branch-only  Fork only the default branch.
 #
 #   $ hub fork
-#   > gh api --hostname github.com -X POST repos/dotcom/dotfiles/forks --jq .full_name
-#   > git remote add mislav https://github.com/mislav/dotfiles.git
-#   > git fetch mislav
+#   > env GH_REPO=github.com/dotcom/dotfiles gh repo fork --remote --remote-name mislav
+#   $ hub fork --no-remote
+#   > gh repo fork github.com/dotcom/dotfiles --clone=false
 
 hub_cmd_fork() {
-  local no_remote=0 branch_only=0 remote='' org='' name='' opt val proj host owner want full url current existing=''
+  local usage='Usage: hub fork [--no-remote] [--remote-name REMOTE] [--org ORGANIZATION] [--fork-name NAME] [--default-branch-only] [ORGANIZATION]'
+  hub::normalize_opts '' '--remote-name --org --fork-name' "$@"
+  set -- "${HUB_ARGS[@]}"
+  local arg value no_remote=0 branch_only=0 remote='' org='' fork_name=''
+  local -a operands=()
   while (($#)); do
-    opt=$1 val=''
-    case $1 in
-      --remote-name=* | --org=* | --fork-name=*) opt=${1%%=*} val=${1#*=} ;;
-      --remote-name | --org | --fork-name)
-        val=${2-}
-        shift
-        ;;
-    esac
-    case $opt in
-      --remote-name | --org | --fork-name) [[ -n $val ]] || hub::die "hub fork: $opt needs a value" ;;&
-      --remote-name) remote=$val ;;
-      --org) org=$val ;;
-      --fork-name) name=$val ;;
-      --default-branch-only) branch_only=1 ;;
-      --no-remote) no_remote=1 ;;
-      -h | --help) hub::usage ;;
-      -*) hub::die "hub fork: unknown option: $1" ;;
-      *) hub::die "Usage: hub fork [--no-remote] [--remote-name NAME] [--org ORG] [--fork-name NAME] [--default-branch-only]" ;;
-    esac
+    arg=$1
     shift
+    case $arg in
+      -h | --help) hub::usage ;;
+      --remote-name | --org | --fork-name)
+        if (($# == 0)) || [[ -z $1 ]]; then hub::die "Aborted: $arg needs a value."; fi
+        value=$1
+        shift
+        case $arg in
+          --remote-name) remote=$value ;;
+          --org) org=$value ;;
+          --fork-name) fork_name=$value ;;
+        esac
+        ;;
+      --no-remote) no_remote=1 ;;
+      --default-branch-only) branch_only=1 ;;
+      --)
+        operands+=("$@")
+        break
+        ;;
+      -?*) hub::die "hub fork: unknown option: $arg"$'\n'"$usage" ;;
+      *) operands+=("$arg") ;;
+    esac
   done
+  ((${#operands[@]} <= 1)) || hub::die "hub fork: too many arguments"$'\n'"$usage"
+  if ((${#operands[@]})); then
+    [[ -z $org || $org == "${operands[0]}" ]] || hub::die "Aborted: name the organization once (--org $org and ${operands[0]})."
+    org=${operands[0]}
+  fi
+  [[ -z $org || $org =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]] || hub::die "Aborted: not an organization name: $org (letters, digits and - only)"
+  [[ -z $fork_name || $fork_name =~ ^[A-Za-z0-9_.-]+$ ]] || hub::die "Aborted: not a repository name: $fork_name (letters, digits, -, _ and . only)"
+  ((! no_remote)) || [[ -z $remote ]] || hub::die "Aborted: --no-remote and --remote-name cannot be used together."
+
   hub::main_project >/dev/null
-  proj=$HUB_PROJECT host=$HUB_PROJECT_HOST
-  local -a api=(api --hostname "$host" -X POST "repos/$proj/forks" ${org:+-f "organization=$org"} ${name:+-f "name=$name"})
-  ((branch_only)) && api+=(-F default_branch_only=true)
-  api+=(--jq .full_name) # GitHub answers with the fork, new or already there, under its real name
-  ((no_remote)) && hub::exec_gh "${api[@]}"
+  local proj=$HUB_PROJECT host=$HUB_PROJECT_HOST
+  local -a opts=()
+  [[ -z $org ]] || opts+=(--org "$org")
+  [[ -z $fork_name ]] || opts+=(--fork-name "$fork_name")
+  ((branch_only)) && opts+=(--default-branch-only)
+  ((no_remote)) && hub::exec_gh repo fork "$host/$proj" --clone=false "${opts[@]}"
 
-  if [[ -n $org ]]; then owner=$org; else owner=$(hub::current_user "$host") || exit 1; fi
-  want=$owner/${name:-${proj#*/}}
-  remote=${remote:-$owner}
-  if current=$(hub::git_query remote get-url "$remote"); then
-    hub::remote_project "$remote" >/dev/null && hub::same_host "$HUB_PROJECT_HOST" "$host" \
-      && [[ ${HUB_URL_OWNER,,} == "${owner,,}" ]] \
-      || hub::die "Aborted: a remote named '$remote' already exists for $current, not for $owner's fork; pick another name with --remote-name NAME."
-    existing=$HUB_PROJECT
+  # Local checks before the fork: a repository to add the remote to, and a free, well-formed name.
+  hub::git_dir >/dev/null || hub::die "fatal: not a git repository (or any of the parent directories): .git"
+  local owner
+  if [[ -n $org ]]; then
+    owner=$org
+  else
+    owner=$(hub::current_user "$host") || exit 1
   fi
+  [[ -n $remote ]] || remote=$owner
+  hub::valid_remote_name "$remote" || hub::die "Aborted: not a remote name: '$remote'"
+  ! hub::remote_exists "$remote" || hub::die "Aborted: a remote named '$remote' already exists; pick another name with --remote-name NAME."
 
-  if ((HUB_NOOP)); then
-    hub::gh "${api[@]}"
-    full=$want
-  else
-    full=$(hub::gh_query "${api[@]}") || exit
-    [[ $full == ?*/?* ]] || hub::die "Aborted: expected the fork's OWNER/REPO from GitHub, got '$full'."
-  fi
-  [[ ${full,,} != "${proj,,}" ]] \
-    || hub::die "Aborted: GitHub gave $proj itself as the fork; a repository cannot be forked into the account that owns it."
-  [[ ${full,,} == "${want,,}" ]] || hub::warn "The fork is $full, not $want."
-  if [[ -n $existing ]]; then
-    [[ ${existing,,} == "${full,,}" ]] \
-      || hub::die "Aborted: a remote named '$remote' already exists for $current, not for the fork $full; pick another name with --remote-name NAME."
-    hub::warn "Using the existing remote '$remote' for $full."
-  else
-    url=$(hub::git_url "$full" "$host") || exit 1
-    hub::git remote add "$remote" "$url" || exit
-  fi
-  _hub_fork_fetch "$remote" "$full"
+  hub::require_gh
+  hub::run env "GH_REPO=$host/$proj" gh repo fork --remote --remote-name "$remote" "${opts[@]}" || exit
+  _hub_fork_fix_url "$remote" "$host" "$proj" "$owner/${fork_name:-${proj#*/}}"
 }
 
-_hub_fork_fetch() {
-  local remote=$1 fork=$2 log status why pause retry=0
-  local -a pauses=(2 4 8 16) fetch=(fetch)
-  [[ -t 2 ]] && fetch+=(--progress) # git shows no progress meter on a pipe
-  fetch+=("$remote")
-  log=$(mktemp) || exit
-  # shellcheck disable=SC2064  # expand $log now
-  trap "rm -f -- $(printf '%q' "$log")" EXIT
-  while :; do
-    { # git's messages go to the terminal and to $log
-      hub::git "${fetch[@]}" 2>&1 >&3 3>&- | tee "$log" >&2
-      status=${PIPESTATUS[0]}
-    } 3>&1
-    ((status)) || return 0
-    # GitHub creates the fork in the background; until it is done, git finds no repository there.
-    why=$(grep -Ei -- "repository( '[^']*')? not found|does not appear to be a git repository|repository.* does not exist|empty repository" "$log" | tail -n 1)
-    [[ -n $why ]] \
-      || hub::die "error: could not fetch the fork $fork. The fork and the remote '$remote' exist; run 'git fetch $remote' later."
-    ((retry < ${#pauses[@]})) \
-      || hub::die "error: could not fetch the fork $fork after $((retry + 1)) attempts: ${why%.}. Either GitHub has not finished creating it (run 'git fetch $remote' later) or this account cannot read it."
-    pause=${HUB_FORK_RETRY_DELAY:-${pauses[retry]}} # tests set it to 0
-    retry=$((retry + 1))
-    hub::warn "GitHub may still be creating the fork $fork; fetching it again in ${pause}s (retry $retry of ${#pauses[@]})."
-    sleep "$pause"
-  done
+# _hub_fork_fix_url REMOTE HOST OWNER/REPO FORK : give the remote gh added the clone URL hub's
+# protocol gives when gh chose another (under --noop, as predicted for FORK: gh takes the protocol
+# of the remote that points at OWNER/REPO, else its git_protocol for HOST).
+_hub_fork_fix_url() {
+  local remote=$1 host=$2 proj=$3 fork=$4 want have='' url r
+  want=$(hub::protocol "$host")
+  if ((HUB_NOOP)); then
+    if r=$(hub::remote_for_project "$proj" "$host") && url=$(hub::git_query remote get-url --push -- "$r") && hub::parse_remote_url "$url"; then
+      have=$HUB_URL_SCHEME
+    else
+      have=$(hub::gh_query config get git_protocol -h "$host" 2>/dev/null) || have=''
+    fi
+  else
+    url=$(hub::git_query remote get-url -- "$remote") || return 0 # gh kept a remote that already pointed at the fork
+    hub::parse_remote_url "$url" || return 0
+    have=$HUB_URL_SCHEME fork=$HUB_URL_OWNER/$HUB_URL_REPO
+  fi
+  [[ $have == ssh ]] || have=https
+  [[ $want == "$have" ]] && return 0
+  hub::git remote set-url "$remote" "$(hub::git_url "$fork" "$host" "$want")"
 }

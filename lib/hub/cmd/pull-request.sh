@@ -1,252 +1,347 @@
 # shellcheck shell=bash
-# Summary: Open a pull request (gh pr create, with hub's options).
-# Usage: hub pull-request [-m MESSAGE... | -F FILE] [-e | --no-edit] [-b BASE] [-h HEAD] [-p] [-f] [-d]
-#          [-r REVIEWERS] [-a ASSIGNEES] [-M MILESTONE] [-l LABELS] [--no-maintainer-edits] [-o] [-c] [gh options]
-#        hub pull-request -i ISSUE [-b BASE] [-h HEAD] [-p] [-f] [-d] [--no-maintainer-edits] [-o] [-c]
+# Summary: Open a pull request for the current branch (gh pr create, with hub's options).
+# Usage: hub pull-request [-fpdoc] [-b [OWNER:]BASE] [-h [OWNER:]HEAD] [-r REVIEWERS] [-a ASSIGNEES]
+#          [-M MILESTONE] [-l LABELS] [--no-maintainer-edits] [-m MESSAGE... | -F FILE] [-e | --no-edit]
+#        hub pull-request [-fpdoc] [-b [OWNER:]BASE] [-h [OWNER:]HEAD] [--no-maintainer-edits] -i ISSUE
+#        hub pull-request [-fpdoc] [-b BASE] [-h [OWNER:]HEAD] [--no-maintainer-edits] ISSUE-URL
 #
-#   -m, --message MSG        Title (the first paragraph) and body; repeat to add paragraphs.
-#   -F, --file FILE          Read the title and body from FILE ("-" for standard input).
-#   -e, --edit               Edit the title and body in gh's editor.
-#       --no-edit            Use the first commit's message (gh --fill-first).
-#   -b, --base BASE          The branch to merge into: BRANCH, OWNER:BRANCH or OWNER/REPO:BRANCH.
-#   -h, --head HEAD          The branch with the changes: BRANCH or OWNER:BRANCH.
-#   -p, --push               Push the head first.
-#   -f, --force              Name the head as it already is on GitHub, so gh neither pushes nor forks.
-#   -d, --draft              Open it as a draft.
-#   -r, --reviewer LIST      Request reviews from users or ORG/TEAMs.
-#   -a, --assign LIST        Assign users.
-#   -M, --milestone NAME     Add it to a milestone.
-#   -l, --labels LIST        Add labels.
-#       --no-maintainer-edits  Don't let maintainers push to the head branch.
-#   -o, --browse             Open the new pull request in the browser.
-#   -c, --copy               Copy its URL to the clipboard.
-#   -i, --issue ISSUE        Turn an issue (a number or URL) into the pull request.
+# A hub-owned command: these are all of its options, and anything else is an error. The pull
+# request is opened with `gh pr create` in the current project (GH_REPO, else the upstream, github
+# or origin remote), or in the repository that -b OWNER[/REPO]:BASE or an issue URL names, on the
+# project's host.
 #
-# Other options go to gh, and -R [HOST/]OWNER/REPO replaces the --repo HOST/OWNER/REPO hub always
-# passes; spell gh's -b, -F, -m and -p as --body, --body-file, --milestone and --project.
-# --dry-run never pushes: hub prints the push, and names the head for gh.
-# Before -p pushes, and where -f, --dry-run or -i name the head, the push URLs of the branch's
-# push remote must all name one repository on the base's host: the base (head BRANCH), a fork of
-# it or a sibling fork (head OWNER:BRANCH); -p -h OWNER:BRANCH pushes to OWNER's remote that does.
-# A head owned by an organization is refused (gh pr create can't take it), except with -i.
-# -i converts the issue (in the issue URL's repository, else the base repository) through gh api,
-# onto that repository's default branch unless -b names another.
+# The head is the current branch, named for gh as it is where `git push` sends it: on the remote
+# git would push to (remote.*.push, branch.*.pushRemote, remote.pushDefault, branch.*.remote and
+# push.default), under its name there, in the repository that remote's push URL names, written
+# OWNER:BRANCH when that is not the base repository. A branch without an upstream goes to the
+# remote `git push -u` would take. Without -p, the branch must already be pushed there; -f skips
+# that check. -h BRANCH names a branch on that remote instead, pushed from HEAD with -p; -h
+# OWNER:BRANCH names a branch in OWNER's repository, pushed with -p to the remote here whose push
+# URL names it. gh pr create cannot open a pull request from a repository owned by an
+# organization; the API that -i uses can.
+#
+# The base defaults to branch.BRANCH.gh-merge-base of the current branch, else the default branch
+# of the base repository (refs/remotes/REMOTE/HEAD when it points at a branch that still exists,
+# else gh's answer). Without -m, -F, -e or --no-edit, gh asks for the title and body, which needs a
+# terminal; -o and -c leave the prompts alone and look the URL up afterwards.
+#
+# Options:
+#   -m, --message MESSAGE  The title (the text up to the first blank line) and the body; repeated
+#                          MESSAGEs are joined as paragraphs.
+#   -F, --file FILE        Read the title and body from FILE ("-" for standard input).
+#   -e, --edit             Open gh's editor for the title and body, filled from -m or -F if given.
+#       --no-edit          Use the message of the first commit on the branch, without an editor.
+#   -i, --issue ISSUE      Convert an issue (a number or URL) into the pull request through the
+#                          API, which keeps its title and body; takes only -b, -h, -p, -f, -d,
+#                          --no-maintainer-edits, -o and -c.
+#   -b, --base BASE        The branch to merge into: BRANCH, OWNER:BRANCH or OWNER/REPO:BRANCH.
+#   -h, --head HEAD        The branch with the changes: BRANCH or OWNER:BRANCH.
+#   -p, --push             Push HEAD to the head branch first, with --set-upstream when the
+#                          current branch has no upstream, once every check has passed.
+#   -f, --force            Skip the check that the current branch is pushed.
+#   -d, --draft            Open it as a draft.
+#   -r, --reviewer LIST    Request reviews from users or ORG/TEAMs (comma-separated, repeatable).
+#   -a, --assign LIST      Assign users (comma-separated, repeatable).
+#   -M, --milestone NAME   Add it to a milestone.
+#   -l, --labels LIST      Add labels (comma-separated, repeatable).
+#       --no-maintainer-edits  Don't let the base repository's maintainers push to the head.
+#   -o, --browse           Open the new pull request in the browser.
+#   -c, --copy             Copy its URL to the clipboard.
+#
+# -o and -c look the URL up with gh pr view once the pull request exists. The command fails when
+# gh, the browser or the clipboard tool fails, after what already happened is done.
 #
 #   $ hub pull-request -p -m "Fix the frobnicator" -b develop
 #   > git push --set-upstream origin HEAD:refs/heads/feature
-#   > gh pr create --title "Fix the frobnicator" --body "" --repo github.com/mislav/dotfiles --base develop --head feature
+#   > gh pr create --repo github.com/mislav/dotfiles --base develop --head feature --title Fix\ the\ frobnicator --body ''
+#   $ hub pull-request -i 12
+#   > gh api --hostname github.com -X POST repos/mislav/dotfiles/pulls -F issue=12 -f head=feature -f base=main --jq .html_url
 
 hub_cmd_pull_request() {
-  # The options that take a value: hub's, then those of gh pr create that hub passes on.
-  local takes=' -m --message -F --file -b -B --base -h -H --head -r --reviewer -a --assign -M --milestone -l --labels -i --issue -R --repo -t --title -T --template --body --body-file --label --assignee --project --attach --recover '
-  local -a messages=() opts=() rest=() push_cmd=() cmd=()
-  local arg value r file='' base='' head='' issue='' repo='' edit=0 draft=0 no_maint=0 push=0 force=0 browse=0 copy=0 dry_run=0
-
+  local usage='Usage: hub pull-request [-fpdoc] [-b [OWNER:]BASE] [-h [OWNER:]HEAD] [-r REVIEWERS] [-a ASSIGNEES] [-M MILESTONE] [-l LABELS] [--no-maintainer-edits] [-m MESSAGE... | -F FILE] [-e | --no-edit] | -i ISSUE | ISSUE-URL'
+  hub::normalize_opts mFbhraMli '--message --file --base --head --reviewer --assign --milestone --labels --issue' "$@"
+  set -- "${HUB_ARGS[@]}"
+  local -a messages=() reviewers=() assignees=() labels=() operands=()
+  local arg value file='' base='' head='' issue='' milestone=''
+  local edit=0 no_edit=0 draft=0 no_maint=0 push=0 force=0 browse=0 copy=0
   while (($#)); do
     arg=$1
     shift
-    unset value
-    if [[ $arg == -[!-]?* ]]; then # -pf is -p -f; -mMSG and -m=MSG are -m MSG, as in gh
-      value=${arg:2}
-      if [[ $takes == *" ${arg:0:2} "* ]]; then set -- "${arg:0:2}" "${value#=}" "$@"; else set -- "${arg:0:2}" "-$value" "$@"; fi
-      continue
-    elif [[ $arg == --*=* && $takes == *" ${arg%%=*} "* ]]; then
-      set -- "${arg%%=*}" "${arg#*=}" "$@"
-      continue
-    elif [[ $takes == *" $arg "* ]]; then
-      [[ $arg == -h ]] && (($# == 0)) && hub::usage
-      (($#)) || hub::die "Aborted: $arg needs a value."
-      value=$1
-      shift
-    fi
     case $arg in
       --help) hub::usage ;;
-      -m | --message) messages+=("$value") ;;
-      -F | --file) file=$value ;;
-      -b | -B | --base) base=$value ;;
-      -h | -H | --head)
-        [[ -z $head || $head == "$value" ]] || hub::die "Aborted: two different heads: $head and $value."
-        head=$value
+      -m | --message | -F | --file | -b | --base | -h | --head | -r | --reviewer | -a | --assign | -M | --milestone | -l | --labels | -i | --issue)
+        if (($# == 0)); then
+          [[ $arg == -h ]] && hub::usage # a bare -h asks for the manual
+          hub::die "Aborted: $arg needs a value."
+        fi
+        value=$1
+        shift
+        case $arg in
+          -m | --message) messages+=("$value") ;;
+          -F | --file) file=$value ;;
+          -b | --base) base=$value ;;
+          -h | --head) head=$value ;;
+          -r | --reviewer) reviewers+=("$value") ;;
+          -a | --assign) assignees+=("$value") ;;
+          -M | --milestone) milestone=$value ;;
+          -l | --labels) labels+=("$value") ;;
+          -i | --issue) issue=$value ;;
+        esac
+        [[ -n $value || $arg == -m || $arg == --message ]] || hub::die "Aborted: $arg needs a value."
         ;;
-      -r | --reviewer) opts+=(--reviewer "$value") ;;
-      -a | --assign) opts+=(--assignee "$value") ;;
-      -M | --milestone) opts+=(--milestone "$value") ;;
-      -l | --labels) opts+=(--label "$value") ;;
-      -i | --issue) issue=$value ;;
-      -e | --edit) edit=1 opts+=(--editor) ;;
-      --no-edit) opts+=(--fill-first) ;;
+      -e | --edit) edit=1 ;;
+      --no-edit) no_edit=1 ;;
       -d | --draft) draft=1 ;;
       --no-maintainer-edits) no_maint=1 ;;
       -p | --push) push=1 ;;
       -f | --force) force=1 ;;
       -o | --browse) browse=1 ;;
       -c | --copy) copy=1 ;;
-      -R | --repo)
-        # the push rule needs the base, and gh would read an empty -R as none
-        [[ $value =~ ^([A-Za-z0-9.:-]+/)?[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] \
-          || hub::die "Aborted: not a repository: '$value' (use $arg [HOST/]OWNER/REPO)"
-        repo=$value
-        opts+=("$arg" "$value")
-        ;;
-      --dry-run | --dry-run=*)
-        case ${arg#--dry-run} in # Go's booleans: gh rejects any other value, but only after hub has pushed
-          '' | =1 | =t | =T | =TRUE | =true | =True) dry_run=1 ;;
-          =0 | =f | =F | =FALSE | =false | =False) dry_run=0 ;;
-          *) hub::die "Aborted: not a boolean: $arg" ;;
-        esac
-        opts+=("$arg")
-        ;;
       --)
-        rest=(-- "$@")
+        operands+=("$@")
         break
         ;;
-      -?*) opts+=("$arg" ${value+"$value"}) ;;
-      *)
-        if [[ -z $issue ]] && hub::parse_github_url "$arg" && [[ $HUB_URL_KIND == issues ]]; then issue=$arg; else opts+=("$arg"); fi
-        ;;
+      -?*) hub::die "hub pull-request: unknown option: $arg"$'\n'"$usage" ;;
+      *) operands+=("$arg") ;;
     esac
   done
-  if [[ -n $issue ]] && { ((${#messages[@]} || ${#opts[@]} || ${#rest[@]})) || [[ -n $file ]]; }; then
-    hub::die "Aborted: -i keeps the issue's title and body, and takes only -b, -h, -p, -f, -d, --no-maintainer-edits, -o and -c."
-  fi
+  for arg in "${operands[@]}"; do # the only operand is an issue URL, which stands for -i URL
+    if ! hub::parse_github_url "$arg" || [[ $HUB_URL_KIND != issues ]]; then
+      hub::die "hub pull-request: unexpected argument: $arg"$'\n'"$usage"
+    fi
+    [[ -z $issue || $issue == "$arg" ]] || hub::die "Aborted: name the issue once (-i $issue and $arg)."
+    issue=$arg
+  done
   hub::require_repo
 
-  # The base repository, as HOST/OWNER/REPO: the issue URL's, -R's, -b OWNER[/REPO]:BRANCH's, else the current one.
-  local target='' number=''
+  # Combinations gh and the API cannot take.
+  if [[ -n $issue ]] && { ((${#messages[@]} || ${#reviewers[@]} || ${#assignees[@]} || ${#labels[@]} || edit || no_edit)) || [[ -n $file || -n $milestone ]]; }; then
+    hub::die "Aborted: -i converts an issue, which keeps its title and body; it takes only -b, -h, -p, -f, -d, --no-maintainer-edits, -o and -c."
+  fi
+  ((edit && no_edit)) && hub::die "Aborted: -e and --no-edit cannot be used together."
+  if ((no_edit)) && { ((${#messages[@]})) || [[ -n $file ]]; }; then
+    hub::die "Aborted: --no-edit takes the message from the first commit; -m and -F give one."
+  fi
+  local title='' body='' have_message=0
+  if ((${#messages[@]})) || [[ -n $file ]]; then
+    hub::message "$file" "${messages[@]}"
+    title=$HUB_MSG_TITLE body=$HUB_MSG_BODY
+    if [[ -n $title ]]; then
+      have_message=1
+    else
+      ((edit)) || hub::die "Aborted: the pull request title is empty."
+    fi
+  fi
+
+  # The base repository: the issue URL's, -b OWNER[/REPO]:BRANCH's, else the current project.
+  local number='' base_host='' base_proj=''
   if [[ $issue =~ ^#?([0-9]+)$ ]]; then
     number=${BASH_REMATCH[1]}
   elif [[ -n $issue ]]; then
-    hub::parse_github_url "$issue" && [[ $HUB_URL_KIND == issues ]] || hub::die "Aborted: not an issue number or URL: $issue"
-    target=$HUB_URL_HOST/$HUB_URL_OWNER/$HUB_URL_REPO number=$HUB_URL_NUMBER
-  elif [[ -n $repo ]]; then
-    target=$repo
-    [[ $repo == */*/* ]] || target=$(hub::host)/$repo # gh's default host, as gh reads -R
+    if ! hub::parse_github_url "$issue" || [[ $HUB_URL_KIND != issues ]]; then
+      hub::die "Aborted: not an issue number or URL: $issue"
+    fi
+    base_host=$HUB_URL_HOST base_proj=$HUB_URL_OWNER/$HUB_URL_REPO number=$HUB_URL_NUMBER
   fi
   if [[ $base == *:* ]]; then
-    [[ -z $target ]] || hub::die "Aborted: name the base repository once: with -R, -b OWNER[/REPO]:BRANCH or an issue URL."
-    [[ $base =~ ^([^:/]+)(/[^:/]+)?:(.+)$ ]] || hub::die "Aborted: not a base: $base (use [OWNER[/REPO]:]BRANCH)"
-    target=${BASH_REMATCH[1]}${BASH_REMATCH[2]} base=${BASH_REMATCH[3]}
-    hub::main_project >/dev/null
-    [[ $target == */* ]] || target+=/${HUB_PROJECT#*/}
-    target=$HUB_PROJECT_HOST/$target
-  elif [[ -z $target ]]; then
-    hub::main_project >/dev/null
-    target=$HUB_PROJECT_HOST/$HUB_PROJECT
+    [[ -z $base_proj ]] || hub::die "Aborted: the issue URL names the base repository; give -b as BRANCH alone."
+    [[ $base =~ ^([A-Za-z0-9][A-Za-z0-9-]*)(/[A-Za-z0-9_.-]+)?:([^:]+)$ ]] || hub::die "Aborted: not a base: $base (use [OWNER[/REPO]:]BRANCH)"
+    local base_owner=${BASH_REMATCH[1]} base_repo=${BASH_REMATCH[2]}
+    base=${BASH_REMATCH[3]}
+    hub::main_project >/dev/null # its own matches clobber BASH_REMATCH
+    base_host=$HUB_PROJECT_HOST base_proj=$base_owner${base_repo:-/${HUB_PROJECT#*/}}
   fi
+  if [[ -z $base_proj ]]; then
+    hub::main_project >/dev/null
+    base_host=$HUB_PROJECT_HOST base_proj=$HUB_PROJECT
+  fi
+  [[ -z $base ]] || _hub_pull_request_branch_name "$base" -b
 
-  # The head: where -p pushes it, and where -f, --dry-run and -i name it unless -h does (the push rule).
-  if ((push || (${#head} == 0 && (force || dry_run || ${#issue})))); then
-    local host=${target%%/*} owner=${head%%:*} name=${target##*/} branch remote=origin dest pushed p kind
-    local -a remotes same=() other=()
-    branch=$(hub::current_branch) || branch=''
-    dest=$branch
-    if [[ -n $branch ]] && hub::push_target "$branch" && [[ $HUB_PUSH_REMOTE != . ]]; then # . is this repository
-      remote=$HUB_PUSH_REMOTE dest=$HUB_PUSH_BRANCH
-    fi
-    [[ -z $head ]] || dest=${head#*:}
-    [[ -n $dest ]] || hub::die "Aborted: not currently on any branch; name the head with -h [OWNER:]BRANCH."
-    if [[ $head == *:* ]]; then
-      # OWNER's remotes: the push remote first, those of the base's name before the rest.
-      mapfile -t remotes < <(hub::git_query remote)
-      for r in "$remote" "${remotes[@]}"; do
-        p=$(_hub_pull_request_push_repo "$r" "$host") || continue
-        p=${p,,}
-        [[ ${p%%/*} == "${owner,,}" && " ${same[*]} ${other[*]} " != *" $r "* ]] || continue
-        if [[ ${p#*/} == "${name,,}" ]]; then same+=("$r"); else other+=("$r"); fi
-      done
-      remote=''
-      for r in "${same[@]}" "${other[@]}"; do
-        pushed=$(_hub_pull_request_push_repo "$r" "$host")
-        if _hub_pull_request_in_network "$host/$pushed" "$target"; then
-          remote=$r
-          break
-        fi
-      done
-      [[ -n $remote ]] || hub::die "Aborted: no remote here pushes to a repository of $owner's that is ${target#*/}, a fork of it or a sibling fork."
-    else
-      pushed=$(_hub_pull_request_push_repo "$remote" "$host") \
-        || hub::die "Aborted: remote $remote must push to one repository on $host (git remote get-url --push --all $remote)."
-      _hub_pull_request_in_network "$host/$pushed" "$target" \
-        || hub::die "Aborted: remote $remote pushes to $pushed, which is not ${target#*/}, a fork of it or a sibling fork."
-    fi
+  # The head branch, and the remote it is (or with -p will be) on.
+  local branch head_owner='' head_name='' remote='' head_proj='' set_upstream=0
+  branch=$(hub::current_branch) || branch=''
+  case $head in
+    '')
+      [[ -n $branch ]] || hub::die "Aborted: not currently on any branch; name the head with -h [OWNER:]BRANCH."
+      head_name=$branch
+      ;;
+    *:*)
+      head_owner=${head%%:*} head_name=${head#*:}
+      [[ $head_owner =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]] || hub::die "Aborted: not a head: $head (use [OWNER:]BRANCH)"
+      ;;
+    *) head_name=$head ;;
+  esac
+  _hub_pull_request_branch_name "$head_name" -h
+  if [[ -n $head_owner ]]; then
+    head_proj=$head_owner/${base_proj#*/}
     if ((push)); then
-      push_cmd=(push "$remote" "HEAD:refs/heads/$dest")
-      [[ -n $head ]] || push_cmd=(push --set-upstream "$remote" "HEAD:refs/heads/$dest")
+      remote=$(_hub_pull_request_remote_of "$head_owner" "$base_host" "${base_proj#*/}" "$branch") \
+        || hub::die "Aborted: no remote here pushes to a repository of $head_owner's on $base_host; add one (git remote add $head_owner) or push the branch yourself."
+      hub::remote_project "$remote" push >/dev/null
+      head_proj=$HUB_PROJECT
     fi
-    if [[ ${host,,}/${pushed,,} == "${target,,}" ]]; then
-      head=${head:-$dest}
-    else
-      [[ $head == *:* ]] || head=${pushed%%/*}:$dest
-      if [[ -z $issue ]]; then # the REST API that -i uses takes such a head
-        kind=$(hub::gh_query api --hostname "$host" "users/${head%%:*}" -q .type) || hub::die "Aborted: could not look up ${head%%:*} on $host."
-        [[ $kind != Organization ]] || hub::die "Aborted: gh pr create cannot take a head owned by an organization ($head); use gh api repos/${target#*/}/pulls."
+  else
+    if [[ -z $head ]]; then
+      if hub::push_target "$branch"; then
+        remote=$HUB_PUSH_REMOTE head_name=$HUB_PUSH_BRANCH
+      elif ! hub::git_query config --get "branch.$branch.merge" >/dev/null && [[ $(hub::git_query config --get push.default) != nothing ]]; then
+        remote=$(_hub_pull_request_push_remote "$branch") # no upstream yet: where `git push -u` would go
+        hub::remote_exists "$remote" || hub::die "Aborted: $branch has no upstream, and there is no remote $remote to push it to; add one, or name the head with -h [OWNER:]BRANCH."
+      else
+        hub::die "Aborted: git push would refuse to push $branch as configured (push.default, branch.$branch.remote and branch.$branch.merge); push it yourself, e.g. git push -u $(_hub_pull_request_push_remote "$branch") $branch, or name the head with -h [OWNER:]BRANCH."
       fi
+    else
+      remote=$(_hub_pull_request_push_remote "$branch")
+      hub::remote_exists "$remote" || hub::die "Aborted: there is no remote $remote to find $head_name on; name the head with -h OWNER:BRANCH."
+    fi
+    hub::remote_project "$remote" push >/dev/null || hub::die "Aborted: remote $remote does not push to a GitHub repository hub knows (git remote get-url --push $remote; see hub.host)."
+    hub::same_host "$HUB_PROJECT_HOST" "$base_host" || hub::die "Aborted: remote $remote pushes to $HUB_PROJECT_HOST, but the pull request is for $base_host/$base_proj."
+    head_proj=$HUB_PROJECT
+  fi
+  [[ -n $branch ]] && ! hub::git_query config --get "branch.$branch.merge" >/dev/null && set_upstream=1
+  local label=$head_name
+  [[ ${head_proj,,} == "${base_proj,,}" ]] || label=${head_proj%%/*}:$head_name
+
+  # The base branch: -b, the current branch's gh-merge-base, else the base repository's default.
+  local r
+  if [[ -z $base && -z $head && -n $branch ]]; then
+    base=$(hub::git_query config --get "branch.$branch.gh-merge-base") || base=''
+  fi
+  if [[ -z $base ]]; then
+    if r=$(hub::remote_for_project "$base_proj" "$base_host"); then
+      base=$(hub::default_branch "$r")
+    elif ! base=$(hub::gh_query repo view "$base_host/$base_proj" --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null) || [[ -z $base ]]; then
+      hub::die "Aborted: could not look up the default branch of $base_proj; give the base with -b BRANCH."
     fi
   fi
+  [[ $label == *:* || $head_name != "$base" ]] || hub::die "Aborted: the head and the base are the same branch, $base of $base_proj; name another base with -b or another head with -h."
 
-  # The gh command: gh api for -i, else gh pr create.
-  if [[ -n $issue ]]; then
-    if [[ -z $base ]] && r=$(hub::remote_for_project "${target#*/}" "${target%%/*}"); then
-      base=$(hub::default_branch "$r")
-    elif [[ -z $base ]]; then
-      base=$(hub::gh_query repo view "$target" --json defaultBranchRef -q .defaultBranchRef.name) && [[ -n $base ]] \
-        || hub::die "Aborted: could not look up the default branch of ${target#*/}; give the base with -b BRANCH."
+  # Checks that need no network before the ones that do.
+  if ((! push && ! force)) && [[ -z $head ]]; then
+    local track n
+    track=$(hub::git_query for-each-ref --format='%(push)' -- "refs/heads/$branch")
+    if [[ -z $track ]] || ! hub::git_query show-ref --verify --quiet -- "$track"; then
+      hub::die "Aborted: $branch seems not yet pushed to $remote (use -p to push it, or -f to skip this check)."
     fi
-    cmd=(api --hostname "${target%%/*}" "repos/${target#*/}/pulls" -F "issue=$number" -F "head=$head" -f "base=$base")
+    n=$(hub::git_query rev-list --count "$track..HEAD")
+    if ((n == 1)); then
+      hub::die "Aborted: 1 commit of $branch is not yet pushed to ${track#refs/remotes/} (use -p to push it, or -f to skip this check)."
+    elif ((n > 1)); then
+      hub::die "Aborted: $n commits of $branch are not yet pushed to ${track#refs/remotes/} (use -p to push them, or -f to skip this check)."
+    fi
+  fi
+  if ((push)) && [[ -z $issue ]]; then # what gh would refuse after the push, without a terminal
+    local can_prompt=0
+    [[ -t 0 && -t 1 && -z ${GH_PROMPT_DISABLED:-} ]] && can_prompt=1
+    ((! edit || can_prompt)) || hub::die "Aborted: -e needs a terminal (gh opens its editor only in interactive mode); not pushing."
+    ((have_message || no_edit || edit || can_prompt)) || hub::die "Aborted: give the title and body with -m or -F (gh asks for them only in interactive mode); not pushing."
+  fi
+  if ((no_edit)); then
+    _hub_pull_request_first_commit "$base_proj" "$base_host" "$base"
+    title=$HUB_MSG_TITLE body=$HUB_MSG_BODY have_message=1
+  fi
+  if [[ $label == *:* && -z $issue ]]; then
+    local kind
+    kind=$(hub::gh_query api --hostname "$base_host" "users/${label%%:*}" -q .type 2>/dev/null) || hub::die "Aborted: could not look up ${label%%:*} on $base_host."
+    [[ $kind != Organization ]] || hub::die "Aborted: gh pr create cannot take a head owned by an organization ($label); convert an issue with -i, or use gh api repos/$base_proj/pulls."
+  fi
+
+  local -a cmd
+  if [[ -n $issue ]]; then
+    cmd=(api --hostname "$base_host" -X POST "repos/$base_proj/pulls" -F "issue=$number" -f "head=$label" -f "base=$base")
     ((draft)) && cmd+=(-F draft=true)
     ((no_maint)) && cmd+=(-F maintainer_can_modify=false)
     cmd+=(--jq .html_url)
   else
-    cmd=(pr create)
-    if ((${#messages[@]})) || [[ -n $file ]]; then
-      hub::message "$file" "${messages[@]}"
-      [[ -n $HUB_MSG_TITLE ]] || ((edit)) || hub::die "Aborted: the pull request title is empty."
-      [[ -z $HUB_MSG_TITLE ]] || cmd+=(--title "$HUB_MSG_TITLE" --body "$HUB_MSG_BODY") # an empty body too: gh then doesn't prompt
-    fi
-    [[ -n $repo ]] || cmd+=(--repo "$target")
-    [[ -z $base ]] || cmd+=(--base "$base")
-    [[ -z $head ]] || cmd+=(--head "$head")
+    cmd=(pr create --repo "$base_host/$base_proj" --base "$base" --head "$label")
+    ((have_message)) && cmd+=(--title "$title" --body "$body") # an empty body too, or gh asks for one
+    ((edit)) && cmd+=(--editor)
     ((draft)) && cmd+=(--draft)
     ((no_maint)) && cmd+=(--no-maintainer-edit)
-    cmd+=("${opts[@]}" "${rest[@]}")
+    for r in "${reviewers[@]}"; do cmd+=(--reviewer "$r"); done
+    for r in "${assignees[@]}"; do cmd+=(--assignee "$r"); done
+    [[ -z $milestone ]] || cmd+=(--milestone "$milestone")
+    for r in "${labels[@]}"; do cmd+=(--label "$r"); done
   fi
 
-  if ((${#push_cmd[@]})); then
-    if ((dry_run)); then HUB_NOOP=1 hub::git "${push_cmd[@]}"; else hub::git "${push_cmd[@]}" || exit; fi
+  # Side effects, in order: the push, the pull request, the URL, the browser and the clipboard.
+  if ((push)); then
+    local -a push_cmd=(push)
+    ((set_upstream)) && push_cmd+=(--set-upstream)
+    hub::git "${push_cmd[@]}" "$remote" "HEAD:refs/heads/$head_name" || exit
   fi
-  if ((HUB_NOOP || dry_run || ! (browse || copy))); then
-    hub::gh "${cmd[@]}"
-    return
+  local url
+  if [[ -n $issue ]]; then
+    if ((HUB_NOOP)); then
+      hub::gh "${cmd[@]}"
+      return 0
+    fi
+    url=$(hub::gh "${cmd[@]}") || exit # the API answers with the pull request; nothing to prompt for
+    printf '%s\n' "$url"
+  else
+    hub::gh "${cmd[@]}" || exit # gh's prompts and output are the user's; it prints the URL
+    ((browse || copy)) || return 0
+    if ((HUB_NOOP)); then
+      hub::gh pr view "$label" --repo "$base_host/$base_proj" --json url --jq .url
+      return 0
+    fi
+    if ! url=$(hub::gh_query pr view "$label" --repo "$base_host/$base_proj" --json url --jq .url) || [[ $url != http* ]]; then
+      hub::die "Aborted: the pull request exists, but its URL could not be looked up (gh pr view $label --repo $base_host/$base_proj)."
+    fi
   fi
-  local out
-  out=$(hub::gh_query "${cmd[@]}") || exit # to open or copy the URL gh prints (gh can't prompt then)
-  printf '%s\n' "$out"
-  if ((browse)); then hub::open_url "${out##*$'\n'}"; fi
-  if ((copy)); then hub::copy "${out##*$'\n'}"; fi
+  local status=0
+  if ((copy)); then hub::copy "$url" || status=$?; fi
+  if ((browse)); then hub::open_url "$url" || status=$?; fi
+  return "$status"
 }
 
-# _hub_pull_request_push_repo REMOTE HOST : print the OWNER/REPO that every push URL of REMOTE
-# names on HOST (git remote get-url --push --all applies insteadOf and pushInsteadOf). Fails if
-# REMOTE has none, or one is a path, on another host or another repository.
-_hub_pull_request_push_repo() {
-  local url repo=''
-  while IFS= read -r url; do
-    hub::parse_remote_url "$url" || return 1
-    hub::same_host "$HUB_URL_HOST" "$2" || hub::same_host "$(hub::ssh_hostname "$HUB_URL_HOST")" "$2" || return 1
-    [[ -z $repo || ${repo,,} == "${HUB_URL_OWNER,,}/${HUB_URL_REPO,,}" ]] || return 1
-    repo=$HUB_URL_OWNER/$HUB_URL_REPO
-  done < <(hub::git_query remote get-url --push --all "$1")
-  [[ -n $repo ]] && printf '%s\n' "$repo"
+# _hub_pull_request_branch_name NAME OPTION : NAME is a well-formed branch name (given with OPTION).
+_hub_pull_request_branch_name() {
+  hub::git_query check-ref-format "refs/heads/$1" || hub::die "Aborted: not a branch name: $1 (given with $2)"
 }
 
-# _hub_pull_request_in_network HOST/OWNER/REPO BASE : true if that repository is BASE (also
-# HOST/OWNER/REPO), a fork of it, or a fork of BASE's parent. Dies if GitHub can't be asked.
-_hub_pull_request_in_network() {
-  local base=${2#*/} parent base_parent jq='.parent // empty | .owner.login + "/" + .name' # gh's parent has no nameWithOwner
-  [[ ${1,,} == "${2,,}" ]] && return 0
-  parent=$(hub::gh_query repo view "$1" --json parent -q "$jq") || hub::die "Aborted: could not look up $1."
-  [[ -n $parent ]] || return 1
-  [[ ${parent,,} == "${base,,}" ]] && return 0
-  base_parent=$(hub::gh_query repo view "$2" --json parent -q "$jq") || hub::die "Aborted: could not look up $2."
-  [[ ${parent,,} == "${base_parent,,}" ]]
+# _hub_pull_request_push_remote [BRANCH] : the remote `git push` would take for BRANCH
+# (branch.*.pushRemote, remote.pushDefault, branch.*.remote), else remote.pushDefault, else origin.
+_hub_pull_request_push_remote() {
+  local r=''
+  [[ -z ${1-} ]] || r=$(hub::git_query for-each-ref --format='%(push:remotename)' -- "refs/heads/$1")
+  [[ -n $r ]] || r=$(hub::git_query config --get remote.pushDefault) || r=origin
+  printf '%s\n' "$r"
+}
+
+# _hub_pull_request_remote_of OWNER HOST NAME [BRANCH] : the remote whose push URL names a repository
+# of OWNER's on HOST: the one BRANCH pushes to when it does, else one of the repository NAME, else any.
+_hub_pull_request_remote_of() {
+  local owner=${1,,} host=$2 name=${3,,} branch=${4-} r first='' any=''
+  local -a remotes
+  [[ -z $branch ]] || first=$(hub::git_query for-each-ref --format='%(push:remotename)' -- "refs/heads/$branch")
+  mapfile -t remotes < <(hub::git_query remote)
+  for r in ${first:+"$first"} "${remotes[@]}"; do
+    hub::remote_project "$r" push >/dev/null || continue
+    hub::same_host "$HUB_PROJECT_HOST" "$host" || continue
+    [[ ${HUB_PROJECT%%/*} == "$owner" ]] || continue
+    if [[ $r == "$first" || ${HUB_PROJECT#*/} == "$name" ]]; then
+      printf '%s\n' "$r"
+      return 0
+    fi
+    [[ -n $any ]] || any=$r
+  done
+  [[ -n $any ]] && printf '%s\n' "$any"
+}
+
+# _hub_pull_request_first_commit OWNER/REPO HOST BASE : HUB_MSG_TITLE and HUB_MSG_BODY from the first
+# commit of HEAD that is not on BASE as fetched from the remote here that points at the base
+# repository (for --no-edit; gh's --fill-first would read a local branch named like the head).
+_hub_pull_request_first_commit() {
+  local r ref
+  local -a commits
+  r=$(hub::remote_for_project "$1" "$2") || hub::die "Aborted: --no-edit takes the message from the commits since $3, but no remote here points at $2/$1 to compare with."
+  ref=refs/remotes/$r/$3
+  hub::git_query show-ref --verify --quiet -- "$ref" || hub::die "Aborted: --no-edit needs $r/$3 locally; run git fetch $r first."
+  mapfile -t commits < <(hub::git_query rev-list --reverse "$ref..HEAD")
+  ((${#commits[@]})) || hub::die "Aborted: no commits between $r/$3 and HEAD to take the message from."
+  HUB_MSG_TITLE=$(hub::git_query log -1 --format=%s "${commits[0]}")
+  HUB_MSG_BODY=$(hub::git_query log -1 --format=%b "${commits[0]}")
+  HUB_MSG_BODY=${HUB_MSG_BODY%"${HUB_MSG_BODY##*[![:space:]]}"}
+  [[ -n $HUB_MSG_TITLE ]] || hub::die "Aborted: the first commit since $r/$3, ${commits[0]:0:7}, has no subject to use as the title."
 }

@@ -1,35 +1,46 @@
 #!/usr/bin/env bats
 load ../test_helper
 
-# serve_github OWNER/REPO... : make https://github.com/OWNER/REPO.git resolve to a local bare repo
-@test "clone OWNER/REPO expands to an HTTPS URL by default" {
-  run hub --noop clone rtomayko/ronn
+# serve_github OWNER/REPO makes https://github.com/OWNER/REPO.git (and its SSH forms) a local bare
+# repository, so clones run for real and their origin keeps the URL a user would have.
+@test "clone OWNER/REPO clones from its HTTPS URL by default" {
+  serve_github alice/dotfiles
+  run hub clone alice/dotfiles
   assert_success
-  assert_output_equals "git clone https://github.com/rtomayko/ronn.git"
+  assert_equals "$(git -C dotfiles config remote.origin.url)" https://github.com/alice/dotfiles.git
+  assert_equals "$(git -C dotfiles rev-parse refs/remotes/origin/main)" "$(server_ref alice/dotfiles main)"
   assert_gh_called 'config get git_protocol -h github.com'
   [[ $(gh_calls) != *"config get user"* ]]
 }
 
 @test "clone REPO is one of your own repositories" {
-  run hub --noop clone dotfiles
+  serve_github mislav/dotfiles
+  run hub clone dotfiles
   assert_success
-  assert_output_equals "git clone https://github.com/mislav/dotfiles.git"
+  assert_equals "$(git -C dotfiles config remote.origin.url)" https://github.com/mislav/dotfiles.git
   assert_gh_called 'config get user -h github.com'
 }
 
 @test "clone keeps the directory and every other argument in place" {
-  run hub --noop clone --depth 1 mislav/dotfiles --single-branch dots
+  serve_github alice/dotfiles
+  run hub --noop clone --depth 1 alice/dotfiles --single-branch dots
   assert_success
-  assert_output_equals "git clone --depth 1 https://github.com/mislav/dotfiles.git --single-branch dots"
+  assert_output_equals "git clone --depth 1 https://github.com/alice/dotfiles.git --single-branch dots"
+  run hub clone --depth 1 alice/dotfiles --single-branch dots
+  assert_success
+  assert_equals "$(git -C dots rev-parse --is-shallow-repository)" true
+  assert_equals "$(git -C dots config remote.origin.url)" https://github.com/alice/dotfiles.git
 }
 
 @test "clone -p uses SSH and is not passed to git" {
-  run hub --noop clone -p mislav/dotfiles
+  serve_github alice/dotfiles
+  run hub clone -p alice/dotfiles
   assert_success
-  assert_output_equals "git clone git@github.com:mislav/dotfiles.git"
-  run hub --noop clone mislav/dotfiles -p dots
+  assert_equals "$(git -C dotfiles config remote.origin.url)" git@github.com:alice/dotfiles.git
+  assert_equals "$(git -C dotfiles rev-parse refs/remotes/origin/main)" "$(server_ref alice/dotfiles main)"
+  run hub --noop clone alice/dotfiles -p dots
   assert_success
-  assert_output_equals "git clone git@github.com:mislav/dotfiles.git dots"
+  assert_output_equals "git clone git@github.com:alice/dotfiles.git dots"
 }
 
 @test "clone -p with a URL drops -p and keeps the URL" {
@@ -39,10 +50,11 @@ load ../test_helper
 }
 
 @test "clone uses SSH when hub.protocol is ssh, without asking gh" {
+  serve_github alice/dotfiles
   git config --global hub.protocol ssh
-  run hub --noop clone mislav/dotfiles
+  run hub clone alice/dotfiles
   assert_success
-  assert_output_equals "git clone git@github.com:mislav/dotfiles.git"
+  assert_equals "$(git -C dotfiles config remote.origin.url)" git@github.com:alice/dotfiles.git
   assert_gh_not_called
 }
 
@@ -109,10 +121,37 @@ load ../test_helper
   assert_output_equals "git clone https://github.com/mislav/dotfiles.wiki.git"
 }
 
-@test "a bare repository name may contain dots" {
-  run hub --noop clone mislav.github.io
+@test "a repository name may start with a dot, or contain dots" {
+  serve_github alice/.github
+  stub_gh 'config get user -h github.com' 'alice'
+  run hub clone .github dest
   assert_success
-  assert_output_equals "git clone https://github.com/mislav/mislav.github.io.git"
+  assert_equals "$(git -C dest config remote.origin.url)" https://github.com/alice/.github.git
+  assert_equals "$(git -C dest rev-parse HEAD)" "$(server_ref alice/.github main)"
+  run hub --noop clone .dotfiles
+  assert_success
+  assert_output_equals "git clone https://github.com/alice/.dotfiles.git"
+  run hub --noop clone bob/.github
+  assert_output_equals "git clone https://github.com/bob/.github.git"
+  run hub --noop clone mislav.github.io
+  assert_output_equals "git clone https://github.com/alice/mislav.github.io.git"
+  run hub --noop clone _repo
+  assert_output_equals "git clone https://github.com/alice/_repo.git"
+}
+
+@test "an existing path of a dotted name, and git's own path forms, stay with git" {
+  mkdir .github
+  run hub clone .github dest
+  assert_failure
+  [[ ! -e dest ]]
+  assert_gh_not_called
+  local path
+  for path in . .. ./x ../x; do
+    run hub --noop clone "$path"
+    assert_success
+    assert_output_equals "git clone $path"
+  done
+  assert_gh_not_called
 }
 
 @test "a .git suffix is not doubled" {
@@ -137,28 +176,16 @@ load ../test_helper
   assert_output_equals "git clone git@ghe.example.com:tools/deploy.git"
 }
 
-@test "clone HOST/OWNER/REPO uses that host and its protocol" {
+@test "HOST/OWNER/REPO is no shorthand: it is a path for git" {
   run hub --noop clone ghe.example.com/tools/deploy
   assert_success
-  assert_output_equals "git clone https://ghe.example.com/tools/deploy.git"
-  assert_gh_called 'config get git_protocol -h ghe.example.com'
-  stub_gh 'config get git_protocol -h ghe.example.com' 'ssh'
+  assert_output_equals "git clone ghe.example.com/tools/deploy"
+  git config --global hub.host ghe.example.com
   run hub --noop clone ghe.example.com/tools/deploy
-  assert_success
-  assert_output_equals "git clone git@ghe.example.com:tools/deploy.git"
+  assert_output_equals "git clone ghe.example.com/tools/deploy"
   run hub --noop clone github.com/mislav/dotfiles dots
-  assert_success
-  assert_output_equals "git clone https://github.com/mislav/dotfiles.git dots"
-}
-
-@test "a host without a dot is only recognized when configured" {
-  run hub --noop clone ghe/tools/deploy
-  assert_success
-  assert_output_equals "git clone ghe/tools/deploy"
-  git config --global hub.host ghe
-  run hub --noop clone ghe/tools/deploy
-  assert_success
-  assert_output_equals "git clone https://ghe/tools/deploy.git"
+  assert_output_equals "git clone github.com/mislav/dotfiles dots"
+  assert_gh_not_called
 }
 
 @test "URLs pass through untouched" {
@@ -184,6 +211,32 @@ load ../test_helper
   assert_gh_not_called
 }
 
+@test "a NAME.git repository or NAME.bundle next to you is git's source, as for plain git clone" {
+  git init -q -b main local && git -C local commit -q --allow-empty -m "local source"
+  git clone -q --bare local repo.git
+  mkdir owner && git clone -q --bare local owner/repo.git
+  serve_github mislav/repo mislav/plain # what the shorthand would clone instead
+  run hub clone repo wrapped
+  assert_success
+  assert_equals "$(git -C wrapped log -1 --format=%s)" "local source"
+  [[ $(git -C wrapped config remote.origin.url) == */repo && $(git -C wrapped config remote.origin.url) != *github* ]]
+  run hub clone owner/repo nested
+  assert_success
+  assert_equals "$(git -C nested log -1 --format=%s)" "local source"
+  rm -rf repo.git
+  git -C local bundle create -q "$HUB_TEST_TMP/repo.bundle" main
+  run hub clone repo from-bundle
+  assert_success
+  assert_equals "$(git -C from-bundle log -1 --format=%s)" "local source"
+  assert_gh_not_called
+  # a directory that only carries the suffix is not a repository, so the shorthand still means GitHub
+  mkdir plain.git
+  run hub clone plain
+  assert_success
+  assert_equals "$(git -C plain config remote.origin.url)" https://github.com/mislav/plain.git
+  assert_equals "$(git -C plain log -1 --format=%s)" "initial commit"
+}
+
 @test "clone without a repository argument is plain git clone" {
   run hub --noop clone
   assert_success
@@ -198,7 +251,7 @@ load ../test_helper
   run hub clone --help
   assert_success
   assert_line_equals 0 "Summary: Clone a GitHub repository by its [OWNER/]REPO name."
-  assert_output_contains "Usage: hub clone [-p]"
+  assert_output_contains "Usage: hub clone [-p] [<git-clone options>] [OWNER/]REPO [DIR]"
   run hub --noop clone mislav/dotfiles --help
   assert_success
   assert_output_contains "Usage: hub clone [-p]"
@@ -218,14 +271,6 @@ load ../test_helper
   assert_failure
   assert_output_contains "could not determine your GitHub login"
   [[ $output != *"git clone"* ]]
-}
-
-@test "clone runs git clone for real" {
-  serve_github alice/dotfiles
-  run hub clone alice/dotfiles
-  assert_success
-  [[ $(git -C dotfiles config remote.origin.url) == https://github.com/alice/dotfiles.git ]]
-  git -C dotfiles rev-parse --verify -q refs/remotes/origin/main
 }
 
 @test "clone exits with git's status" {

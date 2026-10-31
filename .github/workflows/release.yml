@@ -27,13 +27,36 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
-      - name: Create the GitHub release
+      # A release may exist already: script/release or an earlier run created it, or a draft
+      # was prepared for the tag (gh finds a draft by the tag it is waiting for). Only a
+      # published release counts; a draft is published with the notes it has.
+      - name: Publish the GitHub release
         run: |
           flags=()
           [[ $TAG == *-* ]] && flags+=(--prerelease)
-          gh release view "$TAG" >/dev/null 2>&1 && exit 0
-          gh release create "$TAG" --verify-tag --generate-notes --title "hub ${TAG#v}" "${flags[@]}" ||
-            gh release view "$TAG" >/dev/null
+          state() { # published, draft or none
+            local out
+            if out=$(gh release view "$TAG" --json isDraft -q .isDraft 2>&1); then
+              [[ $out == true ]] && echo draft || echo published
+            elif [[ $out == *'release not found'* ]]; then
+              echo none
+            else
+              echo "$out" >&2
+              return 1
+            fi
+          }
+          s=$(state)
+          if [[ $s == none ]]; then
+            gh release create "$TAG" --verify-tag --generate-notes --title "hub ${TAG#v}" "${flags[@]}" ||
+              echo 'gh release create failed; checking whether the release exists anyway' >&2
+            s=$(state)
+            [[ $s != none ]] || exit 1
+          fi
+          if [[ $s == draft ]]; then
+            echo "$TAG is a draft release: publishing it"
+            gh release edit "$TAG" --draft=false
+          fi
+          echo "$TAG is published"
 
   formula:
     name: Homebrew formula
@@ -43,8 +66,8 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write
-    # Every run points the formula at the newest stable release, so it does not matter
-    # which of several queued runs GitHub keeps.
+    # Every run points the formula at the highest published stable version, so it does not
+    # matter which of several queued runs GitHub keeps.
     concurrency:
       group: release-formula
       cancel-in-progress: false
@@ -63,7 +86,11 @@ jobs:
           gh auth setup-git
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          tag=$(gh release list --exclude-drafts --exclude-pre-releases --limit 1 --json tagName -q '.[0].tagName')
+          # The highest vX.Y.Z among the published stable releases, by version and not by
+          # creation date: a maintenance release made after a higher version must not win.
+          tag=$(gh release list --exclude-drafts --exclude-pre-releases --limit 1000 --json tagName -q '.[].tagName' |
+            grep -Ex 'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)' | sort -t . -k 1.2,1n -k 2,2n -k 3,3n | tail -n 1 || true)
+          [[ -n $tag ]] || { echo 'no published stable release with a vX.Y.Z tag' >&2; exit 1; }
           script/update-formula "$tag"
           git diff --quiet -- Formula/hub.rb && exit 0
           git commit -m "Formula: hub $tag" -- Formula/hub.rb

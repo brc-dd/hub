@@ -2,49 +2,32 @@
 # Summary: List, view, check out and merge pull requests (gh pr).
 # Usage: hub pr [SUBCOMMAND] [gh pr options]
 #
-# Runs `gh pr` with gh's own options. hub maps two old forms:
+# A gh-backed command: `gh pr`, with gh's subcommands, options and output. hub maps the two
+# subcommand spellings gh lacks and hands every other argument over unchanged, in its place:
 #
-#   hub pr show [PR] [-u]          gh pr view [PR]; -u prints only its URL
-#   hub pr checkout PR [BRANCH]    gh pr checkout PR [-b BRANCH]
+#   hub pr show ...    gh pr view ...
+#   hub pr ...         gh pr list ..., when there is no subcommand word
 #
-# Everything else goes to gh unchanged: list, status, diff, merge (which merges on
-# GitHub), ... See `gh pr SUBCOMMAND --help`.
+# The subcommand word is the first argument that is neither an option nor the value of one, found
+# as gh finds it: `-x VALUE` and `--long VALUE` take the next argument, `-xVALUE` and `--long=VALUE`
+# are complete, and `--` ends the search. A subcommand gh does not know is passed on for gh to
+# reject. `-h`/`--help` before the subcommand word prints this manual; after it, gh's.
 #
-#   $ hub pr checkout 123 fix-typo
-#   > gh pr checkout 123 -b fix-typo
+# Options:
+#   gh's. See `gh pr --help` and `gh pr SUBCOMMAND --help`. Old hub's letters are not translated:
+#   `checkout PR -b BRANCH` names the local branch, `view PR --json url -q .url` prints the URL.
+#   Which repository and host a number, branch or URL selects is gh's decision, from the remotes,
+#   `gh repo set-default`, GH_REPO or -R; hub adds nothing.
+#
+#   $ hub pr show 12 --comments
+#   > gh pr view 12 --comments
+#   $ hub pr -R cli/cli show 12
+#   > gh pr -R cli/cli view 12
+#   $ hub pr -s closed -L 5
+#   > gh pr list -s closed -L 5
 
 hub_cmd_pr() {
-  case ${1-} in
-    -h | --help) hub::usage ;;
-    show | checkout | co) ;;
-    *) hub::exec_gh pr "$@" ;;
-  esac
-  local sub=$1 arg url=0 n=0
-  local -a args=()
-  shift
-  while (($#)); do
-    arg=$1
-    shift
-    case $arg in
-      -u | --url)
-        if [[ $sub == show ]]; then url=1; else args+=("$arg"); fi
-        ;;
-      --json | -q | --jq | -t | --template | -b | --branch | --worktree | -R | --repo)
-        args+=("$arg" "${@:1:1}") # the value is gh's, even if it reads -u
-        shift $(($# > 0))
-        ;;
-      --)
-        args+=(-- "$@")
-        break
-        ;;
-      -?*) args+=("$arg") ;;
-      *)
-        n=$((n + 1))
-        if [[ $sub != show ]] && ((n == 2)); then args+=(-b "$arg"); else args+=("$arg"); fi
-        ;;
-    esac
-  done
-  [[ $sub != show ]] || sub=view
-  ((url)) && args=(--json url --jq .url "${args[@]}") # ahead of any --
-  hub::exec_gh pr "$sub" "${args[@]}"
+  hub::gh_subcommand_args "$@" || hub::usage
+  hub::require_gh
+  hub::exec_gh pr "${HUB_ARGS[@]}"
 }

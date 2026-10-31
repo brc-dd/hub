@@ -3,30 +3,45 @@
 # Usage: hub alias [-s] [SHELL]
 #
 # Prints the line to add to your shell's startup file so that `git` runs hub; with -s, only the
-# code it evaluates. SHELL defaults to the basename of $SHELL: bash, zsh, sh, ksh, dash, fish,
-# csh or tcsh.
+# alias definition that line evaluates: alias git=hub, or alias git hub for csh and tcsh. SHELL
+# defaults to the basename of $SHELL and must be one of bash, zsh, sh, ksh, dash, fish, csh and
+# tcsh. Nothing is written anywhere.
 #
 # Aliasing git is safe: hub acts only on its own commands and on GitHub URLs and OWNER/REPO
-# shorthands in the git commands it extends, and runs the real git, untouched, for everything else.
+# shorthands in the git commands it extends, and runs the real git, untouched, for everything
+# else. Only the interactive shell expands the alias; scripts, editors and git itself keep
+# running git.
+#
+# Options:
+#   -s   Print only the alias definition, for eval.
 #
 #   $ hub alias -s zsh
 #   alias git=hub
+#   $ hub alias fish
+#   # Make git run hub: add this line to ~/.config/fish/config.fish, after the lines that set up PATH
+#   hub alias -s fish | source
 
 hub_cmd_alias() {
   local script=0 shell='' rc line
+  local -a shells=()
+  hub::normalize_opts '' '' "$@"
+  set -- "${HUB_ARGS[@]}"
   while (($#)); do
     case $1 in
       -s) script=1 ;;
       -h | --help) hub::usage ;;
-      -*) hub::die "hub alias: unknown option: $1" ;;
-      *)
-        [[ -z $shell ]] || hub::die "Usage: hub alias [-s] [SHELL]"
-        shell=$1
+      --)
+        shift
+        shells+=("$@")
+        break
         ;;
+      -?*) _hub_alias_usage_error "unknown option: $1" ;;
+      *) shells+=("$1") ;;
     esac
     shift
   done
-  shell=${shell:-${SHELL##*/}}
+  ((${#shells[@]} <= 1)) || _hub_alias_usage_error "name one shell"
+  shell=${shells[0]:-${SHELL##*/}}
   [[ -n $shell ]] || hub::die "hub alias: can't tell your shell from \$SHELL; name it, e.g. hub alias -s bash"
   # shellcheck disable=SC2088  # the ~ is for the reader
   case $shell in
@@ -45,4 +60,8 @@ hub_cmd_alias() {
     *) line="eval \"\$(hub alias -s $shell)\"" ;;
   esac
   printf '# Make git run hub: add this line to %s, after the lines that set up PATH\n%s\n' "$rc" "$line"
+}
+
+_hub_alias_usage_error() {
+  hub::die "hub alias: $1"$'\n'"Usage: hub alias [-s] [SHELL]"
 }

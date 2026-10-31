@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Test stub for git's https (and http) remote helper, shadowing the real one through GIT_EXEC_PATH
+# (see hub_test_setup). It serves https://HOST/OWNER/REPO[.git] from $HUB_TEST_SRV/HOST/OWNER/REPO.git
+# over the helper protocol's connect command, so a remote's URL stays the GitHub URL a user would
+# have while its effects land in a local repository.
+set -u
+url=${2:-${1-}}
+rest=${url#*://}
+host=${rest%%/*} path=${rest#*/}
+host=${host##*@} host=${host%%:*}
+path=${path%%[?#]*} path=${path%/} path=${path%.git}.git
+dir=${HUB_TEST_SRV-}/${host,,}/$path
+while IFS= read -r line; do
+  case $line in
+    capabilities) printf 'connect\n\n' ;;
+    'connect git-upload-pack' | 'connect git-receive-pack')
+      [[ -d $dir ]] || { printf 'fatal: hub tests: nothing is served at %s (%s)\n' "$url" "$dir" >&2 && exit 128; }
+      printf '\n'
+      for v in "${!GIT_@}"; do # the server is another machine: the client's git context stays behind
+        case $v in GIT_PROTOCOL | GIT_CONFIG_GLOBAL | GIT_CONFIG_NOSYSTEM | GIT_EXEC_PATH | GIT_TERMINAL_PROMPT) ;; *) unset "$v" ;; esac
+      done
+      exec git "${line#connect git-}" "$dir"
+      ;;
+    '') exit 0 ;;
+    *) printf 'fatal: hub tests: the git-remote-https stub does not support: %s\n' "$line" >&2 && exit 1 ;;
+  esac
+done

@@ -1,496 +1,245 @@
 #!/usr/bin/env bats
 load ../test_helper
 
-@test "issue with no arguments lists issues" {
+# shim_gh : a gh on PATH that prints its arguments and its standard input (give it one).
+shim_gh() {
+  mkdir -p "$HUB_TEST_TMP/shim"
+  cat >"$HUB_TEST_TMP/shim/gh" <<'SH'
+#!/usr/bin/env bash
+printf 'gh %s | stdin=%s\n' "$*" "$(cat)"
+SH
+  chmod +x "$HUB_TEST_TMP/shim/gh"
+  SHIM_PATH=$HUB_TEST_TMP/shim:$PATH
+}
+
+@test "issue with no subcommand word is gh issue list, options in place" {
   run hub --noop issue
   assert_success
   assert_output_equals "gh issue list"
-  assert_gh_not_called
-}
-
-@test "issue with only options lists issues with them" {
   run hub --noop issue -s closed -a mislav -L 5
   assert_success
   assert_output_equals "gh issue list -s closed -a mislav -L 5"
-}
-
-@test "issue list and gh's other subcommands pass through unchanged, in order" {
-  run hub --noop issue list --label bug -S "sort:updated-desc" --json number,title
-  assert_success
-  assert_output_equals "gh issue list --label bug -S sort:updated-desc --json number,title"
-  run hub --noop issue transfer 12 mislav/other
-  assert_success
-  assert_output_equals "gh issue transfer 12 mislav/other"
-  run hub --noop issue comment 12 --body +1 --some-new-flag x
-  assert_success
-  assert_output_equals "gh issue comment 12 --body +1 --some-new-flag x"
-  run hub --noop issue close 12 -r duplicate --duplicate-of 7
-  assert_success
-  assert_output_equals "gh issue close 12 -r duplicate --duplicate-of 7"
-}
-
-@test "issue keeps -R given before the subcommand" {
-  run hub --noop issue -R mislav/dotfiles show 12
-  assert_success
-  assert_output_equals "gh issue view -R mislav/dotfiles 12"
   run hub --noop issue --repo=mislav/dotfiles
   assert_success
   assert_output_equals "gh issue list --repo=mislav/dotfiles"
-  run hub --noop issue -R mislav/dotfiles labels
+  run hub --noop issue -R mislav/dotfiles --label bug -S "sort:updated-desc"
   assert_success
-  assert_output_equals "gh label list -R mislav/dotfiles"
+  assert_output_equals "gh issue list -R mislav/dotfiles --label bug -S sort:updated-desc"
+  assert_gh_not_called
 }
 
-@test "issue show is gh issue view" {
+@test "issue show is gh issue view, with every other argument in its place" {
   run hub --noop issue show 12 --comments
   assert_success
   assert_output_equals "gh issue view 12 --comments"
-}
-
-@test "issue labels is gh label list" {
-  run hub --noop issue labels -L 100 --sort name
+  run hub --noop issue -R mislav/dotfiles show 12
   assert_success
-  assert_output_equals "gh label list -L 100 --sort name"
+  assert_output_equals "gh issue -R mislav/dotfiles view 12"
+  run hub --noop issue --repo=mislav/dotfiles show 12 -w
+  assert_success
+  assert_output_equals "gh issue --repo=mislav/dotfiles view 12 -w"
 }
 
-@test "issue create -m with only a title sends an empty body" {
+@test "issue passes gh's subcommands and options through unchanged, in order" {
+  local args
+  for args in "list --label bug --json number,title" "status" "transfer 12 mislav/other" \
+    "comment 12 --body +1 --some-new-flag x" "close 12 -r duplicate --duplicate-of 7" "reopen 12 -c Again" \
+    "edit 12 13 --add-label bug --remove-label wip" "create --title Crash --body-file notes.md -l bug" \
+    "view https://github.com/mislav/dotfiles/issues/12" "develop 12 --checkout"; do
+    # shellcheck disable=SC2086  # split on purpose
+    run hub --noop issue $args
+    assert_success
+    assert_output_equals "gh issue $args"
+  done
+  assert_gh_not_called
+}
+
+@test "issue does not translate old hub's subcommands or options: they reach gh as typed" {
+  run hub --noop issue labels -L 100
+  assert_success
+  assert_output_equals "gh issue labels -L 100"
+  run hub --noop issue update 12 -s closed -c "Fixed in #14"
+  assert_success
+  assert_output_equals "gh issue update 12 -s closed -c Fixed\\ in\\ #14"
+  run hub --noop issue update 12 13 -t New --add-label bug
+  assert_success
+  assert_output_equals "gh issue update 12 13 -t New --add-label bug"
   run hub --noop issue create -m Crash -l bug
   assert_success
-  assert_output_equals "gh issue create --title Crash --body '' -l bug"
-}
-
-@test "issue create -m splits the title from the body at the first blank line" {
-  run hub --noop issue create -m $'Crash\non start\n\nSteps:\n1. run it'
+  assert_output_equals "gh issue create -m Crash -l bug"
+  run hub --noop issue create -F msg.txt -wmTitle
   assert_success
-  assert_output_equals "gh issue create --title Crash\\ on\\ start --body \$'Steps:\\n1. run it'"
-}
-
-@test "issue create joins repeated -m values as paragraphs" {
-  run hub --noop issue create -m Crash -m "It crashes." -m Always.
-  assert_success
-  assert_output_equals "gh issue create --title Crash --body \$'It crashes.\\n\\nAlways.'"
-}
-
-@test "issue create accepts --message, --message= and -mMESSAGE" {
-  run hub --noop issue create --message Crash
-  assert_success
-  assert_output_equals "gh issue create --title Crash --body ''"
-  run hub --noop issue create --message=Crash -mDetails
-  assert_success
-  assert_output_equals "gh issue create --title Crash --body Details"
-}
-
-@test "issue create puts --title/--body where -m was and keeps gh's options in order" {
-  run hub --noop issue create -l bug -m Crash --milestone v1 -a @me -m Details -p Roadmap
-  assert_success
-  assert_output_equals "gh issue create -l bug --title Crash --body Details --milestone v1 -a @me -p Roadmap"
-}
-
-@test "issue create -F reads the title and body from a file" {
-  printf 'Crash on start\n\nSteps:\n1. run it\n' >msg.txt
-  run hub --noop issue create -F msg.txt -l bug
-  assert_success
-  assert_output_equals "gh issue create --title Crash\\ on\\ start --body \$'Steps:\\n1. run it' -l bug"
-  printf 'Crash\n' >title.txt
-  run hub --noop issue create --file=title.txt
-  assert_success
-  assert_output_equals "gh issue create --title Crash --body ''"
-}
-
-@test "issue create -F - reads the title and body from standard input" {
-  run hub --noop issue create -F - <<<$'Crash\n\nIt crashes.'
-  assert_success
-  assert_output_equals "gh issue create --title Crash --body It\\ crashes."
-}
-
-@test "issue create -m with gh's own body or template option adds no empty body" {
-  run hub --noop issue create -m Crash --body-file notes.md
-  assert_success
-  assert_output_equals "gh issue create --title Crash --body-file notes.md"
-  run hub --noop issue create -m Crash -T bug_report.md
-  assert_success
-  assert_output_equals "gh issue create --title Crash -T bug_report.md"
-}
-
-@test "issue create without -m or -F is gh issue create, unchanged" {
-  run hub --noop issue create -t Crash -b "It crashes." -e -w
-  assert_success
-  assert_output_equals "gh issue create -t Crash -b It\\ crashes. -e -w"
-}
-
-@test "issue create does not take option values for hub's options" {
-  run hub --noop issue create -t Crash -b -mnot-a-message --label -F
-  assert_success
-  assert_output_equals "gh issue create -t Crash -b -mnot-a-message --label -F"
-}
-
-@test "issue create aborts on -m with -F, a missing value or an unreadable file" {
-  printf 'Crash\n' >msg.txt
-  run hub --noop issue create -m Crash -F msg.txt
+  assert_output_equals "gh issue create -F msg.txt -wmTitle"
+  stub_gh 'issue update 12 -s closed' 'unknown command "update" for "gh issue"' 1
+  run hub issue update 12 -s closed
   assert_failure
-  assert_output_equals "Aborted: -m and -F cannot be used together."
-  run hub --noop issue create -l bug -m
-  assert_failure
-  assert_output_equals "Aborted: -m needs a value."
-  run hub --noop issue create -F missing.txt
-  assert_failure
-  assert_output_equals "Aborted: cannot read missing.txt"
+  assert_output_equals 'unknown command "update" for "gh issue"'
+  assert_equals "$(gh_calls)" 'gh issue update 12 -s closed'
 }
 
-@test "issue update is gh issue edit, options unchanged" {
-  run hub --noop issue update 12 -t "New title" --add-label bug --remove-label wip --milestone v2
+@test "issue: a batch is one gh command, which gh checks whole before its first request" {
+  GH_REPO=default/repo run hub --noop issue update https://github.com/other/project/issues/1 2 -m Changed -s closed
   assert_success
-  assert_output_equals "gh issue edit 12 -t New\\ title --add-label bug --remove-label wip --milestone v2"
-  run hub --noop issue update 12 13 --add-assignee @me --remove-milestone
+  assert_output_equals "gh issue update https://github.com/other/project/issues/1 2 -m Changed -s closed"
+  GH_REPO=default/repo run hub --noop issue update 1 not-an-issue -s closed
   assert_success
-  assert_output_equals "gh issue edit 12 13 --add-assignee @me --remove-milestone"
-}
-
-@test "issue update -m sets the title and body, and leaves out an empty body" {
-  run hub --noop issue update 12 -m "New title"
+  assert_output_equals "gh issue update 1 not-an-issue -s closed"
+  GH_REPO=default/repo run hub --noop issue edit https://github.com/other/project/issues/1 2 --title Changed
   assert_success
-  assert_output_equals "gh issue edit 12 --title New\\ title"
-  run hub --noop issue update 12 -m $'Crash\non start\n\nSteps:\n1. run it'
-  assert_success
-  assert_output_equals "gh issue edit 12 --title Crash\\ on\\ start --body \$'Steps:\\n1. run it'"
-  run hub --noop issue update 12 13 -m Crash -m "It crashes." -m Always.
-  assert_success
-  assert_output_equals "gh issue edit 12 13 --title Crash --body \$'It crashes.\\n\\nAlways.'"
-}
-
-@test "issue update puts --title/--body where -m was; gh's -m is --milestone" {
-  run hub --noop issue update 12 --add-label bug --message=Crash --milestone v2 -mDetails --remove-label wip
-  assert_success
-  assert_output_equals "gh issue edit 12 --add-label bug --title Crash --body Details --milestone v2 --remove-label wip"
-}
-
-@test "issue update -F reads the title and body from a file or standard input" {
-  printf 'Crash on start\n\nSteps:\n1. run it\n' >msg.txt
-  run hub --noop issue update 12 -F msg.txt --add-label bug
-  assert_success
-  assert_output_equals "gh issue edit 12 --title Crash\\ on\\ start --body \$'Steps:\\n1. run it' --add-label bug"
-  printf 'Crash\n' >title.txt
-  run hub --noop issue update 12 --file=title.txt
-  assert_success
-  assert_output_equals "gh issue edit 12 --title Crash"
-  run hub --noop issue update 12 -F - <<<$'Crash\n\nIt crashes.'
-  assert_success
-  assert_output_equals "gh issue edit 12 --title Crash --body It\\ crashes."
-}
-
-@test "issue update aborts on -m with -F, a missing value or an unreadable file before running gh" {
-  printf 'Crash\n' >msg.txt
-  run hub issue update 12 -m Crash -F msg.txt -s closed
+  assert_output_equals "gh issue edit https://github.com/other/project/issues/1 2 --title Changed"
+  stub_gh 'issue close 1 not-an-issue' 'accepts 1 arg(s), received 2' 1
+  GH_REPO=default/repo run hub issue close 1 not-an-issue
   assert_failure
-  assert_output_equals "Aborted: -m and -F cannot be used together."
-  run hub issue update 12 -s closed -m
-  assert_failure
-  assert_output_equals "Aborted: -m needs a value."
-  run hub issue update 12 -t New -F missing.txt -s closed
-  assert_failure
-  assert_output_equals "Aborted: cannot read missing.txt"
+  assert_output_equals 'accepts 1 arg(s), received 2'
+  assert_equals "$(gh_calls)" 'gh issue close 1 not-an-issue'
+}
+
+@test "issue: nothing after -- is read, not even a subcommand word" {
+  GH_REPO=github.localhost/intended/repo run hub --noop issue update --title Changed -- 1 --repo=github.localhost/other/repo
+  assert_success
+  assert_output_equals "gh issue update --title Changed -- 1 --repo=github.localhost/other/repo"
+  GH_REPO=github.localhost/intended/repo run hub --noop issue edit --title Changed -- 1 --repo=github.localhost/other/repo
+  assert_success
+  assert_output_equals "gh issue edit --title Changed -- 1 --repo=github.localhost/other/repo"
+  run hub --noop issue update 1 -- --title Changed
+  assert_success
+  assert_output_equals "gh issue update 1 -- --title Changed"
+  run hub --noop issue close -r "not planned" -- 12 https://github.com/mislav/dotfiles/issues/13
+  assert_success
+  assert_output_equals "gh issue close -r not\\ planned -- 12 https://github.com/mislav/dotfiles/issues/13"
+  run hub --noop issue -- show 12
+  assert_success
+  assert_output_equals "gh issue list -- show 12"
+  run hub --noop issue -R mislav/dotfiles -- show 12
+  assert_success
+  assert_output_equals "gh issue list -R mislav/dotfiles -- show 12"
   assert_gh_not_called
 }
 
-@test "issue update without -s leaves -c, -r and --duplicate-of to gh issue edit" {
-  run hub --noop issue update 12 -c Done -r completed
+@test "issue: closing as a duplicate is gh's one command; its repository and object checks are gh's too" {
+  make_repo repo upstream=https://github.localhost/org/repo.git origin=https://github.localhost/alice/repo.git
+  git config remote.origin.gh-resolved base
+  run hub --noop issue close 12 --duplicate-of http://github.localhost/org/repo/issues/12
   assert_success
-  assert_output_equals "gh issue edit 12 -c Done -r completed"
-  run hub --noop issue update 12 -r nonsense --duplicate-of seven
+  assert_output_equals "gh issue close 12 --duplicate-of http://github.localhost/org/repo/issues/12"
+  run hub --noop issue close 12 --duplicate-of http://github.localhost/alice/repo/issues/12
   assert_success
-  assert_output_equals "gh issue edit 12 -r nonsense --duplicate-of seven"
+  assert_output_equals "gh issue close 12 --duplicate-of http://github.localhost/alice/repo/issues/12"
+  run hub --noop issue update 12 --title Changed -s closed --duplicate-of http://github.localhost/alice/repo/issues/12
+  assert_success
+  assert_output_equals "gh issue update 12 --title Changed -s closed --duplicate-of http://github.localhost/alice/repo/issues/12"
+  run hub --noop issue close http://github.localhost/o/r/pull/1 --duplicate-of 2
+  assert_success
+  assert_output_equals "gh issue close http://github.localhost/o/r/pull/1 --duplicate-of 2"
+  run hub --noop issue close http://github.localhost/o/r/issues/1 --duplicate-of http://github.localhost/o/r/pull/2
+  assert_success
+  assert_output_equals "gh issue close http://github.localhost/o/r/issues/1 --duplicate-of http://github.localhost/o/r/pull/2"
+  run hub --noop issue close 12 -r completed --duplicate-of 12 --duplicate-of 7
+  assert_success
+  assert_output_equals "gh issue close 12 -r completed --duplicate-of 12 --duplicate-of 7"
+  assert_gh_not_called
 }
 
-@test "issue update -s closed closes the issue" {
-  run hub --noop issue update 12 -s closed
+@test "issue: titles, bodies and their files are gh's options; standard input reaches gh untouched" {
+  run hub --noop issue update https://github.com/o/r/issues/1 -F '' -m Changed
+  assert_success
+  assert_output_equals "gh issue update https://github.com/o/r/issues/1 -F '' -m Changed"
+  run hub --noop issue create -F '' --title T
+  assert_success
+  assert_output_equals "gh issue create -F '' --title T"
+  run hub --noop issue create --title T --body-file -
+  assert_success
+  assert_output_equals "gh issue create --title T --body-file -"
+  shim_gh
+  PATH=$SHIM_PATH run hub issue create --title T --body-file - <<<$'Full title\n\nComplete body'
+  assert_success
+  assert_output_equals $'gh issue create --title T --body-file - | stdin=Full title\n\nComplete body'
+}
+
+@test "issue: whether an option is in effect is gh's to judge: --body-file= and --help=false reach gh as typed" {
+  run hub --noop issue create -m Title --body-file=
+  assert_success
+  assert_output_equals "gh issue create -m Title --body-file="
+  run hub --noop issue create --title T --body B --help=false
+  assert_success
+  assert_output_equals "gh issue create --title T --body B --help=false"
+  run hub --noop issue edit 1 --title Title --help=false
+  assert_success
+  assert_output_equals "gh issue edit 1 --title Title --help=false"
+  run hub --noop issue --help=false
+  assert_success
+  assert_output_equals "gh issue list --help=false"
+  assert_gh_not_called
+}
+
+@test "issue finds the subcommand word where gh does: an option's value is never one" {
+  run hub --noop issue -s show
+  assert_success
+  assert_output_equals "gh issue list -s show"
+  run hub --noop issue --label show list
+  assert_success
+  assert_output_equals "gh issue --label show list"
+  run hub --noop issue -sclosed show 12
+  assert_success
+  assert_output_equals "gh issue -sclosed view 12"
+  run hub --noop issue '' show 12
+  assert_success
+  assert_output_equals "gh issue '' view 12"
+  run hub --noop issue -R
+  assert_success
+  assert_output_equals "gh issue list -R"
+}
+
+@test "issue adds no repository of its own: gh resolves it from the remotes, GH_REPO or -R" {
+  make_repo r1 origin=https://github.com/mislav/r1.git upstream=https://ghe.example.com/corp/r1.git
+  run hub --noop issue view 12
+  assert_success
+  assert_output_equals "gh issue view 12"
+  GH_REPO=ghe.example.com/corp/r1 run hub --noop issue close 12
   assert_success
   assert_output_equals "gh issue close 12"
-  run hub --noop issue update https://github.com/mislav/dotfiles/issues/12 --state closed
-  assert_success
-  assert_output_equals "gh issue close https://github.com/mislav/dotfiles/issues/12"
-}
-
-@test "issue update -s open reopens the issue" {
-  run hub --noop issue update 12 --state=open
-  assert_success
-  assert_output_equals "gh issue reopen 12"
-  run hub --noop issue update -sopen 12
-  assert_success
-  assert_output_equals "gh issue reopen 12"
-}
-
-@test "issue create and update read -X=VALUE as gh does, -m, -F, -s and -r included" {
-  printf 'Crash\n\nIt crashes.\n' >msg.txt
-  run hub --noop issue create -m=Crash -l=bug
-  assert_success
-  assert_output_equals "gh issue create --title Crash --body '' -l=bug"
-  run hub --noop issue create -F=msg.txt
-  assert_success
-  assert_output_equals "gh issue create --title Crash --body It\\ crashes."
-  run hub --noop issue update 12 -m=Crash -s=closed -r=completed -c=Done
-  assert_success
-  assert_output_equals $'gh issue edit 12 --title Crash\ngh issue close 12 -r=completed -c=Done'
-  run hub --noop issue update 12 -F=msg.txt -s=open
-  assert_success
-  assert_output_equals $'gh issue edit 12 --title Crash --body It\\ crashes.\ngh issue reopen 12'
-  run hub --noop issue update 12 -s=closed -r=nonsense
-  assert_failure
-  assert_output_equals "Aborted: --reason must be 'completed', 'not planned' or 'duplicate', not 'nonsense'."
-}
-
-@test "issue update -s gives gh issue close its own options" {
-  run hub --noop issue update 12 -s closed -c "Fixed in #13" -r "not planned"
-  assert_success
-  assert_output_equals "gh issue close 12 -c Fixed\\ in\\ #13 -r not\\ planned"
-  run hub --noop issue update 12 -s closed --duplicate-of 7
-  assert_success
-  assert_output_equals "gh issue close 12 --duplicate-of 7"
-}
-
-@test "issue update -s with other options edits first, then closes; -R goes to both" {
-  run hub --noop issue update 12 -t New --add-label fixed -s closed -R mislav/dotfiles -c Done
-  assert_success
-  assert_output_equals $'gh issue edit 12 -R mislav/dotfiles -t New --add-label fixed\ngh issue close 12 -R mislav/dotfiles -c Done'
-}
-
-@test "issue update -s with -m edits the title first, then closes" {
-  run hub --noop issue update 12 -m "New title" -s closed
-  assert_success
-  assert_output_equals $'gh issue edit 12 --title New\\ title\ngh issue close 12'
-}
-
-@test "issue update -s closes or reopens every NUMBER, after one edit of them all" {
-  run hub --noop issue update 12 13 -s closed --title T
-  assert_success
-  assert_output_equals $'gh issue edit 12 13 --title T\ngh issue close 12\ngh issue close 13'
-  run hub --noop issue update 12 13 --state=open -c Again -R mislav/dotfiles
-  assert_success
-  assert_output_equals $'gh issue reopen 12 -R mislav/dotfiles -c Again\ngh issue reopen 13 -R mislav/dotfiles -c Again'
-  run hub --noop issue update -s closed -r "not planned" -- 12 https://github.com/mislav/dotfiles/issues/13
-  assert_success
-  assert_output_equals $'gh issue close 12 -r not\\ planned\ngh issue close https://github.com/mislav/dotfiles/issues/13 -r not\\ planned'
-}
-
-@test "issue update -s open refuses gh issue close's own options before running gh" {
-  run hub issue update 12 -t New -s open -r completed
-  assert_failure
-  assert_output_equals "Aborted: -r only goes with -s closed; gh issue reopen has no such option."
-  run hub issue update 12 13 --reason="not planned" --state open
-  assert_failure
-  assert_output_equals "Aborted: --reason only goes with -s closed; gh issue reopen has no such option."
-  run hub issue update 12 -s open -c Again --duplicate-of 7
-  assert_failure
-  assert_output_equals "Aborted: --duplicate-of only goes with -s closed; gh issue reopen has no such option."
   assert_gh_not_called
 }
 
-@test "issue update -s closed checks -r and --duplicate-of before running gh" {
-  run hub --noop issue update 12 -s closed --title New --reason nonsense
-  assert_failure
-  assert_output_equals "Aborted: --reason must be 'completed', 'not planned' or 'duplicate', not 'nonsense'."
-  run hub issue update 12 13 -t New -s closed -r completed -r ''
-  assert_failure
-  assert_output_equals "Aborted: --reason must be 'completed', 'not planned' or 'duplicate', not ''."
-  run hub issue update 12 --add-label x -s closed -rNot\ planned
-  assert_failure
-  assert_output_equals "Aborted: --reason must be 'completed', 'not planned' or 'duplicate', not 'Not planned'."
-  run hub issue update 12 -t New -s closed --duplicate-of seven
-  assert_failure
-  assert_output_equals "Aborted: --duplicate-of must be an issue number or URL, not 'seven'."
-  run hub issue update 12 -t New -s closed --duplicate-of=https://github.com/mislav/dotfiles/wiki/7
-  assert_failure
-  assert_output_equals "Aborted: --duplicate-of must be an issue number or URL, not 'https://github.com/mislav/dotfiles/wiki/7'."
-  run hub issue update 12 -t New -s closed --duplicate-of 7 -r completed
-  assert_failure
-  assert_output_equals "Aborted: --duplicate-of only goes with --reason duplicate, not with --reason 'completed'."
-  run hub issue update 12 13 -s closed --reason=duplicate --duplicate-of https://github.com/mislav/dotfiles/issues/7 -r "not planned"
-  assert_failure
-  assert_output_equals "Aborted: --duplicate-of only goes with --reason duplicate, not with --reason 'not planned'."
+@test "issue -h and --help before the subcommand word print hub's manual; after it, gh's" {
+  run hub issue --help
+  assert_success
+  assert_output_contains "Usage: hub issue [SUBCOMMAND] [gh issue options]"
+  run hub issue -h
+  assert_success
+  assert_output_contains "Usage: hub issue"
+  run hub issue -R mislav/dotfiles --help
+  assert_success
+  assert_output_contains "Usage: hub issue"
+  run hub help issue
+  assert_success
+  assert_output_contains "Usage: hub issue"
+  run hub --noop issue list --help
+  assert_success
+  assert_output_equals "gh issue list --help"
+  run hub --noop issue create -h
+  assert_success
+  assert_output_equals "gh issue create -h"
   assert_gh_not_called
 }
 
-@test "issue update -s closed takes gh issue close's reasons and forms of --duplicate-of" {
-  run hub --noop issue update 12 -t New -s closed -r completed
-  assert_success
-  assert_output_equals $'gh issue edit 12 -t New\ngh issue close 12 -r completed'
-  run hub --noop issue update 12 -s closed --duplicate-of '#7' -rduplicate
-  assert_success
-  assert_output_equals "gh issue close 12 --duplicate-of \\#7 -rduplicate"
-  run hub --noop issue update 12 -s closed -r completed --reason=duplicate --duplicate-of=https://ghe.example.com/corp/app/issues/7
-  assert_success
-  assert_output_equals "gh issue close 12 -r completed --reason=duplicate --duplicate-of=https://ghe.example.com/corp/app/issues/7"
-  run hub --noop issue update 12 -s closed --duplicate-of https://github.com/mislav/dotfiles/pull/7/files
-  assert_success
-  assert_output_equals "gh issue close 12 --duplicate-of https://github.com/mislav/dotfiles/pull/7/files"
-}
-
-@test "issue update -s closed refuses to close an issue as a duplicate of itself before running gh" {
-  run hub --noop issue update 12 -s closed --title New --duplicate-of 12
-  assert_failure
-  assert_output_equals "Aborted: issue 12 cannot be closed as a duplicate of itself (--duplicate-of 12)."
-  run hub issue update 12 13 -s closed -r duplicate --duplicate-of '#13' -c Dup
-  assert_failure
-  assert_output_equals "Aborted: issue 13 cannot be closed as a duplicate of itself (--duplicate-of #13)."
-  run hub issue update '#012' --add-label dup -s closed --duplicate-of=12
-  assert_failure
-  assert_output_equals "Aborted: issue #012 cannot be closed as a duplicate of itself (--duplicate-of 12)."
-  # gh reads a bare --duplicate-of number in the closed issue's repository, here its URL's.
-  run hub issue update https://github.com/corp/app/issues/12 -s closed --duplicate-of 12
-  assert_failure
-  assert_output_equals "Aborted: issue https://github.com/corp/app/issues/12 cannot be closed as a duplicate of itself (--duplicate-of 12)."
-  run hub issue update -s closed --duplicate-of https://github.com/Corp/App/issues/12#issuecomment-1 -- https://github.com/corp/app/issues/12
-  assert_failure
-  assert_output_contains "cannot be closed as a duplicate of itself"
-  assert_gh_not_called
-}
-
-@test "issue update -s closed refuses a --duplicate-of URL for an issue being closed in the current repository" {
-  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
-  run hub issue update 12 -t New -s closed --duplicate-of https://github.com/mislav/dotfiles/issues/12
-  assert_failure
-  assert_output_equals "Aborted: issue 12 cannot be closed as a duplicate of itself (--duplicate-of https://github.com/mislav/dotfiles/issues/12)."
-  run hub issue update 13 '#12' -s closed --duplicate-of https://www.github.com/Mislav/Dotfiles/pull/012/files
-  assert_failure
-  assert_output_equals "Aborted: issue #12 cannot be closed as a duplicate of itself (--duplicate-of https://www.github.com/Mislav/Dotfiles/pull/012/files)."
-  run hub issue update 12 -R corp/app -s closed --duplicate-of https://github.com/corp/app/issues/12
-  assert_failure
-  assert_output_contains "issue 12 cannot be closed as a duplicate of itself"
-  run hub issue -R https://ghe.example.com/corp/app update 12 -s closed --duplicate-of https://ghe.example.com/corp/app/issues/12
-  assert_failure
-  assert_output_contains "issue 12 cannot be closed as a duplicate of itself"
-  export GH_REPO=ghe.example.com/corp/app
-  run hub issue update 12 -s closed --duplicate-of https://ghe.example.com/corp/app/issues/12
-  assert_failure
-  assert_output_contains "issue 12 cannot be closed as a duplicate of itself"
-  assert_gh_not_called
-}
-
-@test "issue update reads -R=REPO, -RREPO, --repo=REPO and --repo REPO alike, as gh does" {
-  local dup=https://github.com/org/repo/issues/12
-  local refused="Aborted: issue 12 cannot be closed as a duplicate of itself (--duplicate-of $dup)."
-  run hub --noop issue update -R=org/repo 12 -s closed --title x --duplicate-of "$dup"
-  assert_failure
-  assert_output_equals "$refused"
-  run hub --noop issue update -Rorg/repo 12 -s closed --title x --duplicate-of "$dup"
-  assert_failure
-  assert_output_equals "$refused"
-  run hub --noop issue update --repo=org/repo 12 -s closed --title x --duplicate-of "$dup"
-  assert_failure
-  assert_output_equals "$refused"
-  run hub --noop issue update --repo org/repo 12 -s closed --title x --duplicate-of "$dup"
-  assert_failure
-  assert_output_equals "$refused"
-  run hub --noop issue -R=org/repo update 12 -s closed --duplicate-of "$dup"
-  assert_failure
-  assert_output_equals "$refused"
-  assert_gh_not_called
-}
-
-@test "issue update -s closed takes a duplicate with the same number in another repository" {
-  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
-  run hub --noop issue update 12 -s closed --duplicate-of https://github.com/other/dotfiles/issues/12
-  assert_success
-  assert_output_equals "gh issue close 12 --duplicate-of https://github.com/other/dotfiles/issues/12"
-  run hub --noop issue update 12 -R other/dotfiles -s closed --duplicate-of https://github.com/mislav/dotfiles/issues/12
-  assert_success
-  assert_output_equals "gh issue close 12 -R other/dotfiles --duplicate-of https://github.com/mislav/dotfiles/issues/12"
-  run hub --noop issue update https://github.com/other/dotfiles/issues/12 -s closed --duplicate-of https://github.com/mislav/dotfiles/issues/12
-  assert_success
-  assert_output_equals "gh issue close https://github.com/other/dotfiles/issues/12 --duplicate-of https://github.com/mislav/dotfiles/issues/12"
-  # gh takes the last --duplicate-of.
-  run hub --noop issue update 12 -s closed --duplicate-of 12 --duplicate-of 7
-  assert_success
-  assert_output_equals "gh issue close 12 --duplicate-of 12 --duplicate-of 7"
-  # Where hub cannot tell which repository 12 is in, it leaves the check to gh.
-  cd "$HUB_TEST_TMP"
-  run hub --noop issue update 12 -s closed --duplicate-of https://github.com/mislav/dotfiles/issues/12
-  assert_success
-  assert_output_equals "gh issue close 12 --duplicate-of https://github.com/mislav/dotfiles/issues/12"
-  assert_gh_not_called
-}
-
-@test "issue update -s aborts on an unknown state or a missing number before running gh" {
-  run hub issue update 12 -t New -s merged
-  assert_failure
-  assert_output_equals "Aborted: --state must be open or closed, not 'merged'."
-  run hub issue update 12 13 --add-label x --state=
-  assert_failure
-  assert_output_equals "Aborted: --state must be open or closed, not ''."
-  run hub issue update -s closed -c Done
-  assert_failure
-  assert_output_contains "Usage: hub issue update NUMBER"
-  assert_gh_not_called
-}
-
-@test "issue update -s does not close when the edit fails" {
-  stub_gh 'issue edit 12 -t New' 'could not edit' 1
-  stub_gh 'issue close 12' ''
-  run hub issue update 12 -t New -s closed
-  assert_failure
-  assert_output_equals "could not edit"
-  assert_gh_called 'issue edit 12 -t New'
-  [[ $(gh_calls) != *"issue close"* ]]
-}
-
-@test "issue update -s runs gh issue edit, then gh issue close" {
-  stub_gh 'issue edit 12 *' ''
-  stub_gh 'issue close 12' 'Closed issue #12'
-  run hub issue update 12 -t New -s closed
-  assert_success
-  assert_output_equals "Closed issue #12"
-  [[ $(gh_calls) == $'gh issue edit 12 -t New\ngh issue close 12' ]]
-}
-
-@test "issue update -s closes the issues one at a time" {
-  stub_gh 'issue close 12' 'Closed issue #12'
-  stub_gh 'issue close 13' 'Closed issue #13'
-  run hub issue update 12 13 -s closed
-  assert_success
-  assert_output_equals $'Closed issue #12\nClosed issue #13'
-  [[ $(gh_calls) == $'gh issue close 12\ngh issue close 13' ]]
-}
-
-@test "issue update -s stops at the first gh command that fails" {
-  stub_gh 'issue edit 12 13 14 *' ''
-  stub_gh 'issue close 12' 'Closed issue #12'
-  stub_gh 'issue close 13' 'could not close #13' 1
-  stub_gh 'issue close 14' 'Closed issue #14'
-  run hub issue update 12 13 14 -s closed --add-label fixed
-  assert_failure
-  assert_output_equals $'Closed issue #12\ncould not close #13'
-  [[ $(gh_calls) == $'gh issue edit 12 13 14 --add-label fixed\ngh issue close 12\ngh issue close 13' ]]
-}
-
-@test "issue runs gh with the mapped arguments" {
+@test "issue hands over to gh and returns its output and status" {
   stub_gh 'issue list -s closed' '12\tCLOSED\tCrash'
   run hub issue -s closed
   assert_success
   assert_output_equals $'12\tCLOSED\tCrash'
-  assert_gh_called 'issue list -s closed'
+  stub_gh 'issue view 404' 'GraphQL: Could not resolve to an issue' 1
+  run hub issue show 404
+  assert_failure
+  assert_output_equals "GraphQL: Could not resolve to an issue"
+  assert_equals "$(gh_calls)" $'gh issue list -s closed\ngh issue view 404'
 }
 
-@test "issue -h and --help print the manual, also after hub's subcommands" {
-  run hub issue --help
-  assert_success
-  assert_output_contains "Usage: hub issue"
-  run hub issue -h
-  assert_success
-  assert_output_contains "Usage: hub issue"
-  run hub --noop issue create -m Crash --help
-  assert_success
-  assert_output_contains "hub issue create -m MESSAGE"
-  run hub --noop issue update 12 -h
-  assert_success
-  assert_output_contains "hub issue update NUMBER"
-  assert_output_contains "--duplicate-of ISSUE"
-  run hub help issue
-  assert_success
-  assert_output_contains "Usage: hub issue"
-  assert_gh_not_called
-}
-
-@test "issue SUBCOMMAND --help for gh's own subcommands is gh's help" {
-  run hub --noop issue list --help
-  assert_success
-  assert_output_equals "gh issue list --help"
+@test "issue without gh gives hub's message" {
+  mkdir nogh
+  ln -s "$(command -v bash)" nogh/bash
+  ln -s "$(command -v git)" nogh/git
+  PATH=$PWD/nogh run hub issue
+  assert_failure
+  assert_output_equals "hub: this command needs the GitHub CLI (gh): https://cli.github.com"
 }

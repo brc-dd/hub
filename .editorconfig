@@ -18,7 +18,7 @@ switch_case_indent = true
 binary_next_line = true
 space_redirects = false
 
-[{bin/hub,test/stubs/gh,script/*}]
+[{bin/hub,test/stubs/*,script/*}]
 shell_variant = bash
 switch_case_indent = true
 binary_next_line = true

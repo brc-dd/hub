@@ -1,25 +1,35 @@
 #!/usr/bin/env bats
 load ../test_helper
 
-# stub_ci STATUSES CHECK-RUNS [HOST/OWNER/REPO] : what the two gh api lookups for the repository
-# (github.com/mislav/dotfiles by default) print: one state, or -v line, per line.
-stub_ci() {
-  local repo=${3:-github.com/mislav/dotfiles}
-  stub_gh "api --hostname ${repo%%/*} --paginate repos/${repo#*/}/commits/*/status *" "$1"
-  stub_gh "api --hostname ${repo%%/*} --paginate repos/${repo#*/}/commits/*/check-runs *" "$2"
+# tagged KIND LINES : KIND and a tab in front of every line of LINES (printf %b escapes, \n between
+# lines), the way hub's jq filters tag what they print.
+tagged() {
+  [[ -n $2 ]] || return 0
+  printf '%s' "$1\\t${2//\\n/\\n$1\\t}"
 }
 
-# shim_gh_check_runs_error : put a gh in PATH whose status lookup prints "success" and whose
-# check-runs lookup fails the way gh does on an HTTP error: the error document on stdout,
-# "gh: $HUB_TEST_CHECKS_ERROR" on stderr, exit 1.
-shim_gh_check_runs_error() {
+# stub_ci STATUSES CHECK-RUNS [HOST/OWNER/REPO] : what the two gh api lookups for the repository
+# (github.com/mislav/dotfiles by default) print: one STATE[\tNAME\tURL] per line.
+stub_ci() {
+  local repo=${3:-github.com/mislav/dotfiles}
+  stub_gh "api --hostname ${repo%%/*} --paginate repos/${repo#*/}/commits/*/status *" "$(tagged status "$1")"
+  stub_gh "api --hostname ${repo%%/*} --paginate repos/${repo#*/}/commits/*/check-runs *" "$(tagged check "$2")"
+}
+
+# shim_gh : a gh in PATH that logs its calls, prints HUB_TEST_STATUSES for the status lookup and
+# HUB_TEST_CHECKS (the pages read so far; both tagged, with printf %b escapes) for the check-runs
+# lookup, then, when HUB_TEST_CHECKS_ERROR is set, fails the way gh does when a page cannot be
+# read: the error document on stdout, "gh: $HUB_TEST_CHECKS_ERROR" on stderr, exit 1.
+shim_gh() {
   mkdir -p "$HUB_TEST_TMP/shim"
   cat >"$HUB_TEST_TMP/shim/gh" <<'SH'
 #!/usr/bin/env bash
 printf 'gh %s\n' "$*" >>"$HUB_TEST_LOG"
 case $* in
-  *'/status --jq '*) printf 'success\n' ;;
+  *'/status --jq '*) [[ -z ${HUB_TEST_STATUSES-} ]] || printf '%b\n' "$HUB_TEST_STATUSES" ;;
   *'/check-runs --jq '*)
+    [[ -z ${HUB_TEST_CHECKS-} ]] || printf '%b\n' "$HUB_TEST_CHECKS"
+    [[ -n ${HUB_TEST_CHECKS_ERROR-} ]] || exit 0
     printf '{"message":"%s"}\n' "${HUB_TEST_CHECKS_ERROR% (*}"
     printf 'gh: %s\n' "$HUB_TEST_CHECKS_ERROR" >&2
     exit 1
@@ -28,7 +38,7 @@ case $* in
 esac
 SH
   chmod +x "$HUB_TEST_TMP/shim/gh"
-  export PATH=$HUB_TEST_TMP/shim:$PATH
+  export PATH=$HUB_TEST_TMP/shim:$PATH HUB_TEST_STATUSES='status\tsuccess\tci\thttps://ci.example/1'
 }
 
 assert_status() { [[ $status -eq $1 ]] || {
@@ -119,6 +129,12 @@ ci_repo() { make_repo dotfiles origin=https://github.com/mislav/dotfiles.git; }
   assert_status 0
   assert_gh_called "api --hostname github.com --paginate repos/mislav/dotfiles/commits/$sha/status --jq *"
   assert_gh_called "api --hostname github.com --paginate repos/mislav/dotfiles/commits/$sha/check-runs --jq *"
+  run hub ci-status -- HEAD~1
+  assert_status 0
+  git update-ref refs/tags/-dash HEAD # a name only -- can introduce; git still resolves it
+  run hub ci-status -- -dash
+  assert_status 0
+  assert_gh_called "api --hostname github.com --paginate repos/mislav/dotfiles/commits/$(git rev-parse HEAD)/status --jq *"
 }
 
 @test "COMMIT defaults to HEAD" {
@@ -129,12 +145,31 @@ ci_repo() { make_repo dotfiles origin=https://github.com/mislav/dotfiles.git; }
   assert_gh_called "api --hostname github.com --paginate repos/mislav/dotfiles/commits/$(git rev-parse HEAD)/status *"
 }
 
-@test "a ref that isn't known locally is left for GitHub to resolve" {
+@test "a ref git does not know goes to the API as it is, encoded as one path segment" {
   ci_repo
   stub_ci 'success' ''
   run hub ci-status only-on-github
   assert_status 0
   assert_gh_called 'api --hostname github.com --paginate repos/mislav/dotfiles/commits/only-on-github/status *'
+  run hub ci-status 'feature#123'
+  assert_status 0
+  assert_gh_called 'api --hostname github.com --paginate repos/mislav/dotfiles/commits/feature%23123/status *'
+  assert_gh_called 'api --hostname github.com --paginate repos/mislav/dotfiles/commits/feature%23123/check-runs *'
+  run hub ci-status 'feature%2Fother' # a literal percent sequence stays one
+  assert_status 0
+  assert_gh_called 'api --hostname github.com --paginate repos/mislav/dotfiles/commits/feature%252Fother/status *'
+  run hub ci-status topic/sub
+  assert_gh_called 'api --hostname github.com --paginate repos/mislav/dotfiles/commits/topic%2Fsub/status *'
+  run hub ci-status 'héllo wörld'
+  assert_gh_called 'api --hostname github.com --paginate repos/mislav/dotfiles/commits/h%C3%A9llo%20w%C3%B6rld/status *'
+  [[ $(gh_calls) != *'commits/feature/'* && $(gh_calls) != *'commits/topic/sub/'* ]]
+  # a branch of such a name is resolved by git first
+  git branch 'feature#123'
+  : >"$HUB_TEST_LOG"
+  run hub ci-status 'feature#123'
+  assert_status 0
+  assert_gh_called "api --hostname github.com --paginate repos/mislav/dotfiles/commits/$(git rev-parse HEAD)/status *"
+  [[ $(gh_calls) != *'feature%23123'* ]]
 }
 
 @test "-v lists every check, failures first, then pending, then passes" {
@@ -149,8 +184,8 @@ ci_repo() { make_repo dotfiles origin=https://github.com/mislav/dotfiles.git; }
     pending build https://github.com/r/3 \
     success ci/travis https://ci.example/1 \
     neutral lint https://github.com/r/5)"
-  assert_gh_called 'api --hostname github.com --paginate repos/mislav/dotfiles/commits/*/status --jq .statuses\[\] | \[.state, .context, .target_url // ""\] | @tsv'
-  assert_gh_called 'api --hostname github.com --paginate repos/mislav/dotfiles/commits/*/check-runs --jq .check_runs\[\] | \[(if .status == "completed" then .conclusion else "pending" end), .name, .html_url // ""\] | @tsv'
+  assert_gh_called 'api --hostname github.com --paginate repos/mislav/dotfiles/commits/*/status --jq .statuses\[\] | \["status", .state, .context, .target_url // ""\] | @tsv'
+  assert_gh_called 'api --hostname github.com --paginate repos/mislav/dotfiles/commits/*/check-runs --jq .check_runs\[\] | \["check", (if .status == "completed" then .conclusion else "pending" end), .name, .html_url // ""\] | @tsv'
 }
 
 @test "-v keeps the exit code and says 'no status' when there are no checks" {
@@ -168,7 +203,7 @@ ci_repo() { make_repo dotfiles origin=https://github.com/mislav/dotfiles.git; }
 @test "GitHub Enterprise projects pass --hostname" {
   git config --global --add hub.host ghe.example.com
   make_repo dotfiles origin=https://ghe.example.com/mislav/dotfiles.git
-  stub_gh 'api --hostname ghe.example.com --paginate repos/mislav/dotfiles/commits/*' 'success'
+  stub_gh 'api --hostname ghe.example.com --paginate repos/mislav/dotfiles/commits/*' 'status\tsuccess'
   run hub ci-status
   assert_status 0
   assert_gh_called 'api --hostname ghe.example.com --paginate repos/mislav/dotfiles/commits/*/status *'
@@ -206,22 +241,29 @@ ci_repo() { make_repo dotfiles origin=https://github.com/mislav/dotfiles.git; }
   assert_output_equals "success"
 }
 
-@test "check runs refused with HTTP 403, 404 or 422 leave the commit statuses to decide" {
+@test "check runs refused outright with HTTP 403, 404 or 422 leave the commit statuses to decide" {
   ci_repo
-  shim_gh_check_runs_error
+  shim_gh
   for HUB_TEST_CHECKS_ERROR in 'Not Found (HTTP 404)' 'Validation Failed (HTTP 422)' \
     'Resource not accessible by integration (HTTP 403)' 'Resource not accessible by personal access token (HTTP 403)'; do
     export HUB_TEST_CHECKS_ERROR
     run hub ci-status
     assert_status 0
     assert_output_equals "success"
+    run hub ci-status -v
+    assert_status 0
+    assert_output_equals "$(printf 'success\tci\thttps://ci.example/1')"
   done
   assert_gh_called 'api --hostname github.com --paginate repos/mislav/dotfiles/commits/*/check-runs *'
+  # a status that failed is the verdict then, as always
+  HUB_TEST_STATUSES='status\tfailure\tci\thttps://ci.example/1' run hub ci-status
+  assert_status 1
+  assert_output_equals "failure"
 }
 
 @test "any other check runs failure is an error that shows gh's message" {
   ci_repo
-  shim_gh_check_runs_error
+  shim_gh
   for HUB_TEST_CHECKS_ERROR in 'Server Error (HTTP 500)' 'Bad credentials (HTTP 401)' \
     'API rate limit exceeded for user ID 1. (HTTP 403)' 'You have exceeded a secondary rate limit. (HTTP 403)'; do
     export HUB_TEST_CHECKS_ERROR
@@ -229,6 +271,65 @@ ci_repo() { make_repo dotfiles origin=https://github.com/mislav/dotfiles.git; }
     assert_status 1
     assert_output_equals "gh: $HUB_TEST_CHECKS_ERROR"
   done
+}
+
+@test "a check-runs page that cannot be read after a failing check was keeps the failure" {
+  ci_repo
+  shim_gh
+  export HUB_TEST_CHECKS='check\tfailure\tlint\thttps://github.com/r/1\ncheck\tsuccess\tbuild\thttps://github.com/r/2'
+  for HUB_TEST_CHECKS_ERROR in 'Resource not accessible by integration (HTTP 403)' 'Not Found (HTTP 404)' \
+    'Validation Failed (HTTP 422)' 'Server Error (HTTP 500)'; do
+    export HUB_TEST_CHECKS_ERROR
+    run hub ci-status
+    assert_status 1
+    assert_output_equals "$(printf '%s\n' "gh: $HUB_TEST_CHECKS_ERROR" \
+      "hub ci-status: not every check run could be read; the failure already seen is final" failure)"
+    run hub ci-status -v
+    assert_status 1
+    assert_output_equals "$(printf '%s\n' "gh: $HUB_TEST_CHECKS_ERROR" \
+      "hub ci-status: not every check run could be read; the failure already seen is final" \
+      "$(printf '%s\t%s\t%s\n' failure lint https://github.com/r/1 success build https://github.com/r/2 success ci https://ci.example/1)")"
+  done
+  # a check that was cancelled is a failure, too
+  HUB_TEST_CHECKS='check\tcancelled\tdeploy\thttps://github.com/r/3' run hub ci-status
+  assert_status 1
+  assert_output_equals "$(printf '%s\n' "gh: $HUB_TEST_CHECKS_ERROR" \
+    "hub ci-status: not every check run could be read; the cancelled already seen is final" cancelled)"
+}
+
+@test "a check-runs page that cannot be read after only passing or pending checks is an error, not a verdict" {
+  ci_repo
+  shim_gh
+  local checks
+  for checks in 'check\tsuccess\tbuild\thttps://github.com/r/2' 'check\tpending\tbuild\thttps://github.com/r/2' \
+    'check\tskipped\tbuild\thttps://github.com/r/2'; do
+    export HUB_TEST_CHECKS=$checks
+    for HUB_TEST_CHECKS_ERROR in 'Resource not accessible by integration (HTTP 403)' 'Not Found (HTTP 404)' \
+      'Validation Failed (HTTP 422)' 'Server Error (HTTP 500)'; do
+      export HUB_TEST_CHECKS_ERROR
+      run hub ci-status
+      assert_status 1
+      assert_output_equals "gh: $HUB_TEST_CHECKS_ERROR"
+      run hub ci-status -v
+      assert_status 1
+      assert_output_equals "gh: $HUB_TEST_CHECKS_ERROR"
+    done
+  done
+}
+
+@test "a status that failed is final even when the check runs cannot be read at all" {
+  ci_repo
+  shim_gh
+  export HUB_TEST_STATUSES='status\tfailure\tci\thttps://ci.example/1\nstatus\tsuccess\tdocs\thttps://ci.example/2'
+  export HUB_TEST_CHECKS_ERROR='Server Error (HTTP 500)'
+  run hub ci-status
+  assert_status 1
+  assert_output_equals "$(printf '%s\n' 'gh: Server Error (HTTP 500)' \
+    "hub ci-status: not every check run could be read; the failure already seen is final" failure)"
+  export HUB_TEST_STATUSES='status\tpending\tci\thttps://ci.example/1'
+  run hub ci-status
+  assert_status 1
+  assert_output_equals "gh: Server Error (HTTP 500)"
 }
 
 @test "which gh errors are tolerated is decided from gh's own error lines" {
@@ -248,15 +349,33 @@ ci_repo() { make_repo dotfiles origin=https://github.com/mislav/dotfiles.git; }
   done
 }
 
+@test "gh's two output streams are told apart, whatever it prints on which" {
+  export HUB_ROOT=$HUB_TEST_ROOT
+  source "$HUB_TEST_ROOT/lib/hub/core.sh"
+  source "$HUB_TEST_ROOT/lib/hub/cmd/ci-status.sh"
+  mkdir fakegh
+  printf '#!/usr/bin/env bash\nprintf "check\\tfailure\\tlint\\turl\\n"\nprintf "gh: first\\n" >&2\nprintf "{\\"message\\":\\"x\\"}\\n"\nprintf "gh: second (HTTP 403)\\n" >&2\nexit 7\n' >fakegh/gh
+  chmod +x fakegh/gh
+  PATH=$PWD/fakegh:$PATH _hub_ci_status_api anything || status=$?
+  assert_equals "$status" 7
+  assert_equals "$HUB_CI_ERR" $'gh: first\ngh: second (HTTP 403)'
+  assert_equals "$HUB_CI_OUT" $'check\tfailure\tlint\turl\n{"message":"x"}'
+  assert_equals "$(_hub_ci_status_lines check)" $'failure\tlint\turl'
+  assert_equals "$(_hub_ci_status_lines status)" ''
+  printf '#!/usr/bin/env bash\nexit 0\n' >fakegh/gh
+  PATH=$PWD/fakegh:$PATH _hub_ci_status_api anything
+  [[ -z $HUB_CI_ERR && -z $HUB_CI_OUT ]]
+}
+
 @test "a failing lookup is an error, not a verdict" {
   ci_repo
   stub_ci 'success' ''
-  stub_gh 'api --hostname github.com --paginate repos/mislav/dotfiles/commits/*/status *' '' 1
+  stub_gh 'api --hostname github.com --paginate repos/mislav/dotfiles/commits/*/status *' '{"message":"Not Found"}' 1
   run hub ci-status
   assert_status 1
   [[ $output != *"no status"* && $output != *success* ]]
   stub_ci 'success' ''
-  stub_gh 'api --hostname github.com --paginate repos/mislav/dotfiles/commits/*/check-runs *' '' 1
+  stub_gh 'api --hostname github.com --paginate repos/mislav/dotfiles/commits/*/check-runs *' '{"message":"Server Error"}' 1
   run hub ci-status
   assert_status 1
   [[ $output != *success* ]]
@@ -276,16 +395,20 @@ ci_repo() { make_repo dotfiles origin=https://github.com/mislav/dotfiles.git; }
   assert_success
   assert_output_contains "Usage: hub ci-status [-v] [COMMIT]"
   assert_output_contains "gh pr checks"
+  assert_output_contains "once seen, is final"
 }
 
 @test "unknown options and extra arguments are rejected" {
   ci_repo
   run hub ci-status -f '%S'
   assert_failure
-  assert_output_contains "Aborted: unknown option '-f'"
+  assert_output_equals $'hub ci-status: unknown option: -f\nUsage: hub ci-status [-v] [COMMIT]'
   run hub ci-status main HEAD
   assert_failure
-  assert_output_contains "Aborted: give at most one COMMIT"
+  assert_output_contains "hub ci-status: give at most one COMMIT"
+  run hub ci-status --verbose=1
+  assert_failure
+  assert_output_contains "hub ci-status: unknown option: --verbose=1"
   assert_gh_not_called
 }
 

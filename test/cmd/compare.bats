@@ -1,6 +1,20 @@
 #!/usr/bin/env bats
 load ../test_helper
 
+assert_status() { [[ $status -eq $1 ]] || {
+  printf 'expected exit %s, got %s\noutput:\n%s\n' "$1" "$status" "$output"
+  return 1
+}; }
+
+# failing_tools : a clipboard tool and a browser, first in PATH, that fail with their own statuses.
+failing_tools() {
+  mkdir -p "$HUB_TEST_TMP/failing"
+  printf '#!/usr/bin/env bash\ncat >/dev/null\necho "clipboard failed" >&2\nexit 17\n' >"$HUB_TEST_TMP/failing/pbcopy"
+  printf '#!/usr/bin/env bash\necho "browser failed: $1" >&2\nexit 19\n' >"$HUB_TEST_TMP/failing/browser"
+  chmod +x "$HUB_TEST_TMP/failing/pbcopy" "$HUB_TEST_TMP/failing/browser"
+  export PATH=$HUB_TEST_TMP/failing:$PATH GH_BROWSER=$HUB_TEST_TMP/failing/browser
+}
+
 @test "compare opens the current branch's compare page" {
   make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
   set_remote_head origin main
@@ -63,6 +77,15 @@ load ../test_helper
   run hub --noop compare
   assert_failure
   assert_output_equals "Aborted: main is the default branch; name a branch or a BASE...HEAD range to compare, or use -b BASE."
+  # the default branch is asked of gh when the remote HEAD is unknown
+  git update-ref -d refs/remotes/origin/main
+  git update-ref refs/remotes/origin/trunk HEAD
+  git checkout -q -b trunk --track origin/trunk
+  stub_gh 'repo view github.com/mislav/dotfiles --json defaultBranchRef -q .defaultBranchRef.name' 'trunk'
+  run hub --noop compare
+  assert_failure
+  assert_output_equals "Aborted: trunk is the default branch; name a branch or a BASE...HEAD range to compare, or use -b BASE."
+  assert_gh_called 'repo view github.com/mislav/dotfiles --json defaultBranchRef -q .defaultBranchRef.name'
 }
 
 @test "compare on a detached HEAD explains what to do" {
@@ -71,6 +94,9 @@ load ../test_helper
   run hub --noop compare
   assert_failure
   assert_output_equals "Aborted: not currently on any branch; name a branch or a BASE...HEAD range to compare."
+  run hub --noop compare main...topic # a range needs no branch
+  assert_success
+  assert_output_equals "open https://github.com/mislav/dotfiles/compare/main...topic"
 }
 
 @test "compare turns a two-dot range into GitHub's three-dot form" {
@@ -82,6 +108,8 @@ load ../test_helper
   assert_output_equals "open https://github.com/mislav/dotfiles/compare/v1.0...v1.1"
   run hub --noop compare refactor
   assert_output_equals "open https://github.com/mislav/dotfiles/compare/refactor"
+  run hub --noop compare -- v1.0..v1.1
+  assert_output_equals "open https://github.com/mislav/dotfiles/compare/v1.0...v1.1"
   assert_gh_not_called
 }
 
@@ -98,6 +126,30 @@ load ../test_helper
   git checkout -q main
   run hub --noop compare --base=release
   assert_output_equals "open https://github.com/mislav/dotfiles/compare/release...main"
+}
+
+@test "compare takes -b's value attached or separately, and clusters its flags" {
+  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
+  set_remote_head origin main
+  git checkout -q -b feature
+  git update-ref refs/remotes/origin/feature HEAD
+  run hub compare -u -bdevelop
+  assert_success
+  assert_output_equals "https://github.com/mislav/dotfiles/compare/develop...feature"
+  run hub compare -ub develop
+  assert_success
+  assert_output_equals "https://github.com/mislav/dotfiles/compare/develop...feature"
+  run hub compare -ubdevelop
+  assert_output_equals "https://github.com/mislav/dotfiles/compare/develop...feature"
+  run hub --noop compare -cu
+  assert_output_equals $'https://github.com/mislav/dotfiles/compare/feature\ncopy to clipboard: https://github.com/mislav/dotfiles/compare/feature'
+  run hub compare --url=1
+  assert_failure
+  assert_output_contains "unknown option: --url=1"
+  run hub compare -ux
+  assert_failure
+  assert_output_contains "unknown option: -x"
+  assert_gh_not_called
 }
 
 @test "compare -b refuses a range" {
@@ -145,6 +197,9 @@ load ../test_helper
   run hub --noop compare jingweno v1..v2
   assert_success
   assert_output_equals "open https://github.com/jingweno/dotfiles/compare/v1...v2"
+  run hub --noop compare jingweno/dotfiles v1..v2
+  assert_failure
+  assert_output_contains "hub compare: not an owner: jingweno/dotfiles"
 }
 
 @test "compare writes FORKOWNER:BRANCH when the branch pushes to a fork" {
@@ -167,6 +222,76 @@ load ../test_helper
   assert_output_equals "Aborted: 'mislav:feature' is both the base and the head; name a different BASE or HEAD"
 }
 
+@test "compare names the head after the repository its remote pushes to, not the one it fetches from" {
+  make_repo repo origin=https://github.com/org/repo.git
+  git remote set-url --push origin https://github.com/alice/renamed.git
+  set_remote_head origin main
+  git checkout -q -b feature
+  git update-ref refs/remotes/origin/feature HEAD
+  git branch -q --set-upstream-to=origin/feature
+  run hub compare -u
+  assert_success
+  assert_output_equals "https://github.com/org/repo/compare/alice:renamed:feature"
+  run hub compare -u -b main
+  assert_output_equals "https://github.com/org/repo/compare/main...alice:renamed:feature"
+  # the same push URL as fetch URL again: the branch is the repository's own
+  git remote set-url --push origin https://github.com/org/repo.git
+  run hub compare -u
+  assert_output_equals "https://github.com/org/repo/compare/feature"
+  assert_gh_not_called
+}
+
+@test "compare writes FORKOWNER:FORKREPO:BRANCH for a fork of another name, even under the same owner" {
+  make_repo repo origin=https://github.com/org/repo.git fork=https://github.com/org/renamed.git
+  set_remote_head origin main
+  git checkout -q -b feature
+  git update-ref refs/remotes/fork/feature HEAD
+  git branch -q --set-upstream-to=fork/feature
+  run hub compare -u
+  assert_success
+  assert_output_equals "https://github.com/org/repo/compare/org:renamed:feature"
+  git remote set-url fork https://github.com/Alice/Renamed.git # names compare case-insensitively
+  git update-ref refs/remotes/fork/main HEAD
+  git checkout -q -b fix --track fork/main
+  git config remote.pushDefault fork
+  git update-ref refs/remotes/fork/fix HEAD
+  run hub compare -u
+  assert_output_equals "https://github.com/org/repo/compare/Alice:Renamed:fix"
+  git remote set-url fork https://github.com/Alice/REPO.git
+  run hub compare -u
+  assert_output_equals "https://github.com/org/repo/compare/Alice:fix"
+  assert_gh_not_called
+}
+
+@test "compare on a fork's default branch compares it with the repository it was forked from" {
+  make_repo repo origin=https://github.com/alice/repo.git upstream=https://github.com/org/repo.git
+  set_remote_head origin main
+  set_remote_head upstream main
+  git branch -q --set-upstream-to=origin/main
+  run hub compare -u
+  assert_success
+  assert_output_equals "https://github.com/org/repo/compare/alice:main"
+  run hub compare -u -b develop
+  assert_output_equals "https://github.com/org/repo/compare/develop...alice:main"
+  # a fork whose default branch has another name
+  git checkout -q -b trunk
+  git update-ref refs/remotes/origin/trunk HEAD
+  git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/trunk
+  git branch -q --set-upstream-to=origin/trunk
+  run hub compare -u
+  assert_output_equals "https://github.com/org/repo/compare/alice:trunk"
+  # the compared repository's own copy of main is its default branch
+  git checkout -q main
+  git config branch.main.remote upstream
+  run hub compare -u
+  assert_failure
+  assert_output_equals "Aborted: main is the default branch; name a branch or a BASE...HEAD range to compare, or use -b BASE."
+  GH_REPO=alice/repo run hub compare -u # unless the compare page is another repository's
+  assert_success
+  assert_output_equals "https://github.com/alice/repo/compare/org:main"
+  assert_gh_not_called
+}
+
 @test "compare follows remote.pushDefault to the fork a branch was pushed to" {
   make_repo dotfiles origin=https://github.com/dotcom/dotfiles.git mislav=git@github.com:mislav/dotfiles.git
   set_remote_head origin main
@@ -180,6 +305,17 @@ load ../test_helper
   assert_success
   assert_output_equals "open https://github.com/dotcom/dotfiles/compare/mislav:feature"
   assert_gh_not_called
+}
+
+@test "compare uses the name the branch has on the remote" {
+  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
+  set_remote_head origin main
+  git checkout -q -b local-name
+  git config remote.origin.push refs/heads/local-name:refs/heads/published
+  git update-ref refs/remotes/origin/published HEAD
+  run hub compare -u
+  assert_success
+  assert_output_equals "https://github.com/mislav/dotfiles/compare/published"
 }
 
 @test "compare keeps the plain branch name when it pushes to the same repository" {
@@ -206,11 +342,11 @@ load ../test_helper
   assert_gh_not_called
 }
 
-@test "compare writes FORKOWNER:BRANCH when the fork it pushes to has the branch" {
+@test "compare writes FORKOWNER:BRANCH when the fork it is configured to push to has the branch" {
   make_repo repo origin=https://github.com/alice/repo.git upstream=https://github.com/org/repo.git
   set_remote_head upstream main
   git checkout -q -b feature
-  git config branch.feature.pushRemote origin
+  git config branch.feature.pushRemote origin # git push alone would refuse (no upstream); it went with git push origin feature
   git update-ref refs/remotes/origin/feature HEAD
   run hub compare -u
   assert_success
@@ -256,6 +392,14 @@ load ../test_helper
   run hub compare -u
   assert_success
   assert_output_equals "https://enterprise.example/org/repo/compare/alice:feature"
+  # main pushed to a fork on another host: on the compare page's host it is the repository's own main
+  git remote set-url origin https://github.com/alice/repo.git
+  git update-ref refs/remotes/origin/main HEAD
+  git checkout -q main
+  git branch -q --set-upstream-to=origin/main
+  run hub compare -u
+  assert_failure
+  assert_output_equals "Aborted: main is the default branch; name a branch or a BASE...HEAD range to compare, or use -b BASE."
   assert_gh_not_called
 }
 
@@ -292,6 +436,25 @@ load ../test_helper
   assert_output_equals "https://github.com/mislav/dotfiles/compare/v1...v2"
   run hub --noop compare -c v1..v2
   assert_output_equals "copy to clipboard: https://github.com/mislav/dotfiles/compare/v1...v2"
+  run hub --noop compare --url --copy v1..v2
+  assert_output_equals $'https://github.com/mislav/dotfiles/compare/v1...v2\ncopy to clipboard: https://github.com/mislav/dotfiles/compare/v1...v2'
+}
+
+@test "compare exits with the status of a browser or clipboard tool that fails" {
+  make_repo repo origin=https://github.com/alice/repo.git
+  failing_tools
+  run hub compare main...topic
+  assert_status 19
+  assert_output_equals "browser failed: https://github.com/alice/repo/compare/main...topic"
+  run hub compare -c main...topic
+  assert_status 17
+  assert_output_equals "clipboard failed"
+  run hub compare -uc main...topic # the URL is printed, then the copy fails
+  assert_status 17
+  assert_output_equals $'https://github.com/alice/repo/compare/main...topic\nclipboard failed'
+  run hub compare -u main...topic
+  assert_success
+  assert_output_equals "https://github.com/alice/repo/compare/main...topic"
 }
 
 @test "compare uses the remote's enterprise host" {
@@ -328,17 +491,22 @@ load ../test_helper
   make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
   run hub compare --bogus
   assert_failure
-  assert_output_contains "unknown option: --bogus"
+  assert_output_equals $'hub compare: unknown option: --bogus\nUsage: hub compare [-u] [-c] [-b BASE] [OWNER] [[BASE...]HEAD]'
   run hub compare a b c
   assert_failure
-  assert_output_contains "Usage: hub compare"
+  assert_output_contains "hub compare: too many arguments"
   run hub compare -b
   assert_failure
-  assert_output_contains "needs a BASE"
+  assert_output_contains "hub compare: -b needs a BASE"
+  run hub compare --base
+  assert_failure
+  assert_output_contains "hub compare: --base needs a BASE"
+  assert_gh_not_called
 }
 
 @test "compare --help prints the manual" {
   run hub compare --help
   assert_success
   assert_output_contains "Usage: hub compare [-u] [-c] [-b BASE]"
+  assert_output_contains "FORKOWNER:FORKREPO:BRANCH"
 }

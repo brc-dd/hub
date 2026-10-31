@@ -8,127 +8,167 @@ heading.
 
 ## Unreleased
 
+A redesign of the wrapper after a consolidated review of hub 0.1.0 and its
+five rounds of fixes. The commands are the same; how hub reads a command line
+is not.
+
 ### Changed
 
-- A simplification pass over the whole code base: shared helpers in core,
-  man-page-sized module headers, fewer special cases. Behavior documented in
-  the manuals is unchanged unless listed here.
+- **git is the only authority on global options.** hub scans a command line
+  only to find the command word. When the word is one of hub's commands, hub
+  re-enters itself through a git alias (`git GLOBALS -c alias.hubrun=... hubrun
+  ...`), so `-C`, `-c`, `--config-env`, `--git-dir`, `--work-tree`, `--bare`,
+  `--namespace`, `--no-replace-objects` and the rest mean exactly what they
+  mean to git, for hub's own git commands and for the git commands gh runs.
+  Anything else, including an unknown option, an empty command word, a missing
+  option value and the immediate options (`--exec-path`, `--html-path`,
+  `--list-cmds=`), is `exec git "$@"`. `--noop` prints the global options with
+  every command.
+- **Every command is one of three kinds, with one rule each.** hub-owned
+  commands (`pull-request`, `browse`, `compare`, `create`, `fork`, `delete`,
+  `ci-status`, `sync`, `alias`) have a closed grammar: option clusters and
+  attached values work, unknown options are errors, flags never take values.
+  gh-backed commands (`pr`, `issue`, `release`, `gist`, `api`) map only the
+  subcommand names gh lacks (`show` to `view`, none to `list`, found as gh
+  itself finds the word) and hand everything else to gh unchanged. git commands
+  hub extends (`clone`, `remote`, `fetch`, `push`, `checkout`, `merge`, `am`,
+  `apply`, `cherry-pick`) know git's value-taking options only to find their
+  one shorthand operand; everything else goes to git as written, and nothing
+  after `--` is interpreted.
+- **Old hub option spellings for gh-backed commands are no longer translated**:
+  `issue update`, `issue labels`, `-m`/`-F` as title and body, `release -a`,
+  `-t REF`, `release download -i`, `gist --public`/`-o`, `pr checkout N BRANCH`,
+  `api -t`/`--cache N`. gh's own options apply; each manual names the gh
+  spelling. `hub pr`, `hub issue`, `hub release` and `hub gist` alone list.
+- **Shorthand precedence follows git.** An exact existing remote or group is
+  git's; so is anything git could read as a local source (an existing path, a
+  `NAME.git` repository, a `NAME.bundle` for clone); only then is a name a
+  GitHub shorthand. Dotted names (`.github`, `mislav.github.io`) expand again;
+  a one-operand `remote add NAME` always expands. `clone` no longer takes
+  `HOST/OWNER/REPO`: other hosts come from `GH_HOST` or `hub.host`.
+- `fetch` accepts options before the names and `--multiple` anywhere (the last
+  of `--multiple`/`--no-multiple` counts); a list member that is empty or not a
+  login is an error before any remote is added; a remote whose name contains a
+  comma is fetched as it is. `push` accepts options before the remote list,
+  checks every member before the first push, and never splits an existing
+  remote, a path or a URL.
+- `merge` fetches the pull request into a private ref and merges that commit,
+  takes the last of `--squash`/`--no-squash`, adds `--no-ff` only when no
+  fast-forward option was given, and refuses a second revision. `cherry-pick`
+  resolves every URL or `USER@SHA` operand, prefers a local revision of that
+  name, and finds a pull request's commit by id in its history. `am` and
+  `apply` download pull-request, commit and compare URLs (also `.patch` and
+  `.diff`) through `gh api`.
+- `pull-request` has hub's grammar only (`-R`, `--dry-run`, `--fill` and gh
+  passthrough are gone): the head is named from where `git push` sends the
+  branch and from that remote's push URL; without `-p` the branch must be
+  pushed, which `-f` skips; `-p` checks everything, including what gh would
+  refuse without a terminal, before pushing `HEAD:refs/heads/BRANCH`;
+  `--no-edit` takes the first commit's message; `-i` converts an issue through
+  the API with string fields; `-o` and `-c` leave gh's prompts alone and look
+  the URL up afterwards.
+- `create` runs `gh repo create HOST/OWNER/NAME --source=TOP --remote=REMOTE`
+  without changing directory, takes `OWNER/NAME`, `HOST/OWNER/NAME` or a URL,
+  gains `--push`, and no longer accepts gh's other options. `fork` runs
+  `gh repo fork --remote --remote-name` with `GH_REPO` set to the project hub
+  resolved, gives the remote the URL hub's protocol chooses, no longer fetches
+  or retries, and refuses an existing remote name before gh runs.
+- `sync [--color] [REMOTE]` fetches with a fixed refspec, so no fetch or prune
+  configuration can touch local branches or tags; every fast-forward and
+  deletion is conditional on the state sync observed; branches checked out in
+  another work tree and symbolic refs are skipped; the default branch is
+  entered with `git switch` and created from the remote when missing.
+- `browse` and `compare` take option clusters and attached values, follow the
+  repository a branch pushes to (by its push URL), and `compare` writes a
+  renamed fork's head as `OWNER:REPO:BRANCH`. `ci-status` keeps a failure it
+  has seen whatever a later page does and encodes unresolved refs as one URL
+  segment.
+- Remote identity: a remote's URL is read as git uses it; SSH hosts are
+  resolved through the ssh git would run (`GIT_SSH_COMMAND`, `core.sshCommand`,
+  `GIT_SSH`, then `ssh`), with the user and port, so `Match` blocks and
+  port-443 aliases work and HTTPS hosts are taken literally; `GH_REPO` must be
+  `OWNER/REPO`, `HOST/OWNER/REPO` or a URL. Push destinations follow git's own
+  rules (`remote.*.push`, `branch.*.pushRemote`, `remote.pushDefault`,
+  `push.default`). Branches are handled as full refs, so a tag of the same
+  name cannot confuse them.
+- Prerequisites: bash 5.3, git 2.41 and gh 2.40 or newer, with the reason for
+  each in the README. `make install PREFIX="$HOME/.local"` is the documented
+  local install; `make install` refuses to overwrite anything it did not
+  create. Completions no longer replace a user's own git completion
+  customizations and find hub's command word after any global option.
+  `script/release` names the canonical repository, pushes exact refspecs,
+  publishes drafts and resumes after its formula commit; the formula workflow
+  picks the highest version.
+- The test suite asserts effects with real git: a local github.com of bare
+  repositories reached through ssh and https stubs, with no URL rewriting, so
+  remotes keep the URLs a user would have. Fixtures are isolated from the
+  caller's `GIT_*`, `GH_*` and `HUB_*` environment.
+- Docs name bash 5.3 as the tested version; `hub version` also prints gh's
+  version and names this hub by its repository, https://github.com/brc-dd/hub.
 - The workflows keep readable action versions in the YAML and pin them through
   `.github/workflows/actions.lock` (`gh actions-lock`), verified in CI;
   Dependabot keeps both current.
-- Docs name bash 5.3 as the tested version; `hub version` also prints gh's
-  version and names this hub by its repository, https://github.com/brc-dd/hub.
-- Simplification fallout: `fork` no longer accepts gh's own option spellings
-  (`--remote=BOOL`, `--clone=false`) or validates fork names itself; `release
-  edit --clobber` without `-a` reaches gh, which rejects it; `create` passes
-  `--description=` and `--homepage=` as typed; outside a repository, `fork` and
-  `ci-status` report the missing GitHub remote.
-- `pull-request` was rebuilt around four steps (parse, base, head, run): hub's
-  option letters now mean hub's options inside option clusters too; plain `-p`
-  pushes `HEAD:refs/heads/BRANCH` to the branch's push target with
-  `--set-upstream`; a failed GitHub lookup stops the command instead of
-  trying another remote; an issue URL together with `-b OWNER:BRANCH` is an
-  error.
 - MIT license.
 
 ### Fixed
 
-- Commit URLs are only treated as commits when their last segment is a hash,
-  so `…/pull/N/commits/main` can no longer cherry-pick a local branch.
-- `pull-request`: an invalid `--dry-run` value is an error before anything
-  runs; sibling forks of the base are accepted; a renamed fork is found even
-  when an unrelated remote has the base's name; `-R`/`--repo` must be
-  well-formed.
-- `-c`/`--config-env` are mirrored into the environment of hub's gh calls only,
-  so git no longer sees each setting twice; `--git-dir`, `--work-tree` and
-  `--namespace` reach gh as well; a missing `--config-env` variable is fatal.
-- `fetch` lets the last of `--multiple`/`--no-multiple` decide; `compare`
-  rejects evidence from a remote on another host; `release` reads `-m=`,
-  `-t=`, `-a=`, `-F=` and `-i=` like gh; `issue update` reads `-R=` like gh.
-- `fork` says both possible causes when a new fork cannot be fetched yet; the
-  formula job reconciles to the newest stable release so job ordering cannot
-  apply an older tag; release creation survives a lost race.
-- `pull-request -p` applies one rule before any push: the push remote's
-  push URLs must name a single GitHub repository on the base's host that is
-  the base itself or a fork of it (checked with one API lookup), the head
-  owner must not be an organization, and `-R`/`--repo` must be a well-formed
-  repository; `-p -h OWNER:BRANCH` resolves OWNER's fork of the actual base.
-- Hosts gh is logged in to are recognized as GitHub hosts without `hub.host`;
-  ports in `GH_HOST` no longer break host recognition, and SSH URLs for such
-  hosts use the `ssh://` form on the default port.
-- `-c` and `--config-env` also reach the git commands gh runs itself.
-- `fork` retries the first fetch while GitHub is still creating the fork.
-- `fetch` recognizes `--multiple` anywhere among the leading options.
-- `compare` builds the head from the remote whose tracking ref proved the
-  branch exists.
-- `issue update` reads `-R=org/repo` and other `-X=VALUE` forms like gh does.
-- The release workflow publishes each tag in its own job so an overlapping
-  release cannot cancel another; only the formula update is serialized.
-- `pull-request` always passes the repository hub resolved to gh (`--repo`),
-  unless `-R` is given; the head owner comes from the push remote's push URL,
-  not its fetch URL, and all push URLs must agree; gh's `-H` inside an option
-  cluster counts as hub's `-h`.
-- `am`, `apply` and `cherry-pick` always name the URL's host when asking the
-  API, so a single Enterprise login cannot divert a github.com lookup.
-- `fork` takes the fork's real name from the API response, so an existing,
-  renamed fork gets the right remote; `issue update -s closed --duplicate-of`
-  rejects closing an issue as a duplicate of itself.
-- `fetch --multiple` handles options before, between and after the names.
-- `-c` and `--config-env` are forwarded to git verbatim (valueless `-c` and
-  any environment name work), apply to hub's own git queries, and show up in
-  `--noop` output; only a token that applies to the host overrides gh's cached
-  login.
-- `browse` and `compare` understand `OWNER/REPO.wiki` projects; `compare`
-  refuses an unpushed branch and a base equal to the head.
-- Release publishing recovers when the other publisher created the release
-  first; the formula downgrade guard compares SemVer precedence properly
-  (`script/update-formula --self-test` runs its fixtures, also in `make check`).
-- `pull-request --dry-run` pins the head so gh cannot push or fork during its
-  own dry run; issue conversion and `-b OWNER:BRANCH` always hand gh the
-  repository and host hub resolved; `-p -h OWNER:BRANCH` refuses a remote
-  whose push URL points elsewhere.
-- `sync` confirms with `git ls-remote` that a gone branch was really deleted
-  on the remote before deleting it locally (negative fetch refspecs no longer
-  cause deletions).
-- `fork` forks the repository hub resolved and adds the remote itself, so gh's
-  default-repository setting cannot divert it; an existing remote of that
-  name is checked before anything is forked.
-- `issue update -s closed` validates `--reason` and `--duplicate-of` before
-  running anything.
-- `am`/`apply` pass `--allow-escape-sequences` when gh supports it, so patches
-  containing escape bytes apply.
-- `fetch --multiple USER USER2` adds the missing remotes like the comma form.
-- `-c` and `--config-env` keep git's left-to-right precedence.
-- The login is looked up through the API when a token variable overrides gh's
-  stored credentials; the default-branch lookup always names the host.
-- `script/release` and the release workflow recover from each other publishing
-  first instead of failing on a duplicate release or push.
-- `push` to several remotes forwards the arguments exactly as given and appends
-  the current branch only when nothing follows the remotes; `--delete`,
-  `--tags`, `--all` and option values no longer gain an invented ref.
-- `pull-request -p` with `-h OWNER:BRANCH` or `-h BRANCH` pushes to the remote
-  and branch the head names; `-b OWNER[/REPO]:BRANCH` becomes `--repo` plus
-  `--base`; gh option values are never read as hub flags; `--dry-run` never
-  pushes; converting an issue from another repository uses that repository.
-- `issue update` takes hub's `-m`/`-F` as title and body again and closes or
-  reopens every number given; state-specific options are validated first.
-- `release edit -a` uploads without `--clobber` unless asked; asset files are
-  checked before anything runs.
-- `api -t`/`--flat` is an error instead of silently printing JSON.
-- `create` applies its remote check to `-r`/`--remote` too, refuses options
-  gh rejects with `--source`, and `-c` copies the URL as in hub 2.x.
-- `remote add origin` alone means your own fork again.
-- `am`/`apply` no longer treat option values such as `--exclude URL` as patches.
-- `sync` exits non-zero when a branch could not be updated or deleted.
-- `ci-status` resolves the repository itself and tolerates 403/404/422 from
-  the check-runs API, as hub 2.x did.
-- `browse -- commits` and `browse -- tree` follow the current branch.
-- `GITHUB_HOST` is passed to gh as `GH_HOST`; the default host follows gh's
-  rule (the only logged-in host, else github.com); `HUB_PROTOCOL` is honored;
-  `*.ghe.com` SSH URLs use the tenant user; `GH_BROWSER` is preferred.
-- `hub -C ''` is a no-op like `git -C ''`; the fast path quotes `--noop` output.
-- `make install` fails when a link cannot be created; `script/update-formula`
-  refuses to downgrade the formula unless `--force` is given.
+- `-C` could select another repository through `CDPATH`, a symlinked parent or
+  `OLDPWD`; `--bare` after `-C` applied to the wrong repository; `-c` settings
+  reached git in the wrong order, lost valueless settings and valid
+  `GIT_CONFIG_COUNT` values, and did not reach gh's git; `--no-replace-objects`
+  and the other safeguards did not reach gh's git; `--list-cmds=` could run a
+  following command; an empty command word ran the next argument.
+- An HTTPS push destination was approved from an SSH alias of the same name;
+  SSH aliases to `ssh.github.com:443` and `Match` remaps were not understood;
+  the push preflight asked a different ssh than git uses; an explicit port in
+  `GH_HOST` chose the wrong tenant user; malformed `GH_REPO` values were read
+  as another host; quoted keys in gh's `hosts.yml` were invisible.
+- Push destinations were guessed from fetch refspecs (`remote.*.push`,
+  `pushRemote`, `pushDefault` and `push.default` were ignored); ambiguous ref
+  names were shortened to the wrong branch; a dangling cached remote HEAD
+  supplied a deleted base branch.
+- A failed read of a message file or standard input could submit an empty or
+  partial message; `--noop` output left a literal tilde unquoted and omitted
+  `-C`.
+- `pull-request -p` pushed before gh rejected its arguments; a failed browse or
+  copy hid the created pull request's URL; `-o`/`-c` captured gh's output and
+  broke interactive creation; option clusters smuggled gh options past
+  `create`'s checks; `create` changed directory, refused linked work trees for
+  its own reasons and opened a malformed URL for a full-URL name; `create` and
+  `fork` did remote work before checking the remote name.
+- `browse` and `compare` dropped the push destination's repository identity and
+  rejected attached values and option clusters; `compare` refused a fork branch
+  named like the base's default branch; `ci-status` let a later check-runs
+  page error discard a failure it had seen and put unresolved refs into the API
+  URL unencoded; a failed browser or clipboard tool returned success.
+- `clone` no longer expanded `.github`-style names; `fetch` split an existing
+  remote whose name contains a comma, added remotes for invalid list members,
+  and let a late `--no-multiple` cancel what hub had already acted on; `remote
+  set-url --delete --no-delete` saved a literal shorthand; `push` could turn a
+  list member into options; `checkout -b ''` was treated as omitted and a
+  `--pathspec-from-file` value as the pull request; `cherry-pick` took a local
+  `USER@SHA` revision for GitHub shorthand and could pick a same-prefix local
+  branch; `am` and `apply` rejected `.patch` and `.diff` URLs; a `.git`
+  directory suffix was doubled in fallback repository names.
+- `sync` could restore a file or follow `checkout.defaultRemote` when switching
+  to the default branch, prune unmerged local branches through fetch
+  configuration, overwrite a branch moved after its snapshot, update branches
+  through symbolic aliases, and report a fast-forward that a squash setting had
+  not performed; `merge` merged a ref a concurrent fetch could move, mistook a
+  clustered `-m` value for the pull request, and ignored `--no-squash` after
+  `--squash`.
+- gh-backed commands: every mistranslation of old hub options (release assets
+  turning into options, mixed issue locators closing in different
+  repositories, partial batches, clustered flags, empty option values, lost
+  positionals after `--`, `-R` before the subcommand) is gone with the
+  translation itself; the arguments reach gh as typed.
+- Release tooling: an SSH alias was passed to gh as the API host, the formula
+  phase could not resume, `--follow-tags` pushed unrelated tags, the formula
+  job took the newest instead of the highest release, drafts counted as
+  published, the dry-run help overstated what it checks; `make install`
+  reported success when a destination was a directory and broke on prefixes
+  with an apostrophe; completions replaced existing git customizations and
+  lost hub's commands after separate-valued global options.
 
 ## v0.1.0 — 2026-10-29
 

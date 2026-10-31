@@ -1,302 +1,200 @@
 #!/usr/bin/env bats
+# shellcheck disable=SC2030,SC2031  # each @test runs in a subshell, so its exports stay local on purpose
 load ../test_helper
 
-@test "fork forks hub's project through the API, then adds the fork as a remote named after your login and fetches it" {
+# fake_gh_fork : a gh whose `repo fork --remote` adds the remote as gh does: the fork of GH_REPO,
+# with the scheme of the remote origin points at the parent with, and records GH_REPO.
+fake_gh_fork() {
+  mkdir -p "$HUB_TEST_TMP/fake"
+  cat >"$HUB_TEST_TMP/fake/gh" <<'SH'
+#!/usr/bin/env bash
+[[ $1 == repo && $2 == fork ]] || exec "$HUB_TEST_ROOT/test/stubs/gh" "$@"
+printf 'gh %s\n' "$*" >>"$HUB_TEST_LOG"
+printf '%s\n' "${GH_REPO-}" >"$HUB_TEST_TMP/gh.repo"
+owner=mislav name=${GH_REPO##*/} remote=origin
+while (($#)); do
+  case $1 in
+    --remote-name) remote=$2 && shift ;;
+    --org) owner=$2 && shift ;;
+    --fork-name) name=$2 && shift ;;
+  esac
+  shift
+done
+url=https://github.com/$owner/$name.git
+[[ $(git remote get-url origin) != git@* ]] || url=git@github.com:$owner/$name.git
+git remote add "$remote" "$url"
+SH
+  chmod +x "$HUB_TEST_TMP/fake/gh"
+  export PATH=$HUB_TEST_TMP/fake:$PATH
+}
+
+@test "fork forks hub's project with gh's compound command, which adds the fork as a remote named after you" {
   make_repo dotfiles origin=https://github.com/dotcom/dotfiles.git
   run hub --noop fork
   assert_success
-  assert_output_equals $'gh api --hostname github.com -X POST repos/dotcom/dotfiles/forks --jq .full_name\ngit remote add mislav https://github.com/mislav/dotfiles.git\ngit fetch mislav'
-  assert_gh_called 'config get user -h github.com'
-  [[ $(gh_calls) != *"/forks"* ]]
+  assert_output_equals "env GH_REPO=github.com/dotcom/dotfiles gh repo fork --remote --remote-name mislav"
+  fake_gh_fork
+  run hub fork
+  assert_success
+  assert_equals "$(cat "$HUB_TEST_TMP/gh.repo")" github.com/dotcom/dotfiles
+  assert_equals "$(remote_url mislav)" https://github.com/mislav/dotfiles.git
+  assert_gh_called 'repo fork --remote --remote-name mislav'
 }
 
-@test "fork forks the upstream remote's repository, whatever gh's default repository is" {
+@test "fork forks the upstream remote's repository, whatever gh's default is, and GH_REPO when set" {
   make_repo dotfiles origin=https://github.com/hubot/dotfiles.git upstream=https://github.com/dotcom/dotfiles.git
   git config remote.origin.gh-resolved base # what gh repo set-default origin records
   run hub --noop fork
   assert_success
-  assert_output_equals $'gh api --hostname github.com -X POST repos/dotcom/dotfiles/forks --jq .full_name\ngit remote add mislav https://github.com/mislav/dotfiles.git\ngit fetch mislav'
-}
-
-@test "fork names the project's host for gh, and uses your login and the protocol on that host" {
-  make_repo app origin=git@ghe.example.com:corp/app.git
-  git config hub.host ghe.example.com # gh's default host stays github.com
+  assert_output_equals "env GH_REPO=github.com/dotcom/dotfiles gh repo fork --remote --remote-name mislav"
   stub_gh 'config get user -h ghe.example.com' 'mona'
-  stub_gh 'config get git_protocol -h ghe.example.com' 'ssh'
-  run hub --noop fork
+  GH_REPO=ghe.example.com/corp/app run hub --noop fork
   assert_success
-  assert_output_equals $'gh api --hostname ghe.example.com -X POST repos/corp/app/forks --jq .full_name\ngit remote add mona git@ghe.example.com:mona/app.git\ngit fetch mona'
+  assert_output_equals "env GH_REPO=ghe.example.com/corp/app gh repo fork --remote --remote-name mona"
 }
 
-@test "fork forks GH_REPO when it is set" {
-  make_repo dotfiles origin=https://github.com/dotcom/dotfiles.git
-  export GH_REPO=ghe.example.com/corp/app
-  stub_gh 'config get user -h ghe.example.com' 'mona'
-  run hub --noop fork
-  assert_success
-  assert_output_equals $'gh api --hostname ghe.example.com -X POST repos/corp/app/forks --jq .full_name\ngit remote add mona https://ghe.example.com/mona/app.git\ngit fetch mona'
-}
-
-@test "fork --org forks into the organization and names the remote after it" {
+@test "fork ORGANIZATION and --org fork into the organization, with a remote named after it" {
   make_repo dotfiles origin=https://github.com/dotcom/dotfiles.git
   run hub --noop fork --org myorg
   assert_success
-  assert_output_equals $'gh api --hostname github.com -X POST repos/dotcom/dotfiles/forks -f organization=myorg --jq .full_name\ngit remote add myorg https://github.com/myorg/dotfiles.git\ngit fetch myorg'
-  run hub --noop fork --org=myorg
+  assert_output_equals "env GH_REPO=github.com/dotcom/dotfiles gh repo fork --remote --remote-name myorg --org myorg"
+  run hub --noop fork myorg
   assert_success
-  assert_output_equals $'gh api --hostname github.com -X POST repos/dotcom/dotfiles/forks -f organization=myorg --jq .full_name\ngit remote add myorg https://github.com/myorg/dotfiles.git\ngit fetch myorg'
-  [[ $(gh_calls) != *"config get user"* ]]
+  assert_output_equals "env GH_REPO=github.com/dotcom/dotfiles gh repo fork --remote --remote-name myorg --org myorg"
+  run hub --noop fork --org=myorg myorg
+  assert_success
+  assert_output_equals "env GH_REPO=github.com/dotcom/dotfiles gh repo fork --remote --remote-name myorg --org myorg"
+  run hub --noop fork --org myorg other
+  assert_failure
+  assert_output_equals "Aborted: name the organization once (--org myorg and other)."
+  run hub --noop fork 'bad org'
+  assert_failure
+  assert_output_equals "Aborted: not an organization name: bad org (letters, digits and - only)"
+  [[ $(gh_calls) != *"config get user"* ]] # no login lookup either
 }
 
-@test "fork --remote-name picks the remote name" {
+@test "fork --remote-name, --fork-name and --default-branch-only" {
   make_repo dotfiles origin=https://github.com/dotcom/dotfiles.git
   run hub --noop fork --remote-name fork
   assert_success
-  assert_output_equals $'gh api --hostname github.com -X POST repos/dotcom/dotfiles/forks --jq .full_name\ngit remote add fork https://github.com/mislav/dotfiles.git\ngit fetch fork'
-  run hub --noop fork --remote-name=mine --org myorg
-  assert_success
-  assert_output_equals $'gh api --hostname github.com -X POST repos/dotcom/dotfiles/forks -f organization=myorg --jq .full_name\ngit remote add mine https://github.com/myorg/dotfiles.git\ngit fetch mine'
-}
-
-@test "fork --fork-name asks for that name, and --noop shows the fork by it" {
-  make_repo dotfiles origin=https://github.com/dotcom/dotfiles.git
+  assert_output_equals "env GH_REPO=github.com/dotcom/dotfiles gh repo fork --remote --remote-name fork"
   run hub --noop fork --fork-name dots
   assert_success
-  assert_output_equals $'gh api --hostname github.com -X POST repos/dotcom/dotfiles/forks -f name=dots --jq .full_name\ngit remote add mislav https://github.com/mislav/dots.git\ngit fetch mislav'
-  run hub --noop fork --fork-name=dots --org myorg
+  assert_output_equals "env GH_REPO=github.com/dotcom/dotfiles gh repo fork --remote --remote-name mislav --fork-name dots"
+  run hub --noop fork --default-branch-only --remote-name=mine --org myorg --fork-name=dots
   assert_success
-  assert_output_equals $'gh api --hostname github.com -X POST repos/dotcom/dotfiles/forks -f organization=myorg -f name=dots --jq .full_name\ngit remote add myorg https://github.com/myorg/dots.git\ngit fetch myorg'
+  assert_output_equals "env GH_REPO=github.com/dotcom/dotfiles gh repo fork --remote --remote-name mine --org myorg --fork-name dots --default-branch-only"
+  run hub --noop fork --fork-name 'bad name'
+  assert_failure
+  assert_output_equals "Aborted: not a repository name: bad name (letters, digits, -, _ and . only)"
 }
 
-@test "fork --default-branch-only forks only the default branch" {
-  make_repo dotfiles origin=https://github.com/dotcom/dotfiles.git
-  run hub --noop fork --default-branch-only
-  assert_success
-  assert_output_equals $'gh api --hostname github.com -X POST repos/dotcom/dotfiles/forks -F default_branch_only=true --jq .full_name\ngit remote add mislav https://github.com/mislav/dotfiles.git\ngit fetch mislav'
-  run hub --noop fork --default-branch-only --fork-name dots --org myorg --no-remote
-  assert_success
-  assert_output_equals "gh api --hostname github.com -X POST repos/dotcom/dotfiles/forks -f organization=myorg -f name=dots -F default_branch_only=true --jq .full_name"
-}
-
-@test "fork --no-remote only forks" {
+@test "fork --no-remote only forks, in or outside a repository" {
   make_repo dotfiles origin=https://github.com/dotcom/dotfiles.git
   run hub --noop fork --no-remote
   assert_success
-  assert_output_equals "gh api --hostname github.com -X POST repos/dotcom/dotfiles/forks --jq .full_name"
-  run hub --noop fork --org myorg --fork-name dots --no-remote
+  assert_output_equals "gh repo fork github.com/dotcom/dotfiles --clone=false"
+  run hub --noop fork --no-remote --org myorg --fork-name dots --default-branch-only
   assert_success
-  assert_output_equals "gh api --hostname github.com -X POST repos/dotcom/dotfiles/forks -f organization=myorg -f name=dots --jq .full_name"
-  assert_gh_not_called
-}
-
-@test "fork --no-remote prints the fork GitHub returns and adds no remote" {
-  make_repo dotfiles origin=https://github.com/dotcom/dotfiles.git
-  stub_gh 'api --hostname github.com -X POST repos/dotcom/dotfiles/forks --jq .full_name' 'mislav/dots'
+  assert_output_equals "gh repo fork github.com/dotcom/dotfiles --clone=false --org myorg --fork-name dots --default-branch-only"
+  run hub --noop fork --no-remote --remote-name x
+  assert_failure
+  assert_output_equals "Aborted: --no-remote and --remote-name cannot be used together."
+  stub_gh 'repo fork github.com/dotcom/dotfiles --clone=false' 'Created fork mislav/dotfiles'
   run hub fork --no-remote
   assert_success
-  assert_output_equals "mislav/dots"
+  assert_output_equals "Created fork mislav/dotfiles"
+  [[ $(git remote) == origin ]]
+  cd "$HUB_TEST_TMP"
+  GH_REPO=dotcom/dotfiles run hub --noop fork --no-remote
+  assert_success
+  assert_output_equals "gh repo fork github.com/dotcom/dotfiles --clone=false"
+  run hub --noop fork --no-remote
+  assert_failure
+  assert_output_contains "Aborted: could not find a GitHub remote"
+}
+
+@test "fork checks the repository and the remote name before gh runs" {
+  make_repo dotfiles origin=https://github.com/dotcom/dotfiles.git
+  run hub fork --remote-name origin
+  assert_failure
+  assert_output_equals "Aborted: a remote named 'origin' already exists; pick another name with --remote-name NAME."
+  git remote add mislav https://github.com/mislav/other.git
+  run hub fork
+  assert_failure
+  assert_output_equals "Aborted: a remote named 'mislav' already exists; pick another name with --remote-name NAME."
+  local name
+  for name in 'bad name' --mirror=fetch -x 'a..b'; do
+    run hub fork --remote-name "$name"
+    assert_failure
+    assert_output_equals "Aborted: not a remote name: '$name'"
+  done
+  cd "$HUB_TEST_TMP"
+  GH_REPO=dotcom/dotfiles run hub fork
+  assert_failure
+  assert_output_equals "fatal: not a git repository (or any of the parent directories): .git"
+  [[ $(gh_calls) != *"repo fork"* ]]
+}
+
+@test "fork gives the remote hub's protocol when gh's differs" {
+  make_repo dotfiles origin=https://github.com/dotcom/dotfiles.git
+  fake_gh_fork
+  git config hub.protocol ssh
+  run hub --noop fork
+  assert_success
+  assert_output_equals $'env GH_REPO=github.com/dotcom/dotfiles gh repo fork --remote --remote-name mislav\ngit remote set-url mislav git@github.com:mislav/dotfiles.git'
+  run hub fork --fork-name dots # the URL gh recorded names the fork
+  assert_success
+  assert_equals "$(remote_url mislav)" git@github.com:mislav/dots.git
+  git remote remove mislav
+  git config --unset hub.protocol
+  git remote set-url origin git@github.com:dotcom/dotfiles.git # gh follows the parent's remote: ssh
+  run hub --noop fork
+  assert_success
+  assert_output_equals $'env GH_REPO=github.com/dotcom/dotfiles gh repo fork --remote --remote-name mislav\ngit remote set-url mislav https://github.com/mislav/dotfiles.git'
+  run hub fork
+  assert_success
+  assert_equals "$(remote_url mislav)" https://github.com/mislav/dotfiles.git
+  git remote remove mislav
+  stub_gh 'config get git_protocol -h github.com' 'ssh'
+  run hub --noop fork
+  assert_success
+  assert_output_equals "env GH_REPO=github.com/dotcom/dotfiles gh repo fork --remote --remote-name mislav"
+  run hub fork
+  assert_success
+  assert_equals "$(remote_url mislav)" git@github.com:mislav/dotfiles.git
+}
+
+@test "fork fails as gh fails, adding nothing" {
+  make_repo dotfiles origin=https://github.com/dotcom/dotfiles.git
+  stub_gh 'repo fork *' '' 4
+  run hub fork
+  [[ $status -eq 4 ]]
   [[ $(git remote) == origin ]]
 }
 
-@test "fork keeps a remote that already points at the fork and fetches it" {
-  make_repo dotfiles origin=https://github.com/dotcom/dotfiles.git mislav=git@github.com:Mislav/dotfiles.git
-  run hub --noop fork
-  assert_success
-  assert_output_equals $'gh api --hostname github.com -X POST repos/dotcom/dotfiles/forks --jq .full_name\nUsing the existing remote \'mislav\' for mislav/dotfiles.\ngit fetch mislav'
-  git remote add mine https://github.com/myorg/dots.git
-  run hub --noop fork --org myorg --fork-name dots --remote-name mine
-  assert_success
-  assert_output_equals $'gh api --hostname github.com -X POST repos/dotcom/dotfiles/forks -f organization=myorg -f name=dots --jq .full_name\nUsing the existing remote \'mine\' for myorg/dots.\ngit fetch mine'
-}
-
-@test "fork stops before forking when the remote name is taken by a repository that cannot be the fork" {
-  make_repo dotfiles origin=https://github.com/dotcom/dotfiles.git
-  stub_gh 'api --hostname github.com -X POST *' 'mislav/dotfiles'
-  run hub fork --remote-name origin
-  assert_failure
-  assert_output_equals "Aborted: a remote named 'origin' already exists for https://github.com/dotcom/dotfiles.git, not for mislav's fork; pick another name with --remote-name NAME."
-  git remote add mislav ../elsewhere.git
-  run hub fork
-  assert_failure
-  assert_output_equals "Aborted: a remote named 'mislav' already exists for ../elsewhere.git, not for mislav's fork; pick another name with --remote-name NAME."
-  git config hub.host ghe.example.com
-  git remote set-url mislav https://ghe.example.com/mislav/dotfiles.git
-  run hub fork --fork-name dots
-  assert_failure
-  assert_output_equals "Aborted: a remote named 'mislav' already exists for https://ghe.example.com/mislav/dotfiles.git, not for mislav's fork; pick another name with --remote-name NAME."
-  git remote set-url mislav https://github.com/mislav/dotfiles.git
-  run hub fork --org myorg --remote-name mislav
-  assert_failure
-  assert_output_contains "not for myorg's fork;"
-  [[ $(gh_calls) != *"/forks"* ]]
-}
-
-@test "fork refuses other options, empty values and a repository argument before running gh" {
+@test "fork refuses other options, empty values and extra arguments before running gh" {
   make_repo dotfiles origin=https://github.com/dotcom/dotfiles.git
   run hub fork --org=
   assert_failure
-  assert_output_equals "hub fork: --org needs a value"
+  assert_output_equals "Aborted: --org needs a value."
   run hub fork --remote-name
   assert_failure
-  assert_output_equals "hub fork: --remote-name needs a value"
-  run hub fork other/repo
+  assert_output_equals "Aborted: --remote-name needs a value."
+  run hub fork a b
   assert_failure
+  assert_line_equals 0 "hub fork: too many arguments"
   assert_output_contains "Usage: hub fork"
   local opt
-  for opt in --clone --yes --remote -x --default-branch-only=yes --; do
+  for opt in --clone --yes --remote -x --default-branch-only=yes --no-remote=true; do
     run hub fork --org myorg "$opt"
     assert_failure
-    assert_output_equals "hub fork: unknown option: $opt"
+    assert_line_equals 0 "hub fork: unknown option: $opt"
   done
   assert_gh_not_called
 }
 
-@test "fork adds the remote itself and fetches it" {
-  make_repo dotfiles origin=https://github.com/dotcom/dotfiles.git
-  git init -q --bare "$HUB_TEST_TMP/fork.git"
-  git push -q "$HUB_TEST_TMP/fork.git" main
-  # Fetch "from GitHub" out of the local bare repository.
-  git config --global url."$HUB_TEST_TMP/fork.git".insteadOf https://github.com/mislav/dotfiles.git
-  stub_gh 'api --hostname github.com -X POST repos/dotcom/dotfiles/forks --jq .full_name' 'mislav/dotfiles'
-  run hub fork
-  assert_success
-  [[ $output != *"The fork is"* ]]
-  [[ $(git config remote.mislav.url) == https://github.com/mislav/dotfiles.git ]]
-  git rev-parse --verify -q refs/remotes/mislav/main
-}
-
-@test "fork adds the fork GitHub returns, which can be named otherwise than asked" {
-  make_repo dotfiles origin=https://github.com/dotcom/dotfiles.git
-  git init -q --bare "$HUB_TEST_TMP/fork.git"
-  git push -q "$HUB_TEST_TMP/fork.git" main
-  git config --global url."$HUB_TEST_TMP/fork.git".insteadOf https://github.com/mislav/dots.git
-  # The fork mislav already has keeps its name, whatever --fork-name asks for.
-  stub_gh 'api --hostname github.com -X POST repos/dotcom/dotfiles/forks -f name=dotfiles2 --jq .full_name' 'mislav/dots'
-  run hub fork --fork-name dotfiles2
-  assert_success
-  assert_line_equals 0 "The fork is mislav/dots, not mislav/dotfiles2."
-  [[ $(git config remote.mislav.url) == https://github.com/mislav/dots.git ]]
-  git rev-parse --verify -q refs/remotes/mislav/main
-  assert_gh_called 'api --hostname github.com -X POST repos/dotcom/dotfiles/forks -f name=dotfiles2 --jq .full_name'
-}
-
-@test "fork keeps a remote that points at the fork GitHub returns under another name, and fetches it" {
-  make_repo dotfiles origin=https://github.com/dotcom/dotfiles.git mislav=git@github.com:mislav/dots.git
-  git init -q --bare "$HUB_TEST_TMP/fork.git"
-  git push -q "$HUB_TEST_TMP/fork.git" main
-  # Fetch "over SSH from GitHub" out of the local bare repository (the remote's URL stays GitHub's).
-  printf '#!/usr/bin/env bash\nexec git upload-pack "$HUB_TEST_TMP/fork.git"\n' >"$HUB_TEST_TMP/ssh"
-  chmod +x "$HUB_TEST_TMP/ssh"
-  export GIT_SSH_COMMAND=$HUB_TEST_TMP/ssh GIT_SSH_VARIANT=simple
-  stub_gh 'api --hostname github.com -X POST repos/dotcom/dotfiles/forks --jq .full_name' 'mislav/dots'
-  run hub fork
-  assert_success
-  assert_line_equals 0 "The fork is mislav/dots, not mislav/dotfiles."
-  assert_line_equals 1 "Using the existing remote 'mislav' for mislav/dots."
-  [[ $(git config remote.mislav.url) == git@github.com:mislav/dots.git ]]
-  git rev-parse --verify -q refs/remotes/mislav/main
-}
-
-@test "fork fetches a new fork again while git finds no repository at its URL, then names both possible causes" {
-  make_repo dotfiles origin=https://github.com/dotcom/dotfiles.git
-  # The fork's URL leads to no repository, as it does until GitHub has finished creating the fork.
-  git config --global url."$HUB_TEST_TMP/missing.git".insteadOf https://github.com/mislav/dotfiles.git
-  stub_gh 'api --hostname github.com -X POST repos/dotcom/dotfiles/forks --jq .full_name' 'mislav/dotfiles'
-  export HUB_FORK_RETRY_DELAY=0 LC_ALL=C # no pauses; git's own messages in English
-  run hub fork
-  assert_failure
-  [[ $(grep -c "^fatal: '.*' does not appear to be a git repository$" <<<"$output") == 5 ]]
-  [[ $(grep -c 'GitHub may still be creating the fork' <<<"$output") == 4 ]]
-  assert_output_contains "GitHub may still be creating the fork mislav/dotfiles; fetching it again in 0s (retry 1 of 4)."
-  assert_output_contains "(retry 4 of 4)."
-  assert_line_equals -1 "error: could not fetch the fork mislav/dotfiles after 5 attempts: fatal: '$HUB_TEST_TMP/missing.git' does not appear to be a git repository. Either GitHub has not finished creating it (run 'git fetch mislav' later) or this account cannot read it."
-  [[ $(git config remote.mislav.url) == https://github.com/mislav/dotfiles.git ]]
-  # GitHub's answer over SSH, the same for a fork not created yet and one this account cannot read.
-  printf '#!/usr/bin/env bash\necho "ERROR: Repository not found." >&2\nexit 1\n' >"$HUB_TEST_TMP/ssh"
-  chmod +x "$HUB_TEST_TMP/ssh"
-  export GIT_SSH_COMMAND=$HUB_TEST_TMP/ssh GIT_SSH_VARIANT=simple
-  git remote set-url mislav git@github.com:mislav/dotfiles.git
-  run hub fork
-  assert_failure
-  assert_line_equals -1 "error: could not fetch the fork mislav/dotfiles after 5 attempts: ERROR: Repository not found. Either GitHub has not finished creating it (run 'git fetch mislav' later) or this account cannot read it."
-}
-
-@test "fork fetches the new fork as soon as GitHub has finished creating it" {
-  make_repo dotfiles origin=https://github.com/dotcom/dotfiles.git
-  git init -q --bare "$HUB_TEST_TMP/fork.git"
-  git push -q "$HUB_TEST_TMP/fork.git" main
-  # "GitHub over SSH" has no such repository for the first two fetches, then serves the bare one.
-  cat >"$HUB_TEST_TMP/ssh" <<'SSH'
-#!/usr/bin/env bash
-echo >>"$HUB_TEST_TMP/ssh.calls"
-if (($(wc -l <"$HUB_TEST_TMP/ssh.calls") <= 2)); then
-  echo 'ERROR: Repository not found.' >&2
-  exit 1
-fi
-exec git upload-pack "$HUB_TEST_TMP/fork.git"
-SSH
-  chmod +x "$HUB_TEST_TMP/ssh"
-  export GIT_SSH_COMMAND=$HUB_TEST_TMP/ssh GIT_SSH_VARIANT=simple HUB_FORK_RETRY_DELAY=0
-  stub_gh 'config get git_protocol -h github.com' 'ssh'
-  stub_gh 'api --hostname github.com -X POST repos/dotcom/dotfiles/forks --jq .full_name' 'mislav/dotfiles'
-  run hub fork
-  assert_success
-  [[ $(grep -c 'GitHub may still be creating the fork mislav/dotfiles' <<<"$output") == 2 ]]
-  [[ $(git config remote.mislav.url) == git@github.com:mislav/dotfiles.git ]]
-  git rev-parse --verify -q refs/remotes/mislav/main
-}
-
-@test "fork does not fetch again when git fails for another reason than a missing repository" {
-  make_repo dotfiles origin=https://github.com/dotcom/dotfiles.git
-  printf '#!/usr/bin/env bash\necho >>"$HUB_TEST_TMP/ssh.calls"\necho "git@github.com: Permission denied (publickey)." >&2\nexit 255\n' >"$HUB_TEST_TMP/ssh"
-  chmod +x "$HUB_TEST_TMP/ssh"
-  export GIT_SSH_COMMAND=$HUB_TEST_TMP/ssh GIT_SSH_VARIANT=simple HUB_FORK_RETRY_DELAY=0
-  stub_gh 'config get git_protocol -h github.com' 'ssh'
-  stub_gh 'api --hostname github.com -X POST repos/dotcom/dotfiles/forks --jq .full_name' 'mislav/dotfiles'
-  run hub fork
-  assert_failure
-  assert_line_equals 0 "git@github.com: Permission denied (publickey)."
-  assert_line_equals -1 "error: could not fetch the fork mislav/dotfiles. The fork and the remote 'mislav' exist; run 'git fetch mislav' later."
-  [[ $output != *"fetching it again"* ]]
-  [[ $(wc -l <"$HUB_TEST_TMP/ssh.calls") -eq 1 ]]
-  [[ $(git config remote.mislav.url) == git@github.com:mislav/dotfiles.git ]]
-}
-
-@test "fork leaves a remote of yours alone that points at another repository than the fork" {
-  make_repo dotfiles origin=https://github.com/dotcom/dotfiles.git mislav=https://github.com/mislav/other.git
-  stub_gh 'api --hostname github.com -X POST repos/dotcom/dotfiles/forks --jq .full_name' 'mislav/dotfiles'
-  run hub fork
-  assert_failure
-  assert_output_equals "Aborted: a remote named 'mislav' already exists for https://github.com/mislav/other.git, not for the fork mislav/dotfiles; pick another name with --remote-name NAME."
-  [[ $(git config remote.mislav.url) == https://github.com/mislav/other.git ]]
-  run git rev-parse --verify -q refs/remotes/mislav/main
-  assert_failure
-  run hub --noop fork
-  assert_failure
-  assert_output_equals $'gh api --hostname github.com -X POST repos/dotcom/dotfiles/forks --jq .full_name\nAborted: a remote named \'mislav\' already exists for https://github.com/mislav/other.git, not for the fork mislav/dotfiles; pick another name with --remote-name NAME.'
-}
-
-@test "fork adds no remote and fetches nothing when gh fails or GitHub's answer is no fork" {
-  make_repo dotfiles origin=https://github.com/dotcom/dotfiles.git
-  stub_gh 'api --hostname github.com -X POST *' '' 4
-  run hub fork
-  [[ $status -eq 4 ]]
-  assert_output_equals ""
-  stub_gh 'api --hostname github.com -X POST *' ''
-  run hub fork
-  assert_failure
-  assert_output_equals "Aborted: expected the fork's OWNER/REPO from GitHub, got ''."
-  stub_gh 'api --hostname github.com -X POST *' 'Dotcom/dotfiles'
-  run hub fork
-  assert_failure
-  assert_output_equals "Aborted: GitHub gave dotcom/dotfiles itself as the fork; a repository cannot be forked into the account that owns it."
-  [[ $(git remote) == origin ]]
-}
-
-@test "fork needs a GitHub remote" {
-  run hub --noop fork
-  assert_failure
-  assert_output_contains "Aborted: could not find a GitHub remote"
+@test "fork needs a GitHub project" {
   make_repo local-only
   run hub --noop fork
   assert_failure
@@ -309,5 +207,7 @@ SSH
   assert_success
   assert_output_contains "Usage: hub fork"
   assert_output_contains "--fork-name NAME"
-  assert_output_contains "--default-branch-only"
+  run hub fork -h
+  assert_success
+  assert_output_contains "Usage: hub fork"
 }
