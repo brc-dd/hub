@@ -6,7 +6,7 @@ SH_FILES := $(wildcard bin/hub lib/hub/*.sh lib/hub/cmd/*.sh script/* completion
 BATS_FILES := $(wildcard test/*.bats)
 WORKFLOWS := $(wildcard .github/workflows/*.yml)
 
-.PHONY: test lint fmt fmt-check selftest check install uninstall
+.PHONY: test lint fmt fmt-check selftest check site install uninstall
 
 test:
 	bats test
@@ -29,6 +29,9 @@ selftest:
 	script/update-formula --self-test
 
 check: lint fmt-check test selftest
+
+site:
+	script/site site
 
 # make install [PREFIX=/usr/local] [DESTDIR=...]: links bin/hub into BINDIR and each completion
 # that exists into its directory when that directory exists. A destination that is not already

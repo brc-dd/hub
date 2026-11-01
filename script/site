@@ -1,0 +1,169 @@
+#!/usr/bin/env bash
+# Summary: Render hub's manuals as a static website.
+# Usage: script/site DIR
+#
+# Writes DIR/index.html, the dispatcher's manual from bin/hub with the list of commands, and
+# DIR/NAME.html for every lib/hub/cmd/NAME.sh, the manual that hub help NAME prints. DIR is
+# created when missing; other files in it are left alone. The pages have no script and no
+# external resource, and two runs on one commit write the same bytes.
+#
+# A manual is read as hub help prints it, a shebang line dropped: the Summary line, the Usage
+# lines up to the first blank line, then blocks separated by blank lines. In a block, unindented
+# lines are a paragraph, joined into one line; lines indented by two or more spaces are
+# preformatted, less two spaces; an unindented line ending in a colon and followed by indented
+# lines is a heading. & < > are escaped and no other markup is read.
+#
+#   $ script/site site
+#   $ open site/index.html
+
+set -euo pipefail
+
+die() {
+  printf 'script/site: %s\n' "$*" >&2
+  exit 1
+}
+
+usage_error() {
+  printf 'script/site: %s\n' "$1" >&2
+  awk '/^# Usage: / { u = 1 } u && !/^# (Usage: | )/ { exit } u { sub(/^# /, ""); print }' "$0" >&2
+  exit 1
+}
+
+dir=
+for arg; do
+  case $arg in
+    -h | --help) exec awk 'NR > 1 && !/^#/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "$0" ;;
+    -*) usage_error "unknown option: $arg" ;;
+    *)
+      [[ -z $dir ]] || usage_error "unexpected argument: $arg"
+      dir=$arg
+      ;;
+  esac
+done
+[[ -n $dir ]] || usage_error 'no directory given'
+[[ ! -e $dir || -d $dir ]] || die "not a directory: $dir"
+
+root=$(CDPATH='' cd -P -- "$(dirname -- "$0")/.." && pwd)
+repo=$(sed -n 's/^ *REPO = "\([^"]*\)".*/\1/p' "$root/Formula/hub.rb") || repo=
+[[ -n $repo ]] || die 'Formula/hub.rb does not set REPO'
+version=$(<"$root/VERSION")
+# The commit of the sources, not of a repository they happen to sit in.
+commit=main
+[[ $(git -C "$root" rev-parse --show-toplevel 2>/dev/null) != "$root" ]] \
+  || commit=$(git -C "$root" rev-parse HEAD)
+mkdir -p -- "$dir"
+
+# esc TEXT : TEXT with & < and > as HTML entities.
+esc() { sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g' <<<"$1"; }
+
+# module_doc FILE : the manual, as hub::module_doc in lib/hub/core.sh prints it.
+module_doc() { sed -n '/^#/!q; /^# shellcheck /d; s/^#//; s/^ //; p' "$1"; }
+
+# Reads a manual, escaped and without a shebang line, and prints the HTML of its text.
+# shellcheck disable=SC2016 # awk's $0, not bash's
+body_awk='
+function flush_par() { if (par != "") print "<p>" par "</p>"; par = "" }
+{ line[++n] = $0 }
+END {
+  if (line[1] !~ /^Summary: / || line[2] !~ /^Usage: /) exit 1
+  print "<p class=\"summary\">" substr(line[1], 10) "</p>"
+  usage = line[2]
+  for (i = 3; i <= n && line[i] != ""; i++) usage = usage "\n" line[i]
+  print "<pre class=\"usage\">" usage "</pre>"
+  for (; i <= n; i++) {
+    if (line[i] == "") { flush_par(); continue }
+    if (line[i] ~ /^  /) {
+      flush_par()
+      pre = ""
+      for (; i <= n && line[i] ~ /^  /; i++) pre = pre (pre == "" ? "" : "\n") substr(line[i], 3)
+      print "<pre>" pre "</pre>"
+      i--
+    } else if (line[i] ~ /:$/ && line[i + 1] ~ /^  /) {
+      flush_par()
+      print "<h2>" substr(line[i], 1, length(line[i]) - 1) "</h2>"
+    } else {
+      par = par (par == "" ? "" : " ") line[i]
+    }
+  }
+  flush_par()
+}'
+
+# page FILE TITLE [COMMAND...] : the page of FILE's manual titled TITLE; COMMAND adds to <main>.
+page() {
+  local path=${1#"$root"/}
+  cat <<HTML
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>$(esc "$2")</title>
+<style>
+:root { color-scheme: light dark; }
+body {
+  max-width: 48rem;
+  margin: 0 auto;
+  padding: 1rem;
+  font: 1rem/1.5 system-ui, sans-serif;
+}
+pre, code { font-family: ui-monospace, monospace; font-size: 0.875rem; }
+pre {
+  overflow-x: auto;
+  padding: 0.5rem 0.75rem;
+  background: light-dark(#f6f8fa, #161b22);
+  border: 1px solid light-dark(#d0d7de, #30363d);
+  border-radius: 6px;
+}
+h1 { margin: 1rem 0 0; }
+h2 { margin: 1.5rem 0 0.5rem; font-size: 1.125rem; }
+.summary { font-size: 1.125rem; }
+dd { margin: 0 0 0.5rem 1.5rem; }
+nav, footer { font-size: 0.875rem; color: light-dark(#59636e, #9198a1); }
+footer {
+  margin-top: 3rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid light-dark(#d0d7de, #30363d);
+}
+</style>
+</head>
+<body>
+<header><nav><a href="index.html">hub manuals</a></nav></header>
+<main>
+<h1>$(esc "$2")</h1>
+HTML
+  module_doc "$1" | sed '1{/^!/d;}; s/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g' \
+    | awk "$body_awk" || die "$path: the manual does not start with Summary: and Usage: lines"
+  "${@:3}"
+  cat <<HTML
+</main>
+<footer><p>hub $(esc "$version") &middot; <a href="https://github.com/$(esc "$repo")">\
+github.com/$(esc "$repo")</a> &middot; source: <a href="https://github.com/$(esc "$repo")/blob/\
+$(esc "$commit")/$(esc "$path")">$(esc "$path")</a></p></footer>
+</body>
+</html>
+HTML
+}
+
+# commands : the list of the commands and the links to the documentation, for the index.
+commands() {
+  local file name summary url=https://github.com/$repo
+  printf '<h2>Commands</h2>\n<dl>\n'
+  for file in "$root"/lib/hub/cmd/*.sh; do
+    name=${file##*/}
+    summary=$(module_doc "$file" | sed -n '1s/^Summary: //p')
+    printf '<dt><a href="%s.html">hub %s</a></dt><dd>%s</dd>\n' "$(esc "${name%.sh}")" \
+      "$(esc "${name%.sh}")" "$(esc "$summary")"
+  done
+  printf '</dl>\n<h2>More</h2>\n<ul>\n<li><a href="%s">The repository</a></li>\n' "$(esc "$url")"
+  for name in README.md docs/compatibility.md docs/design.md CHANGELOG.md; do
+    printf '<li><a href="%s/blob/main/%s">%s</a></li>\n' "$(esc "$url")" "$name" "$name"
+  done
+  printf '</ul>\n'
+}
+
+for file in "$root"/lib/hub/cmd/*.sh; do
+  name=${file##*/}
+  page "$file" "hub ${name%.sh}" >"$dir/${name%.sh}.html"
+done
+page "$root/bin/hub" hub commands >"$dir/index.html"
