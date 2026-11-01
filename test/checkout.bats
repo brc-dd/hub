@@ -110,6 +110,22 @@ resets the branch to the pull request instead (run it yourself)"
   assert_gh_not_called
 }
 
+@test "hub checkout refuses --detach with a branch name" {
+  local message='hub checkout: --detach cannot be used with a branch name (drop one)'
+  run hub checkout -b review --detach "$pr"
+  assert_status 1
+  assert_line_equals 0 "$message"
+  assert_line_equals 1 "$usage"
+  run hub checkout "$pr" review -d
+  assert_status 1
+  assert_line_equals 0 "$message"
+  run hub checkout -breview --detach "$pr"
+  assert_status 1
+  assert_line_equals 0 "$message"
+  assert_gh_not_called
+  assert_equals "$(tip review)" ''
+}
+
 @test "hub checkout refuses an empty branch name" {
   run hub checkout "$pr" ''
   assert_status 1
@@ -209,6 +225,33 @@ refs/remotes/origin/main'
   run hub checkout --end-of-options "$pr"
   assert_failure
   assert_output_contains "error: pathspec '$pr' did not match"
+  assert_gh_not_called
+}
+
+@test "hub checkout leaves --pathspec-from-file's URL-shaped file name to git" {
+  local option
+  echo original >tracked
+  git add tracked
+  git -c user.name=t -c user.email=t@example.test commit -qm tracked
+  mkdir -p https:/github.com/rails/rails/pull
+  echo tracked >"$pr"
+  for option in --pathspec-from-file --pathspec-fr; do
+    echo changed >tracked
+    run hub checkout "$option" "$pr"
+    assert_success
+    assert_equals "$(<tracked)" original
+  done
+  echo changed >tracked
+  run hub checkout "--pathspec-from-file=$pr"
+  assert_success
+  assert_equals "$(<tracked)" original
+  assert_gh_not_called
+}
+
+@test "hub checkout leaves --pathspec-file-nul after a pull request URL to git" {
+  run hub checkout "$pr" --pathspec-file-nul
+  assert_status 128
+  assert_output_equals "fatal: the option '--pathspec-file-nul' requires '--pathspec-from-file'"
   assert_gh_not_called
 }
 

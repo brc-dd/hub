@@ -6,8 +6,10 @@
 # A git command hub extends: git checkout's options apply. A pull request URL (any page of it)
 # before -- (or --end-of-options) makes the line hub's: gh pr checkout fetches the pull request
 # and checks it out in a local branch, BRANCH when given. Only the options below go with a URL.
-# Without a URL, this is plain git checkout. gh runs with GH_HOST set to the URL's host, so
-# that it fetches from a local remote of that host.
+# Without a URL, this is plain git checkout, and so is a line with --pathspec-from-file or
+# --pathspec-file-nul, whose file name can look like a URL. --detach and a branch name exclude
+# each other. gh runs with GH_HOST set to the URL's host, so that it fetches from a local remote
+# of that host.
 #
 # Options:
 #   -b BRANCH                  Name the local branch (the same as the BRANCH operand).
@@ -27,7 +29,7 @@ hub_cmd_checkout() {
   for word; do
     case $word in
       -- | --end-of-options) break ;;
-      --help | --help-all) hub::exec_git checkout "$@" ;;
+      --help | --help-all | --pathspec-f*) hub::exec_git checkout "$@" ;;
       # -h alone or among git checkout's one-letter flags (-qh) asks for git's usage.
       -*) [[ ! $word =~ ^-[lqmdtf23p]*h ]] || hub::exec_git checkout "$@" ;;
     esac
@@ -72,6 +74,9 @@ hub_cmd_checkout() {
       "unexpected argument: $(hub::shown "$operand") (-b names the branch already)"
     branch=$operand
   fi
+  # gh pr checkout would drop the branch and report success.
+  ((! detach)) || [[ -z ${branch+set} ]] \
+    || hub::usage_error '--detach cannot be used with a branch name (drop one)'
   if [[ -n ${branch+set} ]]; then
     _hub_checkout_valid_branch "$branch" \
       || hub::die "not a valid branch name: $(hub::shown "$branch")"
