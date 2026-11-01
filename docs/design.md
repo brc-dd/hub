@@ -54,6 +54,9 @@ meaning. git also exports the git directory it found as `GIT_DIR`, and without
 `GIT_WORK_TREE` every git hub starts would take the subdirectory for the top
 of the work tree: hub unsets `GIT_DIR` unless the user set it (`GIT_DIR` in
 the environment, `--git-dir` or `--bare`, recorded as `HUB_KEEP_GIT_DIR=1`).
+With it hub unsets `GIT_IMPLICIT_WORK_TREE`, which git exports as 0 from a
+bare repository or a `.git` directory; left set, it would leave the hooks and
+submodules of a clone that hub starts without a work tree.
 hub then exports `HUB_COMMAND`, sources `core.sh` and the module, and calls
 `hub_cmd_NAME`. A word that is not a module is refused:
 `hub: not a hub command: X`. `GIT_CONFIG_PARAMETERS` stays as git exported it,
@@ -153,14 +156,19 @@ sets `HUB_OPERANDS` and `HUB_OPTIONS`.
 | push | `-o --push-option --repo --receive-pack --exec --recurse-submodules` |
 | remote add | `-t --track -m --master` |
 | merge | `-m --message -F --file -s --strategy -X --strategy-option --into-name --cleanup`, and `-S=` |
+| am | `-p -C --exclude --include --directory --whitespace --patch-format --resolvemsg --quoted-cr --empty`, and `-S=` |
+| apply | `-p -C --exclude --include --directory --whitespace --build-fake-ancestor` |
+| cherry-pick | `-m --mainline --strategy -X --strategy-option --cleanup --empty`, and `-S=` |
 
 The tables come from `git CMD -h` of git 2.54. A test checks them against
 git's output, and that no flag of the command is a proper prefix of an entry.
 Options whose optional value is attached only, such as
 `--force-with-lease[=X]`, stay out: with `=` they are one word, bare they are
-flags. checkout, am, apply and cherry-pick act on GitHub URLs, which no option
-value can be mistaken for, and need no table. hub hands the command line to
-git untouched when it cannot read it with certainty:
+flags. am, apply and cherry-pick convert only the operands before `--` (or
+`--end-of-options`), so a URL given as an option's value (`--include URL`)
+reaches git as given. checkout looks for a pull request URL before `--`; no
+value of git checkout's options can be one, so it needs no table. hub hands
+the command line to git untouched when it cannot read it with certainty:
 
 1. a `--word` without `=` that is not in the table but is a proper prefix of
    an entry, which git would expand (`--dep 1`);
@@ -305,7 +313,13 @@ out, with the command to use instead, is in
 - sync runs `git fetch --prune` with your fetch settings on every tracked
   remote. Branches that `gh pr checkout` made for forks (upstream
   `refs/pull/N/head`) are left alone. Nothing guards against other processes
-  changing refs meanwhile.
+  changing refs meanwhile. sync leaves a branch checked out in another work
+  tree alone, but `git worktree list` does not show a branch that another
+  work tree is rebasing or bisecting: with git older than 2.35, sync can
+  fast-forward such a branch (git 2.35 and later refuse to move it).
+- git cherry-pick also takes the revision walker's options (`--grep`,
+  `--author` and others); hub's table leaves them out, so a commit URL given
+  as their value is read as an operand.
 - pull-request does not support `--no-edit` with `-h`, or organization heads
   (a limitation of gh).
 - ci-status reports GitHub's combined verdict and lists the first 100

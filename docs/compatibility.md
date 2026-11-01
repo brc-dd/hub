@@ -39,7 +39,7 @@ Two rules decide what the flags mean:
 
 | hub 2.x | Status | This hub | Notes |
 |---|---|---|---|
-| `hub pull-request` | Partly | `gh pr create` with hub's options: `-m`, `-F`, `-e`, `--no-edit`, `-b`, `-h`, `-p`, `-f`, `-d`, `-r`, `-a`, `-M`, `-l`, `-o`, `-c`, `--no-maintainer-edits`. | `-i ISSUE` is not supported; link the issue in the body. Milestones by number are not supported; use the name. `-p` with `-h` is an error. |
+| `hub pull-request` | Partly | `gh pr create` with hub's options: `-m`, `-F`, `-e`, `--no-edit`, `-b`, `-h`, `-p`, `-f`, `-d`, `-r`, `-a`, `-M`, `-l`, `-o`, `-c`, `--no-maintainer-edits`. | `-i ISSUE` is not supported; link the issue in the body. Milestones by number are not supported; use the name. `-p` with `-h` is an error. Without `-b`, gh picks the base: `branch.NAME.gh-merge-base` with gh 2.64 and later, else the default branch. |
 | `hub pr list\|show\|checkout` | gh | `gh pr list\|view\|checkout`. | `show -c` is not supported; pipe `gh pr view --json url --jq .url` to `pbcopy`. |
 | `hub issue ...` | gh | `gh issue ...`; no subcommand is `list`. | `issue update` is `gh issue edit`; `issue labels` is `gh label list`. |
 | `hub release ...` | gh | `gh release ...`; no subcommand is `list`. | `-a FILE` is `gh release upload TAG FILE`; `-t TARGET` is `--target`. |
@@ -47,11 +47,11 @@ Two rules decide what the flags mean:
 | `hub api ...` | gh | `gh api ...` unchanged. | `-t` and `--flat` are not supported; use `--jq`. `--cache` needs a unit (`600s`). |
 | `hub browse [-u] [-c] [[OWNER/]REPO] [SUBPAGE]` | Yes | Opens the repository page; on a pushed branch other than the default, `tree` and `commits` open at that branch. Without `refs/remotes/REMOTE/HEAD`, every pushed branch counts as non-default. | Wikis are not special; use the `wiki` subpage. |
 | `hub compare [-u] [-c] [-b BASE] [OWNER] [RANGE]` | Partly | Opens the compare page; `A..B` becomes `A...B`; without a range, the current branch where it pushes. | Wiki compare pages and renamed forks in the head are not supported. |
-| `hub create [-p] [-d DESC] [-h URL] [[ORG/]NAME]` | Yes | `gh repo create` from the top of the work tree, adding the remote `origin`; `--public`, `--internal`, `--remote-name`, `--push`. | Private by default; hub 2.x made public repositories. A bare repository is refused. |
-| `hub fork [--no-remote] [--remote-name NAME] [--org ORG]` | Yes | `gh repo fork`, then the remote named after you or the organization; `--fork-name` and `--default-branch-only` too. | Nothing is fetched: run `git fetch NAME` once the fork exists. |
+| `hub create [-p] [-d DESC] [-h URL] [[ORG/]NAME]` | Yes | `gh repo create`, then `git remote add` of the remote `origin` (any work tree, a linked one included); `--public`, `--internal`, `--remote-name`, `--push`. | Private by default; hub 2.x made public repositories. A bare repository is refused. |
+| `hub fork [--no-remote] [--remote-name NAME] [--org ORG]` | Yes | GitHub's fork API through `gh api`, then the remote named after you or the organization, for the fork GitHub answers with; `--fork-name` and `--default-branch-only` too, and an existing fork is reused under its own name. | Nothing is fetched: run `git fetch NAME` once the fork exists. |
 | `hub delete [-y] [ORG/]NAME` | Yes | `gh repo delete [--yes]`. | Needs the `delete_repo` scope: `gh auth refresh -s delete_repo`. |
 | `hub ci-status [-v] [COMMIT]` | Partly | GitHub's combined verdict on checks and statuses; exit 0 success, 1 failure, 2 pending, 3 no status. | `-f FORMAT` and `--color` are not supported; use `gh pr checks`. `-v` shows the first 100 checks. |
-| `hub sync [REMOTE]` | Partly | Fetches with `--prune`, fast-forwards branches that are behind, deletes merged branches whose upstream is gone. | `--color` is not supported. A squash-merged branch is kept, with a warning. |
+| `hub sync [REMOTE]` | Partly | Fetches with `--prune`, fast-forwards branches that are behind, deletes merged branches whose upstream is gone. A branch checked out in another work tree is left alone, with a warning. | `--color` is not supported. A squash-merged branch is kept, with a warning. With git older than 2.48, git fetch does not create `refs/remotes/REMOTE/HEAD`; run `git remote set-head REMOTE --auto` once so that sync knows a non-GitHub remote's default branch. |
 | `hub alias [-s] [SHELL]` | Yes | bash, zsh, sh, ksh, dash, fish, csh and tcsh. | |
 | `hub help [COMMAND]`, `hub version` | Yes | Each command's manual is its module's header. | |
 | `hub --noop` | Yes | Prints the git and gh commands hub would run. | For hub's commands, git's global options are not printed; a plain git command is printed as given. |
@@ -65,7 +65,6 @@ Two rules decide what the flags mean:
 - `USER@SHA` in `cherry-pick`: use the commit's URL.
 - `-i ISSUE` in `pull-request`: link the issue in the body, or use `gh api`.
 - Milestones by number in `pull-request`: use the milestone's name.
-- `branch.NAME.gh-merge-base` in `pull-request`: use `-b BASE`.
 - `-f FORMAT` placeholders (`%I`, `%t`, ...): use gh's `--json` with `--jq`
   or `--template`.
 - The `-c` clipboard flag outside `browse`, `compare`, `create` and

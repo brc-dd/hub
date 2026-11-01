@@ -6,6 +6,58 @@ All notable changes to hub are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- hub needs git 2.29 or newer, for `cherry-pick`'s
+  `git fetch --no-write-fetch-head`, and gh 2.55 or newer, for
+  `gh pr create --editor`.
+
+### Fixed
+
+- `am`, `apply` and `cherry-pick` convert only operands: a GitHub URL given
+  as an option's value (`--include URL`, `--directory URL`) goes to git as
+  given.
+- `cherry-pick` no longer changes `FETCH_HEAD`, so a `FETCH_HEAD` operand
+  next to a commit URL keeps its meaning.
+- GitHub Enterprise Managed User logins (`NAME_SHORTCODE`) are read as owners
+  in shorthands, URLs and `GH_REPO`.
+- A word containing whitespace or a newline is never read as a GitHub URL.
+- `sync` leaves a branch checked out in another work tree alone with a
+  warning and exits 1, also on git older than 2.35, which fast-forwarded it
+  under that work tree.
+- `sync` fast-forwards a chain of branches that track local branches in one
+  run, each after the branch it tracks, the current branch included.
+- `sync` says a branch is ahead of its local upstream instead of warning
+  about unpushed commits.
+- `fork` asks GitHub's fork API through `gh api`, so it adds the remote for
+  an existing fork, under that fork's own name, and works on every gh hub
+  supports.
+- `push REMOTE1,REMOTE2` pushes the current branch when a later `--no-FLAG`
+  cancels `--all`, `--branches`, `--mirror`, `--tags` or `--delete` (for
+  example `--all --no-all`).
+- `pull-request -o` and `-c` find the new pull request by its head, so a
+  branch named like a number (`123`) no longer opens another pull request.
+- `pull-request` refuses before pushing when gh's configuration has prompt
+  disabled and gh would have to prompt.
+- `create` works from a linked work tree and from a work tree with a
+  separate git directory: gh creates the repository and git adds the remote.
+- `create` accepts `OWNER/NAME`, `HOST/OWNER/NAME` and URL forms whose name
+  starts with a hyphen.
+- `create`'s help says that an internal repository is readable by every
+  member of the enterprise.
+- `fetch` refuses a list that names one missing user in two cases
+  (`alice,Alice`) instead of adding two remotes.
+- Refusals of `ci-status`, `compare`, `alias`, `fork` and `pull-request`
+  show the user's word quoted, so an empty word or a newline is visible.
+- hub refuses to run when the `git` on `PATH` is hub itself through a
+  trailing empty `PATH` entry.
+- hub's commands started from a bare repository or a `.git` directory no
+  longer pass `GIT_IMPLICIT_WORK_TREE=0` to git, so
+  `hub clone --recurse-submodules` works there.
+- zsh completion offers the options of hub's own commands when git's own
+  `git-completion.zsh` is the `_git` completer, as Homebrew git and Apple's
+  Command Line Tools install it.
+
 ## [0.2.0] - 2026-11-01
 
 ### Added
@@ -22,7 +74,8 @@ All notable changes to hub are documented here. The format follows
   commits, unless `-p` pushes it or `-f` skips the check.
 - `pull-request -b OWNER:BASE` (or `OWNER/REPO:BASE`) opens the pull request
   in another copy of the project.
-- `create` and `delete` take repository URLs, and `delete` takes `HOST/OWNER/NAME`.
+- `create` and `delete` take repository URLs, and `delete` takes
+  `HOST/OWNER/NAME`.
 - `create -c` copies the new repository's URL, and `create` checks the name,
   the remote and, with `--push`, the branch before gh runs.
 - `fork` takes `--fork-name`, `--default-branch-only` and an `ORG` operand as

@@ -36,11 +36,12 @@ Requirements (macOS and Linux):
   main`, `git checkout -b topic`). Other git commands reach git on any bash,
   macOS's bash 3.2 included. The formula runs hub with Homebrew's bash; after
   `make install` on macOS, put Homebrew's bash first on `PATH`.
-- git 2.24 or newer: hub uses `git switch`, `--end-of-options` and
-  for-each-ref's `%(upstream:remotename)`.
-- gh 2.40 or newer, logged in with `gh auth login`: hub reads your login from
-  gh and uses `gh pr create --fill-first`, `gh repo fork --fork-name` and
-  `--json` with `--jq`, which older 2.x releases lack in part.
+- git 2.29 or newer: hub uses `git switch`, `--end-of-options`,
+  for-each-ref's `%(upstream:remotename)` and, in `cherry-pick`, `git fetch
+  --no-write-fetch-head`, which leaves `FETCH_HEAD` alone.
+- gh 2.55 or newer, logged in with `gh auth login`: hub reads your login from
+  gh and uses `gh pr create --fill-first` and `--editor`, and `--json` with
+  `--jq`, which older 2.x releases lack in part.
 
 With Homebrew, from this repository's own tap:
 

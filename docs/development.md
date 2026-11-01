@@ -58,12 +58,19 @@ The steps are in [design.md](design.md#adding-a-command).
 ## Releases
 
 `script/release [-n] VERSION` refuses unless `main` is checked out and clean,
-origin's URL and every push URL name the formula's `REPO` on github.com, and,
-after `git fetch origin`, `main` is not behind `origin/main`. `gh repo view`
-must see `REPO`, and `script/bump --dry-run` must pass: a new SemVer tag and
-notes under `## [Unreleased]`. A stable VERSION must not be lower than the
-formula's. Then it runs `make check`, `script/bump VERSION` and one
-`git push --atomic` of `main` and `vVERSION`, or prints them under `-n`.
+origin's URL and every push URL name the formula's `REPO` on github.com,
+VERSION is `X.Y.Z` or `X.Y.Z-PRE`, origin has no tag `vVERSION` (it asks with
+`git ls-remote`), and, after fetching origin's `main` explicitly
+(`git fetch origin +refs/heads/main:refs/remotes/origin/main`, whatever
+`remote.origin.fetch` says), `main` is not behind `origin/main`.
+`gh repo view` must see `REPO`, and `script/bump --dry-run` must pass: a new
+SemVer tag and notes under `## [Unreleased]`. A stable VERSION must not be
+lower than the formula's. Then it runs `make check`, `script/bump VERSION`
+and one `git push --atomic --no-follow-tags` of `main` and `vVERSION` (no
+other tag, whatever `push.followTags` says), or prints them under `-n`. When
+the push fails, it prints the push to retry and the commands that undo the
+bump: `git tag -d vVERSION && git reset --hard START`. The release scripts
+work in their own checkout whatever `CDPATH` holds.
 
 The tag starts the Release workflow (`gh run watch -R brc-dd/hub`), which
 skips forks. Its `publish` job creates the release with generated notes (a
