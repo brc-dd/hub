@@ -8,10 +8,12 @@
 # OWNER's copy of it with -b OWNER:BASE. Without -h the head is the current branch, under its
 # own name, in the repository it pushes to: branch.BRANCH.pushRemote, remote.pushDefault, an
 # upstream of its own name, the only remote, your fork, then origin. It must be pushed there
-# already, unless -p pushes it or -f skips the check. Without -b, gh takes the default branch.
+# already, unless -p pushes it or -f skips the check. Without -b, gh picks the base:
+# branch.BRANCH.gh-merge-base (gh 2.64 and later), else the default branch.
 #
 # The first paragraph of the message is the title, the rest is the body. Without -m, -F, -e or
-# --no-edit, gh asks for them, which needs a terminal, as -e does.
+# --no-edit, gh asks for them, which needs a terminal and gh's prompts enabled (GH_PROMPT_DISABLED
+# unset, gh config prompt not disabled), as -e does.
 #
 # Options:
 #   -m, --message MESSAGE       A paragraph of the message; repeat it for more.
@@ -43,6 +45,7 @@ hub_cmd_pull_request() {
   local push=0 force=0 edit=0 no_edit=0 browse=0 copy=0 draft=0 no_maintainer=0 have_file=0
   local file='' base='' head=''
   local host owner repo project branch remote label text title body url milestone='' rc=0
+  local head_owner path
   local -a messages=() create=() reviewers=() assignees=() labels=() head_project
   hub::normalize_opts bhmFraMl \
     '--base --head --message --file --reviewer --assign --milestone --labels' "$@"
@@ -107,13 +110,16 @@ hub_cmd_pull_request() {
     [[ -n $title || $edit == 1 ]] || hub::die 'the title is empty (give it with -m or -F)'
     [[ -z $title ]] || create+=(--title "$title" --body "$body")
   fi
-  # gh prompts, and opens its editor, only when it can prompt; it refuses -e otherwise.
-  if ! [[ -t 0 && -t 1 && -z ${GH_PROMPT_DISABLED+set} ]]; then
+  hub::require_gh
+  # gh prompts, and opens its editor, only when it can prompt, as gh decides: a terminal, no
+  # GH_PROMPT_DISABLED and no prompt: disabled in its configuration. It refuses -e otherwise.
+  if ((edit || ! (have_file || ${#messages[@]} || no_edit))) \
+    && ! { [[ -t 0 && -t 1 && -z ${GH_PROMPT_DISABLED+set} ]] \
+      && [[ $(hub::gh_query config get prompt) != disabled ]]; }; then
     ((! edit)) || hub::die "-e opens gh's editor, which needs a terminal (give the message with" \
       '-m or -F)'
-    ((have_file || ${#messages[@]} || no_edit)) \
-      || hub::die 'gh prompts for the title and body, which needs a terminal (give the message' \
-        'with -m or -F)'
+    hub::die 'gh prompts for the title and body, which needs a terminal (give the message' \
+      'with -m or -F)'
   fi
   ((! edit)) || create+=(--editor)
   ((! no_edit)) || create+=(--fill-first)
@@ -131,7 +137,7 @@ hub_cmd_pull_request() {
     text=$base owner=${base%%:*} base=${base#*:}
     [[ $owner != */* ]] || repo=${owner#*/} owner=${owner%%/*}
     hub::is_shorthand "$owner/$repo" && [[ -n $base ]] \
-      || hub::usage_error "not a base: $text (use -b [OWNER[/REPO]:]BRANCH)"
+      || hub::usage_error "not a base: $(hub::shown "$text") (use -b [OWNER[/REPO]:]BRANCH)"
   fi
 
   if [[ -n $head ]]; then
@@ -154,21 +160,24 @@ hub_cmd_pull_request() {
     fi
   fi
 
-  hub::require_gh
   if ((push)); then
     _hub_pull_request_push "$branch" "$remote" || exit
   fi
   hub::gh pr create --repo "$host/$owner/$repo" ${base:+--base "$base"} --head "$label" \
     "${create[@]}" || exit
   ((browse || copy)) || return 0
+  # By its head, newest first: gh pr view would read a numeric branch name as a number.
+  head_owner=$owner
+  [[ $label != *:* ]] || head_owner=${label%%:*}
+  path="repos/$owner/$repo/pulls?head=$(hub::url_escape "$head_owner:${label#*:}")&state=open"
   if [[ ${HUB_NOOP-} == 1 ]]; then
     url='URL'
-    hub::quote gh pr view "$label" --repo "$host/$owner/$repo" --json url --jq .url
+    hub::quote gh api --hostname "$host" "$path" --jq '.[0].html_url'
   else
-    url=$(gh pr view "$label" --repo "$host/$owner/$repo" --json url --jq .url)
+    url=$(gh api --hostname "$host" "$path" --jq '.[0].html_url')
     [[ $url == http* ]] \
-      || hub::die "the pull request was created, but its URL could not be looked up (gh pr view" \
-        "$label --repo $host/$owner/$repo)"
+      || hub::die "the pull request was created, but its URL could not be looked up (gh api" \
+        "--hostname $host '$path')"
   fi
   # Subshells, so that a missing clipboard tool or browser does not cancel the other action.
   if ((copy)); then (hub::copy "$url") || rc=$?; fi

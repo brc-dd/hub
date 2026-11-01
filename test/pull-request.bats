@@ -6,11 +6,11 @@
 
 load test_helper
 
-# feature_repo : a clone of mislav/dotfiles on branch feature, one commit ahead, not pushed.
+# feature_repo [BRANCH] : a clone of mislav/dotfiles on BRANCH (feature), one commit ahead.
 feature_repo() {
   serve_github mislav/dotfiles
   clone_served mislav/dotfiles
-  git checkout -q -b feature
+  git checkout -q -b "${1:-feature}"
   git commit -q --allow-empty -m 'Fix the bug' -m 'It was broken.'
 }
 
@@ -62,6 +62,20 @@ DOTFILES='pr create --repo github.com/mislav/dotfiles'
 USAGE='Usage: hub pull-request [-fpdoc] [-b [OWNER[/REPO]:]BASE] [-h [OWNER:]HEAD] [-m MESSAGE]...'
 
 stub_create() { stub_gh 'pr create *' 'https://github.com/mislav/dotfiles/pull/1'; }
+
+# pulls_api HOST/OWNER/REPO HEAD : the gh api call that looks a pull request up by its head.
+pulls_api() {
+  printf 'api --hostname %s repos/%s/pulls?head=%s&state=open --jq .[0].html_url' \
+    "${1%%/*}" "${1#*/}" "$2"
+}
+
+# stub_pulls HOST/OWNER/REPO HEAD URL [STATUS] : answer that lookup with URL.
+stub_pulls() {
+  local glob
+  glob=$(pulls_api "$1" "$2")
+  glob=${glob//\?/\\?} glob=${glob//[/\\[}
+  stub_gh "$glob" "$3" "${4-}"
+}
 
 @test "hub pull-request -p pushes a new branch with an upstream and opens the pull request" {
   feature_repo
@@ -276,12 +290,17 @@ stub_create() { stub_gh 'pr create *' 'https://github.com/mislav/dotfiles/pull/1
 
 @test "hub pull-request refuses a base it cannot read, before anything is pushed" {
   feature_repo
-  local base
-  for base in alice: 'a b:main' -x:main alice/..:main :main; do
+  local base shown
+  for base in alice: 'a b:main' -x:main alice/..:main :main $'al\nice:main'; do
+    case $base in
+      'a b:main') shown='a\ b:main' ;;
+      *$'\n'*) shown="\$'al\\nice:main'" ;;
+      *) shown=$base ;;
+    esac
     run hub pull-request -p -b "$base" -m 'Fix the bug'
     assert_status 1
     assert_line_equals 0 \
-      "hub pull-request: not a base: $base (use -b [OWNER[/REPO]:]BRANCH)"
+      "hub pull-request: not a base: $shown (use -b [OWNER[/REPO]:]BRANCH)"
     assert_output_contains 'Usage: hub pull-request'
   done
   assert_gh_not_called
@@ -302,6 +321,19 @@ stub_create() { stub_gh 'pr create *' 'https://github.com/mislav/dotfiles/pull/1
   assert_line_equals 0 'hub pull-request: -h needs a branch name'
   assert_equals "$(server_branches mislav/dotfiles)" main
   assert_gh_not_called
+}
+
+@test "hub pull-request without -b leaves the base to gh, which reads gh-merge-base" {
+  feature_repo
+  git push -q -u origin feature
+  git config branch.feature.gh-merge-base release
+  record_gh_create
+  stub_create
+  run hub pull-request -m 'Fix the bug'
+  assert_success
+  assert_gh_called "$DOTFILES --head feature --title Fix the bug --body "
+  run create_arg --base
+  assert_status 1
 }
 
 @test "hub pull-request -h names the head as given, unchecked and from a detached HEAD" {
@@ -401,12 +433,15 @@ stub_create() { stub_gh 'pr create *' 'https://github.com/mislav/dotfiles/pull/1
   clone_served ghe.example.com/mislav/dotfiles
   git checkout -q -b feature
   stub_gh 'pr create *' ''
-  stub_gh 'pr view *' 'https://ghe.example.com/mislav/dotfiles/pull/2'
+  stub_pulls ghe.example.com/mislav/dotfiles mislav:feature \
+    'https://ghe.example.com/mislav/dotfiles/pull/2'
   GH_HOST=ghe.example.com run hub pull-request -p -o -m 'Fix the bug'
   assert_success
   assert_equals "$(server_ref ghe.example.com/mislav/dotfiles refs/heads/feature)" "$(tip feature)"
   assert_gh_called 'pr create --repo ghe.example.com/mislav/dotfiles --head feature *'
-  assert_gh_called 'pr view feature --repo ghe.example.com/mislav/dotfiles --json url --jq .url'
+  assert_equals "$(gh_calls | tail -n 1)" \
+    "gh $(pulls_api ghe.example.com/mislav/dotfiles mislav:feature)"
+  assert_equals "$(opened)" 'https://ghe.example.com/mislav/dotfiles/pull/2'
 }
 
 @test "hub pull-request takes the title from the first paragraph and keeps the body as written" {
@@ -550,10 +585,44 @@ stub_create() { stub_gh 'pr create *' 'https://github.com/mislav/dotfiles/pull/1
   feature_repo
   unset GH_PROMPT_DISABLED
   stub_create
+  stub_gh 'config get prompt' enabled
   run in_terminal "$HUB_BIN" pull-request -p </dev/null
   assert_success
   assert_equals "$(server_ref mislav/dotfiles refs/heads/feature)" "$(tip feature)"
-  assert_equals "$(gh_calls)" 'gh pr create --repo github.com/mislav/dotfiles --head feature'
+  assert_equals "$(gh_calls)" \
+    $'gh config get prompt\ngh pr create --repo github.com/mislav/dotfiles --head feature'
+}
+
+@test "hub pull-request refuses before pushing when gh's configuration disables prompts" {
+  feature_repo
+  unset GH_PROMPT_DISABLED
+  stub_gh 'config get prompt' disabled
+  stub_create
+  local expected='hub pull-request: gh prompts for the title and body, which needs a terminal'
+  expected+=' (give the message with -m or -F)'
+  run in_terminal "$HUB_BIN" pull-request -p </dev/null
+  assert_status 1
+  assert_output_contains "$expected"
+  expected="hub pull-request: -e opens gh's editor, which needs a terminal"
+  expected+=' (give the message with -m or -F)'
+  run in_terminal "$HUB_BIN" pull-request -p -e -m 'Fix the bug' </dev/null
+  assert_status 1
+  assert_output_contains "$expected"
+  assert_equals "$(server_branches mislav/dotfiles)" main
+  assert_equals "$(gh_calls)" $'gh config get prompt\ngh config get prompt'
+}
+
+@test "hub pull-request asks gh's prompt setting only when gh would prompt" {
+  feature_repo
+  git push -q -u origin feature
+  unset GH_PROMPT_DISABLED
+  stub_gh 'config get prompt' disabled
+  stub_create
+  run in_terminal "$HUB_BIN" pull-request -m 'Fix the bug' </dev/null
+  assert_success
+  run in_terminal "$HUB_BIN" pull-request --no-edit </dev/null
+  assert_success
+  assert_equals "$(gh_calls | grep -c 'config get prompt')" 0
 }
 
 @test "hub pull-request refuses message options that contradict each other" {
@@ -628,19 +697,48 @@ stub_create() { stub_gh 'pr create *' 'https://github.com/mislav/dotfiles/pull/1
   feature_repo
   git push -q -u origin feature
   stub_create
-  stub_gh 'pr view feature --repo github.com/mislav/dotfiles --json url --jq .url' \
-    'https://github.com/mislav/dotfiles/pull/1'
+  stub_pulls github.com/mislav/dotfiles mislav:feature 'https://github.com/mislav/dotfiles/pull/1'
   run hub pull-request -o -c -m 'Fix the bug'
   assert_success
   assert_equals "$(opened)" 'https://github.com/mislav/dotfiles/pull/1'
   assert_equals "$(copied)" 'https://github.com/mislav/dotfiles/pull/1'
 }
 
+@test "hub pull-request -o and -c look a numeric branch up by its head, not as a number" {
+  feature_repo 123
+  stub_gh 'pr create *' 'https://github.com/mislav/dotfiles/pull/456'
+  stub_gh 'pr view *' 'https://github.com/mislav/dotfiles/pull/123'
+  stub_pulls github.com/mislav/dotfiles mislav:123 'https://github.com/mislav/dotfiles/pull/456'
+  run hub pull-request -f -o -c -m 'Fix the bug'
+  assert_success
+  assert_equals "$(opened)" 'https://github.com/mislav/dotfiles/pull/456'
+  assert_equals "$(copied)" 'https://github.com/mislav/dotfiles/pull/456'
+  assert_equals "$(gh_calls | grep -c 'pr view')" 0
+}
+
+@test "hub pull-request -o looks a fork's head up under the fork's owner" {
+  fork_repo
+  git push -q -u mislav feature
+  stub_create
+  stub_pulls github.com/octocat/dotfiles mislav:feature \
+    'https://github.com/octocat/dotfiles/pull/3'
+  run hub pull-request -o -m 'Fix the bug'
+  assert_success
+  assert_gh_called 'pr create --repo github.com/octocat/dotfiles --head mislav:feature *'
+  assert_equals "$(opened)" 'https://github.com/octocat/dotfiles/pull/3'
+  rm "$HUB_TEST_TMP/browser.log"
+  stub_pulls github.com/octocat/dotfiles alice:a%2Bb%23c \
+    'https://github.com/octocat/dotfiles/pull/4'
+  run hub pull-request -h 'alice:a+b#c' -o -m 'Fix the bug'
+  assert_success
+  assert_equals "$(opened)" 'https://github.com/octocat/dotfiles/pull/4'
+}
+
 @test "hub pull-request -o still opens the browser when -c finds no clipboard tool" {
   feature_repo
   git push -q -u origin feature
   stub_create
-  stub_gh 'pr view *' 'https://github.com/mislav/dotfiles/pull/1'
+  stub_pulls github.com/mislav/dotfiles mislav:feature 'https://github.com/mislav/dotfiles/pull/1'
   local bin=$HUB_TEST_TMP/noclip dir
   local -a dirs
   mkdir "$bin"
@@ -659,7 +757,9 @@ stub_create() { stub_gh 'pr create *' 'https://github.com/mislav/dotfiles/pull/1
   feature_repo
   run hub --noop pull-request -f -o -c -m 'Fix the bug'
   assert_success
-  assert_line_equals 1 'gh pr view feature --repo github.com/mislav/dotfiles --json url --jq .url'
+  local expected='gh api --hostname github.com'
+  expected+=' repos/mislav/dotfiles/pulls\?head=mislav:feature\&state=open --jq .\[0\].html_url'
+  assert_line_equals 1 "$expected"
   assert_line_equals 2 'copy URL'
   assert_line_equals 3 'open URL'
   assert_gh_not_called
@@ -671,7 +771,7 @@ stub_create() { stub_gh 'pr create *' 'https://github.com/mislav/dotfiles/pull/1
   feature_repo
   git push -q -u origin feature
   stub_create
-  stub_gh 'pr view *' 'https://github.com/mislav/dotfiles/pull/1'
+  stub_pulls github.com/mislav/dotfiles mislav:feature 'https://github.com/mislav/dotfiles/pull/1'
   HUB_TEST_BROWSER_STATUS=19 run hub pull-request -o -m 'Fix the bug'
   assert_status 19
   assert_output_contains 'https://github.com/mislav/dotfiles/pull/1'
@@ -687,7 +787,7 @@ stub_create() { stub_gh 'pr create *' 'https://github.com/mislav/dotfiles/pull/1
   stub_gh 'pr create *' 'https://github.com/mislav/dotfiles/pull/1' 4
   run hub pull-request -o -m 'Fix the bug'
   assert_status 4
-  assert_equals "$(gh_calls | grep -c 'pr view')" 0
+  assert_equals "$(gh_calls | grep -c 'api')" 0
   assert_equals "$(opened)" ''
 }
 
@@ -695,12 +795,14 @@ stub_create() { stub_gh 'pr create *' 'https://github.com/mislav/dotfiles/pull/1
   feature_repo
   git push -q -u origin feature
   stub_create
-  stub_gh 'pr view *' 'no pull requests found' 1
+  stub_pulls github.com/mislav/dotfiles mislav:feature 'null'
   run hub pull-request -o -m 'Fix the bug'
   assert_status 1
-  local expected='hub pull-request: the pull request was created, but its URL could not'
-  expected+=' be looked up (gh pr view feature --repo github.com/mislav/dotfiles)'
+  local expected='hub pull-request: the pull request was created, but its URL could not be looked'
+  expected+=" up (gh api --hostname github.com 'repos/mislav/dotfiles/pulls?head=mislav:feature"
+  expected+="&state=open')"
   assert_output_contains "$expected"
+  assert_equals "$(opened)" ''
 }
 
 @test "hub pull-request relays git's refusal to push to a mirror remote" {
