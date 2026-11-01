@@ -122,6 +122,58 @@ commit_on() {
 # tip BRANCH : the commit of a local branch; empty when none.
 tip() { git rev-parse --verify --quiet "refs/heads/$1"; }
 
+# pushed_feature : a clone of mislav/dotfiles on a branch feature, pushed with -u.
+pushed_feature() {
+  serve_github mislav/dotfiles
+  clone_served mislav/dotfiles
+  git switch -q -c feature
+  git commit -q --allow-empty -m feature
+  git push -q -u origin refs/heads/feature
+}
+
+# no_gh_path [COMMAND...] : a new directory for PATH holding git, bash and these commands, never gh
+# (a system directory such as /usr/bin may hold one, as on CI runners).
+no_gh_path() {
+  local dir cmd path
+  dir=$(mktemp -d "$HUB_TEST_TMP/path.XXXXXX") || return 1
+  for cmd in git bash "$@"; do
+    path=$(command -v "$cmd") && ln -sf "$path" "$dir/$cmd" || return 1
+  done
+  printf '%s\n' "$dir"
+}
+
+# recording_gh [stdin] : a gh in a directory it prints, for PATH, answering as test/stubs/gh and
+# recording its latest call in $HUB_TEST_TMP: args (one argument per line), env ("GH_HOST=X
+# GH_REPO=Y", unset for an unset one), parent (its parent process's name) and, with stdin, stdin.
+recording_gh() {
+  local dir=$HUB_TEST_TMP/bin
+  mkdir -p "$dir" || return 1
+  {
+    cat <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >"$HUB_TEST_TMP/args"
+printf 'GH_HOST=%s GH_REPO=%s\n' "${GH_HOST-unset}" "${GH_REPO-unset}" >"$HUB_TEST_TMP/env"
+ps -o comm= -p "$PPID" >"$HUB_TEST_TMP/parent"
+EOF
+    if [[ ${1-} == stdin ]]; then
+      cat <<'EOF'
+cat >"$HUB_TEST_TMP/stdin"
+EOF
+    fi
+    printf 'exec %q "$@"\n' "$HUB_TEST_ROOT/test/stubs/gh"
+  } >"$dir/gh" && chmod +x "$dir/gh" && printf '%s\n' "$dir"
+}
+
+# failing_gh MSG : a gh in a directory it prints, for PATH, answering as test/stubs/gh and, when
+# that fails, writing MSG on stderr, where gh writes its errors.
+failing_gh() {
+  local dir=$HUB_TEST_TMP/failing
+  mkdir -p "$dir" || return 1
+  # shellcheck disable=SC2016  # the $@, $? and $rc belong to the gh script written here
+  printf '#!/usr/bin/env bash\n%q "$@" && exit\nrc=$?\nprintf "%%s\\n" %q >&2\nexit "$rc"\n' \
+    "$HUB_TEST_ROOT/test/stubs/gh" "$1" >"$dir/gh" && chmod +x "$dir/gh" && printf '%s\n' "$dir"
+}
+
 # stub_gh 'ARGS GLOB' 'STDOUT' [STATUS] : answer gh calls whose space-joined arguments match the
 # glob with STDOUT (printf %b escapes) and STATUS. Later registrations win.
 stub_gh() {
@@ -135,6 +187,11 @@ stub_gh_file() {
   # The stub prints a newline after the answer.
   body=${body%x} body=${body%$'\n'}
   stub_gh "$1" "${body//\\/\\\\}"
+}
+
+# stub_patch ENDPOINT FORMAT FILE [HOST] : gh api answers ENDPOINT as FORMAT with FILE.
+stub_patch() {
+  stub_gh_file "api --hostname ${4:-github.com} $1 -H Accept: application/vnd.github.$2*" "$3"
 }
 
 # gh_calls : the gh calls made so far, one per line, GH_REPO=VALUE in front when it was set.
@@ -157,6 +214,15 @@ assert_gh_not_called() {
     return 1
   }
 }
+
+# opened : the URLs the browser stub was given, one per line.
+opened() { cat "$HUB_TEST_TMP/browser.log" 2>/dev/null; }
+
+# copied : what the clipboard stub holds.
+copied() { cat "$HUB_TEST_TMP/clipboard" 2>/dev/null; }
+
+# assert_tmp_empty : nothing is left in $TMPDIR.
+assert_tmp_empty() { assert_equals "$(ls -A "$TMPDIR")" ''; }
 
 assert_success() { assert_status 0; }
 

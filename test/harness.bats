@@ -202,3 +202,61 @@ https://github.com/o/r/pulls'
   assert_output_equals "$expected"
   assert_equals "$(<ssh.log)" '-G hub-test-alias'
 }
+
+@test "no_gh_path holds git, bash and the commands named, and never gh" {
+  local dir
+  dir=$(no_gh_path mktemp ssh)
+  assert_equals "${dir%/path.*}" "$HUB_TEST_TMP"
+  assert_equals "$(ls "$dir")" $'bash\ngit\nmktemp\nssh'
+  assert_equals "$(ls "$(no_gh_path)")" $'bash\ngit'
+  assert_equals "$(readlink "$dir/ssh")" "$HUB_TEST_ROOT/test/stubs/ssh"
+  PATH=$dir run -127 gh --version
+  assert_status 127
+  PATH=$dir run git --version
+  assert_success
+  assert_gh_not_called
+}
+
+@test "recording_gh answers as the stub and records the latest call's words, variables and parent" {
+  stub_gh 'issue view *' answer 3
+  local dir
+  dir=$(recording_gh)
+  assert_equals "$dir" "$HUB_TEST_TMP/bin"
+  PATH=$dir:$PATH run gh issue view 'two words' ''
+  assert_status 3
+  assert_output_equals answer
+  assert_equals "$(<args)" "$(printf '%s\n' issue view 'two words' '')"
+  assert_equals "$(<"$HUB_TEST_TMP/env")" 'GH_HOST=unset GH_REPO=unset'
+  assert_equals "$(basename "$(<parent)")" bash
+  assert_gh_called 'issue view two words '
+  run ls stdin
+  assert_failure
+  GH_HOST=ghe.example GH_REPO=o/r PATH=$dir:$PATH run gh issue view 1
+  assert_equals "$(<args)" $'issue\nview\n1'
+  assert_equals "$(<"$HUB_TEST_TMP/env")" 'GH_HOST=ghe.example GH_REPO=o/r'
+  assert_gh_called 'GH_REPO=o/r gh issue view 1'
+}
+
+@test "failing_gh answers as the stub and writes its message on stderr when the stub fails" {
+  stub_gh 'api user' partial 4
+  stub_gh 'api zen' fine
+  local dir
+  dir=$(failing_gh "gh: it's Not Found (HTTP 404)")
+  PATH=$dir:$PATH run --separate-stderr gh api user
+  assert_status 4
+  assert_output_equals partial
+  assert_equals "$stderr" "gh: it's Not Found (HTTP 404)"
+  PATH=$dir:$PATH run --separate-stderr gh api zen
+  assert_success
+  assert_output_equals fine
+  assert_equals "$stderr" ''
+  assert_equals "$(gh_calls)" $'gh api user\ngh api zen'
+}
+
+@test "recording_gh stdin also records the standard input" {
+  stub_gh 'api *' ok
+  PATH=$(recording_gh stdin):$PATH run gh api graphql --input - <<<'{"query":"{viewer{login}}"}'
+  assert_success
+  assert_output_equals ok
+  assert_equals "$(<stdin)" '{"query":"{viewer{login}}"}'
+}
