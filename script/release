@@ -9,10 +9,13 @@
 #
 # The checks, made before anything is committed or pushed: main is checked out and clean;
 # origin's URL and each of its push URLs name the formula's REPO on github.com (https, ssh:// or
-# git@github.com:), so releases come from a checkout of that repository; after git fetch origin,
-# main is not behind origin/main; gh can see REPO; script/bump --dry-run VERSION passes (a new
-# SemVer tag, notes in CHANGELOG.md); for a stable VERSION, script/update-formula accepts
-# vVERSION (it is not lower than the version the formula names).
+# git@github.com:), so releases come from a checkout of that repository; VERSION is X.Y.Z or
+# X.Y.Z-PRE and origin has no tag vVERSION (git ls-remote); after fetching origin's main, main
+# is not behind origin/main; gh can see REPO; script/bump --dry-run VERSION passes (a new tag,
+# notes in CHANGELOG.md); for a stable VERSION, script/update-formula accepts vVERSION (it is
+# not lower than the version the formula names). The push leaves out every other tag, whatever
+# push.followTags says. When it fails, the script prints the push to retry and the commands
+# that undo the bump.
 #
 # Options:
 #   -n, --dry-run   Make the checks, then print the commands instead of running them.
@@ -20,9 +23,13 @@
 #   $ script/release 0.2.0
 #   > make check
 #   > script/bump 0.2.0
-#   > git push --atomic origin refs/heads/main:refs/heads/main refs/tags/v0.2.0:refs/tags/v0.2.0
+#   > git push --atomic --no-follow-tags origin refs/heads/main:refs/heads/main \
+#       refs/tags/v0.2.0:refs/tags/v0.2.0
 
 set -euo pipefail
+
+semver_id='(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
+semver="^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-$semver_id(\.$semver_id)*)?$"
 
 die() {
   printf 'script/release: %s\n' "$*" >&2
@@ -77,10 +84,12 @@ for arg; do
   esac
 done
 [[ -n $version ]] || usage_error 'no version given'
+# bump strips a leading v too: vv0.2.0 would tag v0.2.0 and push vv0.2.0.
+[[ $version =~ $semver ]] || die "not a X.Y.Z or X.Y.Z-PRE version: $version"
 tag=v$version
 
-cd "$(dirname "$0")/.."
-[[ $(git symbolic-ref --quiet --short HEAD) == main ]] || die 'not on main (git switch main)'
+CDPATH='' cd -P -- "$(dirname -- "$0")/.." >/dev/null
+[[ $(git symbolic-ref --quiet HEAD) == refs/heads/main ]] || die 'not on main (git switch main)'
 # --untracked-files=all: status.showUntrackedFiles=no would hide untracked files.
 [[ -z $(git status --porcelain --untracked-files=all) ]] \
   || die 'the working tree is not clean (git status)'
@@ -95,7 +104,14 @@ while IFS= read -r url; do
   check_url 'push URL' "$url"
 done <<<"$push_urls"
 
-git fetch --quiet origin
+# Tag following and remote.origin.tagOpt can leave origin's tag out of a fetch: ask origin.
+status=0
+git ls-remote --quiet --exit-code origin "refs/tags/$tag" >/dev/null || status=$?
+((status != 0)) || die "origin has the tag $tag already (git fetch origin tag $tag)"
+((status == 2)) || die "cannot ask origin about the tag $tag (git ls-remote origin)"
+# A narrowed remote.origin.fetch would leave origin/main as it was.
+git fetch --quiet origin +refs/heads/main:refs/remotes/origin/main \
+  || die 'cannot fetch main from origin (git fetch origin main)'
 git rev-parse --quiet --verify refs/remotes/origin/main >/dev/null \
   || die 'origin has no main branch (git fetch origin)'
 git merge-base --is-ancestor refs/remotes/origin/main HEAD \
@@ -109,9 +125,13 @@ if [[ $version != *-* ]]; then
 fi
 
 printf 'Releasing hub %s to github.com/%s\n' "$version" "$repo"
+start=$(git rev-parse HEAD)
+push=(git push --atomic --no-follow-tags origin refs/heads/main:refs/heads/main
+  "refs/tags/$tag:refs/tags/$tag")
 run make check
 run script/bump "$version"
-run git push --atomic origin refs/heads/main:refs/heads/main "refs/tags/$tag:refs/tags/$tag"
+run "${push[@]}" || die "the push failed (retry with ${push[*]}, or undo the bump with \
+git tag -d $tag && git reset --hard $start)"
 what='and points Formula/hub.rb at it'
 [[ $version != *-* ]] || what='as a pre-release'
 printf 'The Release workflow publishes %s %s (gh run watch -R %s).\n' "$tag" "$what" "$repo"

@@ -110,7 +110,7 @@ fi
 ((! sha256_given)) || [[ $sha256 =~ ^[0-9a-f]{64}$ ]] \
   || die "not a SHA-256 checksum (64 lowercase hex digits): $sha256"
 
-cd "$(dirname "$0")/.."
+CDPATH='' cd -P -- "$(dirname -- "$0")/.." >/dev/null
 [[ -f $formula ]] || die "no $formula"
 current=$(sed -n 's#^  url ".*/archive/refs/tags/v\([^/]*\)\.tar\.gz"$#\1#p' "$formula" | head -n 1)
 if ((! force)); then

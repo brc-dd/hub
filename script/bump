@@ -60,8 +60,8 @@ done
 [[ $version =~ $semver ]] || die "not a X.Y.Z or X.Y.Z-PRE version: $version"
 tag=v$version
 
-cd "$(dirname "$0")/.."
-[[ $(git symbolic-ref --quiet --short HEAD) == main ]] || die 'not on main (git switch main)'
+CDPATH='' cd -P -- "$(dirname -- "$0")/.." >/dev/null
+[[ $(git symbolic-ref --quiet HEAD) == refs/heads/main ]] || die 'not on main (git switch main)'
 # --untracked-files=all: status.showUntrackedFiles=no would hide untracked files.
 [[ -z $(git status --porcelain --untracked-files=all) ]] \
   || die 'the working tree is not clean (git status)'

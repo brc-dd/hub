@@ -178,6 +178,25 @@ assert_unchanged() {
   assert_output_equals 'script/bump: not on main (git switch main)'
 }
 
+@test "bump works on main while a tag is named main" {
+  git tag main
+  run script/bump 0.2.0
+  assert_success
+  assert_equals "$(<VERSION)" 0.2.0
+  assert_equals "$(git cat-file -t refs/tags/v0.2.0)" tag
+}
+
+@test "bump stays in its own checkout under an exported CDPATH" {
+  mkdir -p "$HUB_TEST_TMP/decoy/script"
+  echo 9.9.9 >"$HUB_TEST_TMP/decoy/VERSION"
+  export CDPATH=$HUB_TEST_TMP/decoy
+  run script/bump 0.2.0
+  assert_success
+  assert_output_equals ''
+  assert_equals "$(<VERSION)" 0.2.0
+  assert_equals "$(<"$HUB_TEST_TMP/decoy/VERSION")" 9.9.9
+}
+
 @test "bump refuses a working tree with changes or untracked files" {
   echo change >>VERSION
   run script/bump 0.2.0

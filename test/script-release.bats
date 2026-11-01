@@ -6,7 +6,7 @@ load test_helper
 
 zeros=$(printf '0%.0s' {1..64})
 view='repo view github.com/brc-dd/hub --json nameWithOwner --jq .nameWithOwner'
-push_line='[dry-run] git push --atomic origin refs/heads/main:refs/heads/main'
+push_line='[dry-run] git push --atomic --no-follow-tags origin refs/heads/main:refs/heads/main'
 push_line+=' refs/tags/v0.2.0:refs/tags/v0.2.0'
 
 setup() {
@@ -146,8 +146,87 @@ which is newer than v0.0.9 (-f to go back)"
   git push -q origin refs/heads/main:refs/tags/v0.2.0
   run release -n 0.2.0
   assert_failure
-  assert_output_equals 'script/bump: tag v0.2.0 exists already'
+  assert_output_equals "script/release: origin has the tag v0.2.0 already \
+(git fetch origin tag v0.2.0)"
   assert_output_lacks '[dry-run]'
+  assert_gh_not_called
+}
+
+@test "release refuses a tag origin has off main or that the fetch leaves out" {
+  local srv commit
+  srv=$(server_dir brc-dd/hub)
+  commit=$(git -C "$srv" commit-tree -m unmerged 'refs/heads/main^{tree}')
+  git -C "$srv" tag -a -m x v0.2.0 "$commit"
+  run release -n 0.2.0
+  assert_failure
+  assert_output_equals "script/release: origin has the tag v0.2.0 already \
+(git fetch origin tag v0.2.0)"
+  git -C "$srv" tag -d v0.2.0 >/dev/null
+  git -C "$srv" tag v0.3.0 main
+  git config remote.origin.tagOpt --no-tags
+  run release -n 0.3.0
+  assert_failure
+  assert_output_equals "script/release: origin has the tag v0.3.0 already \
+(git fetch origin tag v0.3.0)"
+  assert_output_lacks '[dry-run]'
+  assert_equals "$(git tag -l)" v0.1.0
+  assert_equals "$(<VERSION)" 0.1.0
+  assert_gh_not_called
+}
+
+@test "release refuses origin's tag before it bumps anything" {
+  local srv commit
+  srv=$(server_dir brc-dd/hub)
+  commit=$(git -C "$srv" commit-tree -m unmerged 'refs/heads/main^{tree}')
+  git -C "$srv" tag v0.2.0 "$commit"
+  stub_make 0
+  run release 0.2.0
+  assert_failure
+  assert_output_equals "script/release: origin has the tag v0.2.0 already \
+(git fetch origin tag v0.2.0)"
+  assert_equals "$(<VERSION)" 0.1.0
+  assert_equals "$(git log --format=%s -1)" 'add the tooling'
+  assert_equals "$(git tag -l)" v0.1.0
+  assert_equals "$(git status --porcelain)" ''
+  [[ ! -e $HUB_TEST_TMP/make.log ]]
+}
+
+@test "release refuses when origin cannot be asked about the tag" {
+  mv "$(server_dir brc-dd/hub)" "$HUB_TEST_TMP/away"
+  run release -n 0.2.0
+  assert_failure
+  assert_line_equals -1 "script/release: cannot ask origin about the tag v0.2.0 \
+(git ls-remote origin)"
+  assert_nothing_released
+  assert_gh_not_called
+}
+
+@test "release pushes only main and the tag when push.followTags is set" {
+  git config push.followTags true
+  git tag -a v0.9.0 -m x
+  stub_make 0
+  run release 0.2.0
+  assert_success
+  assert_equals "$(server_ref brc-dd/hub refs/tags/v0.9.0)" ''
+  assert_equals "$(git -C "$(server_dir brc-dd/hub)" cat-file -t refs/tags/v0.2.0)" tag
+  assert_equals "$(server_ref brc-dd/hub refs/heads/main)" "$(git rev-parse HEAD)"
+}
+
+@test "release says how to retry or undo when the push fails" {
+  local start hook
+  start=$(git rev-parse HEAD)
+  hook=$(server_dir brc-dd/hub)/hooks/pre-receive
+  printf '#!/bin/sh\necho protected >&2\nexit 1\n' >"$hook"
+  chmod +x "$hook"
+  stub_make 0
+  run release 0.2.0
+  assert_failure
+  assert_line_equals -1 "script/release: the push failed (retry with git push --atomic \
+--no-follow-tags origin refs/heads/main:refs/heads/main refs/tags/v0.2.0:refs/tags/v0.2.0, \
+or undo the bump with git tag -d v0.2.0 && git reset --hard $start)"
+  assert_equals "$(server_ref brc-dd/hub refs/heads/main)" "$start"
+  git tag -d v0.2.0 >/dev/null && git reset -q --hard "$start"
+  assert_unchanged
 }
 
 @test "release refuses an empty Unreleased section" {
@@ -163,8 +242,12 @@ which is newer than v0.0.9 (-f to go back)"
 @test "release refuses a version that is not SemVer" {
   run release -n 1.02.0
   assert_failure
-  assert_output_equals 'script/bump: not a X.Y.Z or X.Y.Z-PRE version: 1.02.0'
+  assert_output_equals 'script/release: not a X.Y.Z or X.Y.Z-PRE version: 1.02.0'
+  run release -n vv0.2.0-rc.1
+  assert_failure
+  assert_output_equals 'script/release: not a X.Y.Z or X.Y.Z-PRE version: v0.2.0-rc.1'
   assert_nothing_released
+  assert_gh_not_called
 }
 
 @test "release refuses an origin that is not on github.com" {
@@ -285,6 +368,42 @@ not github.com/brc-dd/hub (releases come from a checkout of brc-dd/hub)"
   assert_output_equals 'script/release: main is behind origin/main (git pull --rebase origin main)'
   assert_nothing_released
   assert_gh_not_called
+}
+
+@test "release refuses a stale origin/main when origin's fetch refspec is narrowed" {
+  git clone -q https://github.com/brc-dd/hub.git ../other
+  git -C ../other commit -q --allow-empty -m 'elsewhere'
+  git -C ../other push -q origin main
+  git config remote.origin.fetch +refs/heads/other:refs/remotes/origin/other
+  run release -n 0.2.0
+  assert_failure
+  assert_output_equals 'script/release: main is behind origin/main (git pull --rebase origin main)'
+  assert_nothing_released
+  assert_gh_not_called
+}
+
+@test "release refuses an origin without main" {
+  git -C "$(server_dir brc-dd/hub)" update-ref -d refs/heads/main
+  run release -n 0.2.0
+  assert_failure
+  assert_line_equals -1 'script/release: cannot fetch main from origin (git fetch origin main)'
+  assert_nothing_released
+  assert_gh_not_called
+}
+
+@test "release works on main while a tag is named main" {
+  git tag main
+  run release -n 0.2.0
+  assert_success
+  assert_line_equals 3 "$push_line"
+}
+
+@test "release stays in its own checkout under an exported CDPATH" {
+  mkdir -p "$HUB_TEST_TMP/decoy/script"
+  export CDPATH=$HUB_TEST_TMP/decoy
+  run release -n 0.2.0
+  assert_success
+  assert_line_equals 0 'Releasing hub 0.2.0 to github.com/brc-dd/hub'
 }
 
 @test "release refuses a branch other than main and a dirty tree" {

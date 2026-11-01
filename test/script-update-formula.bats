@@ -51,6 +51,19 @@ update_formula() { script/update-formula "$@"; }
   assert_output_equals 1
 }
 
+@test "update-formula stays in its own tree under an exported CDPATH" {
+  mkdir -p ../decoy/script ../decoy/Formula
+  sed 's/v0.1.0/v9.9.9/' ../before.rb >../decoy/Formula/hub.rb
+  export CDPATH=$HUB_TEST_TMP/decoy
+  run update_formula --sha256="$sha_b" v0.2.0
+  assert_success
+  assert_output_equals "Pointed Formula/hub.rb at v0.2.0 (sha256 $sha_b)"
+  run grep -c 'refs/tags/v0.2.0.tar.gz' Formula/hub.rb
+  assert_output_equals 1
+  run grep -c 'refs/tags/v9.9.9.tar.gz' ../decoy/Formula/hub.rb
+  assert_output_equals 1
+}
+
 @test "update-formula refuses to go back without --force and leaves the file alone" {
   run update_formula --sha256="$sha_b" v0.0.9
   assert_failure
