@@ -23,8 +23,8 @@ hub_cmd_version() {
     case $1 in
       --build-options) build=(--build-options) ;;
       -h | --help) hub::usage ;;
-      -?*) hub::usage_error "unknown option: $1" ;;
-      *) hub::usage_error "unexpected argument: $1" ;;
+      -?*) hub::usage_error "unknown option: $(hub::shown "$1")" ;;
+      *) hub::usage_error "unexpected argument: $(hub::shown "$1")" ;;
     esac
     shift
   done

@@ -33,12 +33,13 @@ hub_cmd_ci_status() {
       -v | --verbose) verbose=1 ;;
       -h | --help) hub::usage ;;
       --) shift && operands+=("$@") && break ;;
-      -?*) hub::usage_error "unknown option: $1" ;;
+      -?*) hub::usage_error "unknown option: $(hub::shown "$1")" ;;
       *) operands+=("$1") ;;
     esac
     shift
   done
-  ((${#operands[@]} <= 1)) || hub::usage_error "unexpected argument: ${operands[1]}"
+  ((${#operands[@]} <= 1)) \
+    || hub::usage_error "unexpected argument: $(hub::shown "${operands[1]}")"
   ref=${operands[0]-HEAD}
   [[ -n $ref ]] || hub::usage_error 'empty commit'
   project=$(hub::project) || exit 1

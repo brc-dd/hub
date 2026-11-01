@@ -25,12 +25,12 @@ hub_cmd_alias() {
       -s) script=1 ;;
       -h | --help) hub::usage ;;
       --) shift && shells+=("$@") && break ;;
-      -?*) hub::usage_error "unknown option: $1" ;;
+      -?*) hub::usage_error "unknown option: $(hub::shown "$1")" ;;
       *) shells+=("$1") ;;
     esac
     shift
   done
-  ((${#shells[@]} <= 1)) || hub::usage_error "unexpected argument: ${shells[1]}"
+  ((${#shells[@]} <= 1)) || hub::usage_error "unexpected argument: $(hub::shown "${shells[1]}")"
   set -- "${shells[0]:-${SHELL##*/}}"
   [[ -n $1 ]] || hub::die 'cannot tell your shell from SHELL (name it: hub alias SHELL)'
   line="eval \"\$(hub alias -s $1)\""

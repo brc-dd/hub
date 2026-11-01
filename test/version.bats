@@ -48,6 +48,12 @@ load test_helper
   run hub version -x
   assert_status 1
   assert_line_equals 0 'hub version: unknown option: -x'
+  run hub version ''
+  assert_status 1
+  assert_line_equals 0 "hub version: unexpected argument: ''"
+  run hub version '--x y'
+  assert_status 1
+  assert_line_equals 0 'hub version: unknown option: --x\ y'
   assert_gh_not_called
 }
 

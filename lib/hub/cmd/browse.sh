@@ -33,7 +33,7 @@ hub_cmd_browse() {
       -c | --copy) copy=1 ;;
       -h | --help) hub::usage ;;
       --) shift && dashdash=1 && break ;;
-      -?*) hub::usage_error "unknown option: $1" ;;
+      -?*) hub::usage_error "unknown option: $(hub::shown "$1")" ;;
       *) operands+=("$1") ;;
     esac
     shift

@@ -76,9 +76,9 @@ hub_cmd_pull_request() {
         text='use gh api to attach a pull request to an issue, or link it in the body'
         hub::usage_error "$1 is not supported ($text)"
         ;;
-      --) (($# == 1)) || hub::usage_error "unexpected argument: $2" ;;
-      -?*) hub::usage_error "unknown option: $1" ;;
-      *) hub::usage_error "unexpected argument: $1" ;;
+      --) (($# == 1)) || hub::usage_error "unexpected argument: $(hub::shown "$2")" ;;
+      -?*) hub::usage_error "unknown option: $(hub::shown "$1")" ;;
+      *) hub::usage_error "unexpected argument: $(hub::shown "$1")" ;;
     esac
     shift
   done

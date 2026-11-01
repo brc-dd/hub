@@ -27,7 +27,7 @@ hub_cmd_delete() {
       -y | --yes) yes=(--yes) ;;
       -h | --help) hub::usage ;;
       --) shift && operands+=("$@") && break ;;
-      -?*) hub::usage_error "unknown option: $1" ;;
+      -?*) hub::usage_error "unknown option: $(hub::shown "$1")" ;;
       *) operands+=("$1") ;;
     esac
     shift

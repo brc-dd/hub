@@ -51,17 +51,17 @@ hub_cmd_checkout() {
         ;;
       -?*)
         only='gh pr checkout takes -b BRANCH, --detach and --recurse-submodules only'
-        hub::usage_error "unknown option: $1 ($only)"
+        hub::usage_error "unknown option: $(hub::shown "$1") ($only)"
         ;;
       '') hub::die 'the branch name is empty' ;;
       *)
         if hub::pull_url "$1"; then
-          [[ -z $url ]] || hub::usage_error "unexpected argument: $1"
+          [[ -z $url ]] || hub::usage_error "unexpected argument: $(hub::shown "$1")"
           url=$1 host=${HUB_URL[host]}
         elif [[ -n $url && -z ${operand+set} ]]; then
           operand=$1
         else
-          hub::usage_error "unexpected argument: $1"
+          hub::usage_error "unexpected argument: $(hub::shown "$1")"
         fi
         ;;
     esac

@@ -40,7 +40,7 @@ hub_cmd_compare() {
         ;;
       -h | --help) hub::usage ;;
       --) shift && operands+=("$@") && break ;;
-      -?*) hub::usage_error "unknown option: $1" ;;
+      -?*) hub::usage_error "unknown option: $(hub::shown "$1")" ;;
       *) operands+=("$1") ;;
     esac
     shift
@@ -49,7 +49,7 @@ hub_cmd_compare() {
     0) ;;
     1) range=${operands[0]} ;;
     2) owner=${operands[0]} range=${operands[1]} ;;
-    *) hub::usage_error "unexpected argument: ${operands[2]}" ;;
+    *) hub::usage_error "unexpected argument: $(hub::shown "${operands[2]}")" ;;
   esac
   # The owner becomes a path segment of the URL.
   if ((${#operands[@]} == 2)) && ! hub::is_owner "$owner"; then

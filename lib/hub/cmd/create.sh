@@ -50,12 +50,13 @@ hub_cmd_create() {
       -c | --copy) copy=1 ;;
       --help) hub::usage ;;
       --) shift && operands+=("$@") && break ;;
-      -?*) hub::usage_error "unknown option: $1" ;;
+      -?*) hub::usage_error "unknown option: $(hub::shown "$1")" ;;
       *) operands+=("$1") ;;
     esac
     shift
   done
-  ((${#operands[@]} <= 1)) || hub::usage_error "unexpected argument: ${operands[1]}"
+  ((${#operands[@]} <= 1)) \
+    || hub::usage_error "unexpected argument: $(hub::shown "${operands[1]}")"
 
   hub::require_gh
   hub::require_repo
