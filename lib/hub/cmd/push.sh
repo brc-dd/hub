@@ -60,20 +60,26 @@ hub_cmd_push() {
   done
 }
 
-# _hub_push_chooses_refs FLAGS... : a flag picks the refs itself, so HEAD is not added.
+# _hub_push_chooses_refs FLAGS... : a flag picks the refs itself and no later --no-FLAG cancels
+# it, so HEAD is not added.
 _hub_push_chooses_refs() {
-  local word long
+  local word name long chosen=' '
   for word; do
     case $word in
       --?*)
-        # git expands abbreviations (--del).
+        # git expands abbreviations (--del, --no-al).
+        name=${word%%=*}
         for long in --all --branches --mirror --tags --delete; do
-          [[ $long != "${word%%=*}"* ]] || return 0
+          if [[ $name == --no-?* && $long == "--${name#--no-}"* ]]; then
+            chosen=${chosen// $long / }
+          elif [[ $long == "$name"* && $chosen != *" $long "* ]]; then
+            chosen+="$long "
+          fi
         done
         ;;
       # -o takes the rest of the cluster as its value.
-      -*) [[ ${word%%o*} != -*d* ]] || return 0 ;;
+      -*) [[ ${word%%o*} != -*d* ]] || chosen+='--delete ' ;;
     esac
   done
-  return 1
+  [[ -n ${chosen// /} ]]
 }

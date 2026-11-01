@@ -128,6 +128,37 @@ setup_push() {
   done
 }
 
+@test "hub push adds HEAD when a later --no-FLAG cancels the ref-choosing option" {
+  setup_push
+  git config push.default matching
+  git push -q origin main
+  git push -q two main
+  commit_on main 'unpushed on main'
+  local flags
+  for flags in '--all --no-all' '--tags --no-tags' '-d --no-delete' '--mirror --no-mirr' \
+    '--branches --no-br' '--all --all --no-al'; do
+    run hub push $flags origin,two
+    assert_success
+    assert_equals "$(server_ref mislav/one refs/heads/feature)" "$(tip feature)"
+    assert_equals "$(server_ref mislav/two refs/heads/feature)" "$(tip feature)"
+    assert_equals "$(server_ref mislav/one refs/heads/main)" "$(tip main~1)"
+    assert_equals "$(server_ref mislav/two refs/heads/main)" "$(tip main~1)"
+    git push -q origin :feature
+    git push -q two :feature
+  done
+}
+
+@test "hub push adds no HEAD when another ref-choosing option survives a --no-FLAG" {
+  setup_push
+  git tag v9
+  run hub push --tags --all --no-all origin,two
+  assert_success
+  assert_equals "$(server_ref mislav/one refs/tags/v9)" "$(tip feature)"
+  assert_equals "$(server_ref mislav/two refs/tags/v9)" "$(tip feature)"
+  assert_equals "$(server_ref mislav/one refs/heads/feature)" ''
+  assert_equals "$(server_ref mislav/two refs/heads/feature)" ''
+}
+
 @test "hub push adds no HEAD for a remote with its own push refspec or mirroring" {
   setup_push mislav/three
   git remote add three https://github.com/mislav/three.git
