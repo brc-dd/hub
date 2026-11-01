@@ -9,15 +9,15 @@
 # hub 2.x's GITHUB_HOST reaches gh as GH_HOST when GH_HOST is not set.
 #
 # hub 2.x's options in gh's spelling:
-#   pr list -h BRANCH -b BASE  gh pr list -H BRANCH -B BASE (gh's -H takes no OWNER: prefix)
-#   pr list -o KEY [-^]        gh pr list -S 'sort:KEY-desc' (sort:KEY-asc), created or updated
-#   pr list -o popularity      gh pr list -S 'sort:comments-desc'
-#   pr list|show -f FORMAT     --json FIELDS with --jq EXPR or -t TEMPLATE
-#   pr checkout PR BRANCH      gh pr checkout PR -b BRANCH
-#   pr show -h HEAD            gh pr view HEAD
-#   pr show -u                 gh pr view --json url --jq .url
-#   pr show -c                 not supported; gh's -c shows the comments: pipe the URL to pbcopy
-#   pr show                    gh pr view -w opens it in the browser
+#   pr list -h BRANCH -b BASE       gh pr list -H BRANCH -B BASE (gh's -H takes no OWNER: prefix)
+#   pr list -o KEY [-^]             gh pr list -S 'sort:KEY-desc' (sort:KEY-asc), created or updated
+#   pr list -o popularity           gh pr list -S 'sort:comments-desc'
+#   pr list|show -f FORMAT          --json FIELDS with --jq EXPR or -t TEMPLATE
+#   pr checkout PR BRANCH           gh pr checkout PR -b BRANCH
+#   pr show -h HEAD                 gh pr view HEAD
+#   pr show -u                      gh pr view --json url --jq .url
+#   pr show -c                      not supported; gh's -c is --comments: pipe the URL to pbcopy
+#   pr show                         gh pr view -w opens it in the browser
 #
 #   $ hub pr -s closed -L 5
 #   > gh pr list -s closed -L 5

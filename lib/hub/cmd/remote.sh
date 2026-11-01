@@ -5,7 +5,7 @@
 #        hub remote set-url [-p] [--push] [--add] NAME OWNER[/REPO]
 #
 # A git command hub extends: git remote's options apply. hub puts a clone URL in the place of
-# OWNER[/REPO], on the current project's host (else gh's default host), and runs git remote with
+# OWNER[/REPO], on the current project's host (else the default host), and runs git remote with
 # every other word as given. REPO defaults to the project's repository name, else the name of
 # the repository's directory. With one operand, USER names both the remote and the owner, and
 # origin alone means your own copy of the repository. With two operands, a word git can read
@@ -40,7 +40,7 @@ hub_cmd_remote() {
     set-url) ;;
     *) hub::exec_git remote "$@" ;;
   esac
-  # Drop hub's -p before hub::scan can hand the line to git.
+  # hub's -p is dropped first, so no line handed to git, by hub::scan either, carries it.
   ! hub::drop_flag p "$valued" "${words[@]:sub+1}" || proto=ssh
   args=("${words[@]:0:sub+1}" "${HUB_ARGS[@]}")
   hub::scan "$valued" "${args[@]}"
@@ -60,7 +60,7 @@ hub_cmd_remote() {
     add:2 | set-url:2)
       slot=${ops[1]}
       spec=${args[slot]}
-      # git reads a relative path from the top directory; one that exists here is a path too.
+      # git resolves a relative path from the top of the work tree; one that exists here counts too.
       top=$(hub::toplevel) || top=$(hub::git_query rev-parse --absolute-git-dir)
       # x/..git and .git stay git's, as for clone.
       if ! hub::is_shorthand "${spec%.git}" || hub::local_source "$spec" \

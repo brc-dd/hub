@@ -2,7 +2,7 @@
 # Summary: Shared helpers of hub's modules.
 #
 # Sourced by bin/hub with HUB_ROOT, HUB_LIB and HUB_COMMAND set. A helper prints its answer on
-# stdout and returns non-zero when it has none, unless its contract names a global it sets.
+# stdout and returns non-zero when it has none, unless its contract says it sets a HUB_* global.
 
 HUB_ARGS=() HUB_OPERANDS=() HUB_OPTIONS=() HUB_FLAGS='' HUB_REST=''
 declare -gA HUB_URL=()
@@ -115,9 +115,9 @@ hub::current_branch() {
 hub::remotes() { git remote 2>/dev/null; }
 
 # hub::remote_exists NAME : NAME is a remote.
-# git remote lists remotes of every configuration file and -c, get-url those in .git/remotes.
 hub::remote_exists() {
   local name
+  # git remote lists the remotes of every configuration file and -c; get-url finds .git/remotes.
   while IFS= read -r name; do [[ $name != "$1" ]] || return 0; done < <(hub::remotes)
   git remote get-url -- "$1" >/dev/null 2>&1
 }
@@ -219,7 +219,7 @@ hub::gh_hosts() {
   done <"$file"
 }
 
-# hub::host : the default host in lowercase: GH_HOST, else the only gh host, else github.com.
+# hub::host : the default host: GH_HOST, else the one host gh is logged in to, else github.com.
 hub::host() {
   local host=${GH_HOST-}
   local -a hosts
@@ -308,7 +308,7 @@ hub::project_remote() {
   printf '%s\n' "${found%% *}"
 }
 
-# hub::parse_project STR : "HOST OWNER REPO" of [HOST/]OWNER/REPO[.git] or a URL, each part checked.
+# hub::parse_project WORD : "HOST OWNER REPO" of [HOST/]OWNER/REPO[.git] or a URL, parts checked.
 hub::parse_project() {
   local host owner repo
   if [[ $1 == *:* ]]; then
@@ -330,7 +330,7 @@ hub::parse_project() {
   hub::is_shorthand "$owner/$repo" && printf '%s %s %s\n' "$host" "$owner" "$repo"
 }
 
-# hub::parse_github_url URL : HUB_URL (host owner repo kind number sha format range) of a web URL.
+# hub::parse_github_url URL : sets HUB_URL to the host owner repo kind number sha format range.
 hub::parse_github_url() {
   local host path
   local -a part
@@ -392,10 +392,10 @@ hub::clone_url() {
   printf '%s@%s:%s/%s.git\n' "$user" "$1" "$2" "$3"
 }
 
-# hub::is_owner STR : STR reads as the name of a GitHub user or organization.
+# hub::is_owner WORD : WORD reads as the name of a GitHub user or organization.
 hub::is_owner() { [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]]; }
 
-# hub::is_shorthand STR : STR reads as OWNER/REPO or REPO.
+# hub::is_shorthand WORD : WORD reads as OWNER/REPO or REPO.
 hub::is_shorthand() {
   local repo=${1#*/}
   if [[ $1 == */* ]]; then
@@ -407,7 +407,7 @@ hub::is_shorthand() {
   [[ $repo != . && $repo != .. ]]
 }
 
-# hub::local_source STR [bundle] : git would read STR as a local repository (or bundle).
+# hub::local_source WORD [bundle] : git would read WORD as a local repository (or bundle).
 hub::local_source() {
   # git tries STR, STR/.git, STR.git/.git (a work tree) and STR.git.
   [[ -e $1 ]] || git rev-parse --resolve-git-dir "$1.git" >/dev/null 2>&1 \
@@ -425,12 +425,12 @@ hub::fetch_source() {
   fi
 }
 
-# hub::pull_url WORD : WORD is the URL of a pull request or of one of its pages (sets HUB_URL).
+# hub::pull_url WORD : WORD is the URL of a pull request or of one of its pages; sets HUB_URL.
 hub::pull_url() {
   hub::parse_github_url "$1" && [[ ${HUB_URL[kind]} == pull && -n ${HUB_URL[number]-} ]]
 }
 
-# hub::patch_url WORD : WORD is a pull, commit or compare URL GitHub serves as a patch (HUB_URL).
+# hub::patch_url WORD : WORD is a pull, commit or comparison URL served as a patch; sets HUB_URL.
 hub::patch_url() {
   local page='^https?://[^/?#]+/[^/?#]+/[^/?#]+/pull/[0-9]+(\.(patch|diff)|/[^/?#]*)?/?([?#]|$)'
   hub::parse_github_url "$1" || return 1
@@ -445,7 +445,7 @@ hub::patch_url() {
   esac
 }
 
-# hub::download_patches FORMAT ARGS... : HUB_ARGS, patch URLs as downloaded files; sets EXIT trap.
+# hub::download_patches FORMAT ARGS... : sets HUB_ARGS to ARGS, patch URLs as files; an EXIT trap.
 hub::download_patches() {
   local format=$1 tmp i n=0 endpoint escape rc
   shift
@@ -482,7 +482,7 @@ hub::download_patches() {
 # _hub_core_entry VALUED WORD : WORD is one of VALUED's entries (an -X= entry is no option word).
 _hub_core_entry() { [[ $2 != *[[:space:]=]* && " $1 " == *" $2 "* ]]; }
 
-# _hub_core_cluster VALUED WORD : HUB_FLAGS and HUB_REST, a cluster split at its first value letter.
+# _hub_core_cluster VALUED WORD : sets HUB_FLAGS and HUB_REST, WORD split at its first value letter.
 _hub_core_cluster() {
   local j
   # An -X= entry is a letter whose value can only be attached (-S[key]): it ends the flags too.
@@ -507,7 +507,7 @@ hub::takes_value() {
   return 1
 }
 
-# hub::drop_flag LETTER VALUED ARGS... : HUB_ARGS, ARGS without the flag -LETTER; fails without it.
+# hub::drop_flag LETTER VALUED ARGS... : sets HUB_ARGS to ARGS without -LETTER; fails without it.
 hub::drop_flag() {
   local letter=$1 table=$2 word i found=1
   shift 2
@@ -536,7 +536,7 @@ hub::drop_flag() {
   return "$found"
 }
 
-# hub::scan VALUED ARGS... : HUB_OPERANDS and HUB_OPTIONS; VALUED's -X= takes -Xvalue only.
+# hub::scan VALUED ARGS... : sets HUB_OPERANDS and HUB_OPTIONS; VALUED's -X= takes -Xvalue only.
 hub::scan() {
   local table=$1 word i
   shift
@@ -545,7 +545,7 @@ hub::scan() {
   # Help, and a line hub cannot read with certainty, go to git as given.
   for ((i = 0; i < $#; i++)); do
     word=${args[i]}
-    # The option words, -- or --end-of-options included: every word after either is an operand.
+    # The option words, -- and --end-of-options included.
     [[ $word != -?* ]] || HUB_OPTIONS+=("$i")
     if hub::takes_value "$table" "$word"; then
       # hub reads only an exact entry: git would expand --dep, and -qb is unclear.
@@ -572,7 +572,7 @@ hub::scan() {
   done
 }
 
-# hub::gh_subcommand ARGS... : HUB_ARGS, ARGS with show as view and list for no subcommand.
+# hub::gh_subcommand ARGS... : sets HUB_ARGS to ARGS with show as view, list for no subcommand.
 hub::gh_subcommand() {
   local -a args=("$@")
   local i=0 help=0
@@ -601,7 +601,7 @@ hub::gh_subcommand() {
   HUB_ARGS+=("${args[@]:i+1}")
 }
 
-# hub::normalize_opts SHORT_VALUED LONG_VALUED ARGS... : HUB_ARGS, clusters split, values detached.
+# hub::normalize_opts SHORT_VALUED LONG_VALUED ARGS... : sets HUB_ARGS to ARGS, values detached.
 hub::normalize_opts() {
   local short=$1 long=" $2 " word head i
   shift 2
@@ -645,7 +645,7 @@ hub::normalize_opts() {
   done
 }
 
-# hub::url_escape STR : STR percent-encoded, except A-Za-z0-9._~/:@-.
+# hub::url_escape WORD : WORD percent-encoded, except A-Za-z0-9._~/:@-.
 hub::url_escape() {
   local LC_ALL=C out='' char i
   for ((i = 0; i < ${#1}; i++)); do

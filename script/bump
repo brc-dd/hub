@@ -70,11 +70,11 @@ if git rev-parse --quiet --verify "refs/tags/$tag" >/dev/null; then
 fi
 
 changelog=$(mktemp) start=$(git rev-parse HEAD) wrote=0
-# on_exit : removes the temporary file; a failure after the writes (a hook, signing) says how to
-# undo them.
+# on_exit : remove the temporary file; after a failure past the writes, say how to undo them.
 on_exit() {
   local rc=$?
   rm -f "$changelog"
+  # A hook or the signing can fail after VERSION and CHANGELOG.md are written.
   ((! rc || ! wrote)) || printf 'script/bump: stopped; git reset --hard %s undoes it\n' "$start" >&2
 }
 trap on_exit EXIT

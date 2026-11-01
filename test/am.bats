@@ -249,7 +249,7 @@ make_series() {
   run hub help am
   assert_success
   assert_line_equals 0 \
-    'Summary: Apply the commits of a GitHub pull request, commit or comparison URL.'
+    'Summary: Apply the commits of a GitHub pull request, commit or comparison.'
   assert_line_equals -1 "git's own manual: git am --help"
 }
 

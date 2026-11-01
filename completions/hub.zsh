@@ -11,7 +11,7 @@
 typeset -ga _hub_commands
 _hub_commands=(
   'alias:Show how to make git run hub'
-  'am:Apply the commits of a GitHub pull request, commit or comparison URL'
+  'am:Apply the commits of a GitHub pull request, commit or comparison'
   'api:Make an authenticated GitHub API request (gh api)'
   'apply:Apply the changes of a GitHub pull request, commit or comparison'
   'browse:Open a GitHub repository in the web browser'
@@ -109,7 +109,8 @@ _hub() {
   saved_words=("${words[@]}") kept=("$words[1]")
   while (( i < CURRENT )); do
     case $words[i] in
-      # hub's own --noop, and options _git does not know take a value, go with their value.
+      # Dropped before _git sees them: hub's --noop, and --attr-source and --shallow-file, whose
+      # value _git does not know to skip.
       (--noop) (( i++ )); continue ;;
       (--attr-source|--shallow-file)
         (( i + 1 < CURRENT )) || return 1

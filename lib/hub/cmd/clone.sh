@@ -4,12 +4,13 @@
 #
 # A git command hub extends: git clone's options apply. When the repository operand is a
 # shorthand, OWNER/REPO or REPO (one of your own repositories), hub replaces it with its clone
-# URL on gh's default host and runs git clone with every other argument in place. REPO.wiki is
-# the wiki. Only your login for REPO comes from gh (its stored account, else GitHub's API);
-# nothing else is looked up on GitHub. A URL, a path, HOST/OWNER/REPO, or a name git reads as a
-# local repository (an existing path, NAME.git holding a repository, a NAME.bundle file) is
-# plain git clone; write ./NAME to clone a local repository named like a shorthand. The URL uses
-# gh's git_protocol for the host (gh config set git_protocol ssh), else https.
+# URL on the default host and runs git clone with every other argument in place. REPO.wiki is
+# the wiki. Only your login for REPO comes from gh: its stored account, or GitHub's API when a
+# token variable (GH_TOKEN, GITHUB_TOKEN, ...) is set; nothing else is looked up on GitHub. A
+# URL, a path, HOST/OWNER/REPO, or a name git reads as a local repository (an existing path,
+# NAME.git holding a repository, a NAME.bundle file) is plain git clone; write ./NAME to clone a
+# local repository named like a shorthand. The URL uses gh's git_protocol for the host (gh
+# config set git_protocol ssh), else https.
 #
 # Options:
 #   -p   Clone over ssh this time.
@@ -27,7 +28,7 @@ hub_cmd_clone() {
     --config --filter --bundle-uri --server-option --ref-format --revision)
   local valued="${table[*]}" repo owner host protocol="" i
   local -a line
-  # hub's -p is dropped first, so every line handed to git, by hub::scan too, is git's alone.
+  # hub's -p is dropped first, so no line handed to git, by hub::scan either, carries it.
   ! hub::drop_flag p "$valued" "$@" || protocol=ssh
   line=("${HUB_ARGS[@]}")
   hub::scan "$valued" "${line[@]}"

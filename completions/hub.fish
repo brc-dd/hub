@@ -7,8 +7,7 @@
 
 complete -c hub --wraps git
 
-# __hub_command : the command word before the cursor, empty at the command position; fails for a
-# global option's value and after an option git answers by itself.
+# __hub_command : the command word before the cursor, empty at the command position, or failure.
 function __hub_command
     set -l tokens (commandline -opc)
     set -e tokens[1]
@@ -16,10 +15,12 @@ function __hub_command
         switch $tokens[1]
             case -C -c --config-env --git-dir --work-tree --namespace --attr-source \
                 --super-prefix --shallow-file
+                # The cursor is on the option's value.
                 set -q tokens[2]; or return 1
                 set -e tokens[1]
             case --version -v --help -h --exec-path --html-path --man-path --info-path \
                 '--list-cmds=*'
+                # git answers these by itself: no command follows.
                 return 1
             case '-*'
             case '*'
@@ -44,7 +45,7 @@ end
 
 complete -c hub -n __hub_needs_command -a alias -d 'Show how to make git run hub'
 complete -c hub -n __hub_needs_command -a am \
-    -d 'Apply the commits of a GitHub pull request, commit or comparison URL'
+    -d 'Apply the commits of a GitHub pull request, commit or comparison'
 complete -c hub -n __hub_needs_command -a api \
     -d 'Make an authenticated GitHub API request (gh api)'
 complete -c hub -n __hub_needs_command -a apply \

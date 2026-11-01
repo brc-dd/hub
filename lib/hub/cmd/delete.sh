@@ -5,7 +5,7 @@
 # hub's own command: these are all of its options. Deletes the repository with gh repo delete,
 # which asks you to type its name first unless -y is given. A bare NAME is yours: your login on
 # the default host. NAME may also be a repository URL. Deleting needs the delete_repo scope;
-# grant it once with `gh auth refresh -s delete_repo`.
+# grant it once with gh auth refresh -s delete_repo.
 #
 # Options:
 #   -y, --yes   Delete without asking for confirmation.

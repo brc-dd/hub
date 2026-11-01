@@ -6,10 +6,10 @@
 # --end-of-options) that is the URL of a pull request (.../pull/N or one page of it), a commit
 # (.../commit/SHA, .../pull/N/commits/SHA) or a comparison (.../compare/BASE...HEAD) is
 # downloaded through gh's API as one diff, with or without a .patch or .diff suffix, and git
-# apply gets the file in the URL's place. Nothing is committed: to make commits, use hub am.
-# A failed download stops hub before git apply runs. Other URLs, such as one commit's page
-# within a pull request (.../pull/N/files/SHA), stay as given. Without such a URL, this is
-# plain git apply.
+# apply gets the file in the URL's place. gh api gets --allow-escape-sequences when it has that
+# option. Nothing is committed: to make commits, use hub am. A failed download stops hub before
+# git apply runs. Other URLs, such as one commit's page within a pull request
+# (.../pull/N/files/SHA), stay as given. Without such a URL, this is plain git apply.
 #
 #   $ hub apply https://github.com/cli/cli/pull/55
 #   > gh api --hostname github.com repos/cli/cli/pulls/55 -H 'Accept: application/vnd.github.diff'

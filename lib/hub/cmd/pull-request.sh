@@ -6,30 +6,32 @@
 #
 # hub's own command: these are all of its options. Runs gh pr create in the project, or in
 # OWNER's copy of it with -b OWNER:BASE. Without -h the head is the current branch, under its
-# own name, in the repository it pushes to: branch.NAME.pushRemote, remote.pushDefault, an
-# upstream of the same name, the only remote, your fork, then origin. It must be pushed there
+# own name, in the repository it pushes to: branch.BRANCH.pushRemote, remote.pushDefault, an
+# upstream of its own name, the only remote, your fork, then origin. It must be pushed there
 # already, unless -p pushes it or -f skips the check. Without -b, gh takes the default branch.
 #
 # The first paragraph of the message is the title, the rest is the body. Without -m, -F, -e or
 # --no-edit, gh asks for them, which needs a terminal, as -e does.
 #
 # Options:
-#   -m, --message MESSAGE      A paragraph of the message; repeat it for more.
-#   -F, --file FILE            Read the message from FILE (- is standard input).
-#   -e, --edit                 Write the message in gh's editor (in a terminal), from -m or -F.
-#       --no-edit              Take the message from the first commit (gh's --fill-first).
-#   -b, --base BASE            The branch to merge into: BRANCH, OWNER:BRANCH or OWNER/REPO:BRANCH.
-#   -h, --head HEAD            The branch with the changes, BRANCH or OWNER:BRANCH; not checked.
-#   -p, --push                 Push the current branch first (git push [-u] REMOTE HEAD:BRANCH).
-#   -f, --force                Skip the check that the current branch is pushed.
-#   -d, --draft                Open it as a draft.
-#   -r, --reviewer LIST        Request reviews from these users or ORG/TEAMs (comma-separated).
-#   -a, --assign LIST          Assign these users (comma-separated).
-#   -M, --milestone MILESTONE  Add it to this milestone.
-#   -l, --labels LIST          Add these labels (comma-separated).
-#       --no-maintainer-edits  Do not let maintainers push to the head branch.
-#   -o, --browse               Open the pull request in the browser.
-#   -c, --copy                 Copy the pull request's URL.
+#   -m, --message MESSAGE       A paragraph of the message; repeat it for more.
+#   -F, --file FILE             Read the message from FILE (- is standard input).
+#   -e, --edit                  Write the message in gh's editor (in a terminal), from -m or -F.
+#       --no-edit               Take the message from the first commit (gh's --fill-first).
+#   -b, --base BASE             The branch to merge into: BRANCH, OWNER:BRANCH or OWNER/REPO:BRANCH.
+#   -h, --head HEAD             The branch with the changes, BRANCH or OWNER:BRANCH; not checked.
+#   -p, --push                  Push the current branch first.
+#   -f, --force                 Skip the check that the current branch is pushed.
+#   -d, --draft                 Open it as a draft.
+#   -r, --reviewer LIST         Request reviews from these users or ORG/TEAMs (comma-separated).
+#   -a, --assign LIST           Assign these users (comma-separated).
+#   -M, --milestone MILESTONE   Add it to this milestone.
+#   -l, --labels LIST           Add these labels (comma-separated).
+#       --no-maintainer-edits   Do not let maintainers push to the head branch.
+#   -o, --browse                Open the pull request in the browser.
+#   -c, --copy                  Copy the pull request's URL.
+#
+# Exit status: git's or gh's when one fails, else the browser's or the clipboard tool's.
 #
 #   $ hub pull-request -p -m 'Fix the bug'
 #   > git push --set-upstream -- origin HEAD:refs/heads/feature

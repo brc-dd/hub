@@ -9,7 +9,9 @@
 #
 # For the current project (not GH_REPO) with no SUBPAGE, tree or commits: when the current
 # branch is not the default branch and is on the remote it pushes to, the page is tree/BRANCH
-# or commits/BRANCH of the repository that remote pushes to.
+# or commits/BRANCH of the repository that remote pushes to. The default branch is read from
+# refs/remotes/REMOTE/HEAD of the project's remote; without it, every pushed branch counts as
+# another branch.
 #
 # Options:
 #   -u, --url    Print the URL instead of opening it.

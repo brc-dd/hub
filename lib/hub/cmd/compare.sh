@@ -6,15 +6,16 @@
 # for the current project, or for OWNER's copy of it. START..END becomes START...END; with -b,
 # the range is BASE...END. START and END are both required in a range.
 #
-# Without END, the head is the current branch, in the repository it pushes to: its pushRemote,
-# remote.pushDefault, an upstream of its own name, the sole remote, your fork, then origin. The
-# branch must be on that remote's remote-tracking branches; it is written FORKOWNER:BRANCH when
-# that repository has another owner. Without -b, GitHub compares it with the default branch.
+# Without END, the head is the current branch, in the repository it pushes to:
+# branch.BRANCH.pushRemote, remote.pushDefault, an upstream of its own name, the only remote,
+# your fork, then origin. The branch must be on that remote's remote-tracking branches; it is
+# written FORKOWNER:BRANCH when that repository has another owner. Without -b, GitHub compares
+# it with the default branch.
 #
 # Options:
-#   -b, --base BASE  Compare END, or the current branch, with BASE.
-#   -u, --url        Print the URL instead of opening it.
-#   -c, --copy       Copy the URL to the clipboard instead of opening it; with -u, print and copy.
+#   -b, --base BASE   Compare END, or the current branch, with BASE.
+#   -u, --url         Print the URL instead of opening it.
+#   -c, --copy        Copy the URL to the clipboard instead of opening it; with -u, print and copy.
 #
 # Exit status: the browser's or the clipboard tool's.
 #

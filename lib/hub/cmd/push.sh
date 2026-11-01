@@ -31,7 +31,7 @@ hub_cmd_push() {
   for i in "${HUB_OPTIONS[@]}"; do flags+=("${args[i]}"); done
   # Outside a repository git says so itself.
   hub::git_query rev-parse --git-dir >/dev/null || hub::exec_git push "$@"
-  # git reads a relative path from the top directory; one that exists here is a path too.
+  # git resolves a relative path from the top of the work tree; one that exists here counts too.
   top=$(hub::toplevel) || top=$(hub::git_query rev-parse --absolute-git-dir)
   if hub::remote_exists "$list" || hub::local_source "$list" \
     || (cd "$top" && hub::local_source "$list"); then

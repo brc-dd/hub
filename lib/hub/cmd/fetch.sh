@@ -1,16 +1,17 @@
 # shellcheck shell=bash
 # Summary: Fetch from GitHub users' copies of the project, adding their remotes.
 # Usage: hub fetch [GIT-FETCH-OPTIONS...] USER [REFSPEC...]
-#        hub fetch [GIT-FETCH-OPTIONS...] USER,USER... [REST...]
+#        hub fetch [GIT-FETCH-OPTIONS...] USER,USER... [GIT-FETCH-ARGS...]
 #
 # A git command hub extends: git fetch's options apply. A first operand that is a GitHub login,
 # and not a remote, a remote group or a local repository, names that user's copy of the project
 # (the project's repository name, on the project's host). hub checks with gh that it exists,
 # adds it as the remote USER (https, or ssh when gh's git_protocol is ssh), then runs git fetch
-# with the command line as given. A comma list adds every missing user the same way and fetches
-# all members with git fetch --multiple; members that are remotes or groups stay as they are.
-# The remote is added before git runs, with --dry-run too. With --multiple, --no-multiple or
-# --all, without an operand, or with any other operand, the command line is git's.
+# with the command line as given. A user name that matches a remote except for case is refused;
+# use the remote's spelling. A comma-separated list adds every missing user the same way and
+# fetches all members with git fetch --multiple; members that are remotes or groups stay as they
+# are. The remote is added before git runs, with --dry-run too. With --multiple, --no-multiple or
+# --all, without an operand, or with any other operand, this is plain git fetch.
 #
 #   $ hub fetch alice
 #   > git remote add alice https://github.com/alice/REPO.git
@@ -86,9 +87,9 @@ _hub_fetch_remote() {
   hub::remote_exists "$1" || hub::git_query config --get "remotes.$1" >/dev/null
 }
 
-# _hub_fetch_local TOP NAME : git would read NAME as a local repository, from here or from TOP
-# (git resolves a relative path from the top of the work tree).
+# _hub_fetch_local TOP NAME : git would read NAME as a local repository, from here or from TOP.
 _hub_fetch_local() {
+  # git resolves a relative path from the top of the work tree; one that exists here counts too.
   hub::local_source "$2" || (cd "$1" && hub::local_source "$2")
 }
 

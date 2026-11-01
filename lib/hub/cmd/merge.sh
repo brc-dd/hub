@@ -14,7 +14,7 @@
 #
 #   $ hub merge https://github.com/jingweno/gh/pull/73
 #   > git fetch --quiet --no-tags --refmap= -- origin refs/pull/73/head
-#   > git merge --no-ff -m 'Merge pull request #73 from jingweno/feature' -m TITLE OID
+#   > git merge --no-ff -m 'Merge pull request #73 from jingweno/feature' -m TITLE FULL-SHA
 #
 # git's own manual: git merge --help
 

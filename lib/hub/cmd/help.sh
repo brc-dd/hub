@@ -3,9 +3,9 @@
 # Usage: hub help [COMMAND]
 #        hub help GIT-HELP-ARGS...
 #
-# hub's own command: these are all of its options. Without arguments, prints git's help, then
-# the commands hub provides or extends. With one of them alone, prints its manual. Any other
-# command line is git help's.
+# hub's own command: any other arguments go to git help. Without arguments, prints git's help,
+# then the commands hub provides or extends. With one of them alone, prints its manual; for a git
+# command hub extends, git NAME --help prints git's instead. Any other line is plain git help.
 #
 #   $ hub help pull-request
 #   Summary: Open a pull request for the current branch.

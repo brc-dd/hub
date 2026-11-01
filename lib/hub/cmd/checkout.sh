@@ -6,13 +6,13 @@
 # A git command hub extends: git checkout's options apply. A pull request URL (any page of it)
 # before -- (or --end-of-options) makes the line hub's: gh pr checkout fetches the pull request
 # and checks it out in a local branch, BRANCH when given. Only the options below go with a URL.
-# Without a URL the line is plain git checkout. gh runs with GH_HOST set to the URL's host, so
+# Without a URL, this is plain git checkout. gh runs with GH_HOST set to the URL's host, so
 # that it fetches from a local remote of that host.
 #
 # Options:
-#   -b BRANCH               Name the local branch (the same as the BRANCH operand).
-#   -d, --detach            Check out the pull request's head commit without a branch.
-#   --recurse-submodules    Update the submodules too.
+#   -b BRANCH                  Name the local branch (the same as the BRANCH operand).
+#   -d, --detach               Check out the pull request's head commit without a branch.
+#       --recurse-submodules   Update the submodules too.
 #
 #   $ hub checkout https://github.com/rails/rails/pull/42 review
 #   > gh pr checkout https://github.com/rails/rails/pull/42 -b review
@@ -27,7 +27,6 @@ hub_cmd_checkout() {
   for word; do
     case $word in
       -- | --end-of-options) break ;;
-      # git's manual and usage, whatever else is on the line.
       --help | --help-all) hub::exec_git checkout "$@" ;;
       # -h alone or among git checkout's one-letter flags (-qh) asks for git's usage.
       -*) [[ ! $word =~ ^-[lqmdtf23p]*h ]] || hub::exec_git checkout "$@" ;;

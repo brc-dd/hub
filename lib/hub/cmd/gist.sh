@@ -6,19 +6,16 @@
 # one, then hands every argument to gh gist in its place: show is view, and no subcommand (none,
 # or an option first) is list. -h or --help before the subcommand prints this manual; after it,
 # gh's help. gh gist has no -R: hub skips -R VALUE before the subcommand, as for pr, and gh then
-# refuses it. gh picks the host (GH_HOST, else the host it is logged in to), also for a gist URL;
-# hub 2.x's GITHUB_HOST reaches gh as GH_HOST when GH_HOST is not set.
+# refuses it. gh picks the host, also for a gist URL: GH_HOST, else the one host it is logged in
+# to, else github.com; hub 2.x's GITHUB_HOST reaches gh as GH_HOST when GH_HOST is not set.
 #
 # hub 2.x's options in gh's spelling:
-#   gist create --public FILE...   gh gist create --public FILE... (-p is --public too)
-#   gist create                    gh gist create reads standard input without FILEs
-#   gist create -o                 gh gist create -w
-#   gist create -c                 not supported; gh prints the URL: pipe it to pbcopy
-#   gist show ID                   gh gist view ID --raw (without --raw gh renders Markdown)
-#   gist show ID FILE              gh gist view ID --raw -f FILE
-#
-# gh prints control characters (ESC and others) as visible text, so --raw is not a byte-exact
-# copy; gh gist clone ID clones the gist with its files unchanged.
+#   gist create --public FILE...    gh gist create --public FILE... (-p is --public too)
+#   gist create                     gh gist create reads standard input without FILEs
+#   gist create -o                  gh gist create -w
+#   gist create -c                  not supported; gh prints the URL: pipe it to pbcopy
+#   gist show ID                    gh gist view ID --raw (gh gist clone ID keeps exact bytes)
+#   gist show ID FILE               gh gist view ID --raw -f FILE
 #
 #   $ hub gist -L 5
 #   > gh gist list -L 5

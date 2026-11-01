@@ -8,8 +8,8 @@
 # through gh's API, the commit is fetched from the repository (through a remote that points at
 # it, else its URL) without tags and without updating any branch or remote-tracking ref (only
 # FETCH_HEAD), and git cherry-pick gets the full id in the URL's place. The other words stay as
-# given. Without such a URL, this is plain git cherry-pick. hub 2.x's USER@SHA form is not
-# supported: paste the commit's URL.
+# given. SHA-256 commit ids (64 hex digits) are not supported. Without such a URL, this is
+# plain git cherry-pick. hub 2.x's USER@SHA form is not supported; use the commit's URL.
 #
 #   $ hub cherry-pick https://github.com/jingweno/gh/commit/a319d88
 #   > gh api --hostname github.com repos/jingweno/gh/commits/a319d88 --jq .sha

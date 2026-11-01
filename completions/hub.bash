@@ -137,7 +137,7 @@ if declare -F __git_main >/dev/null && declare -F __git_func_wrap >/dev/null; th
   fi
   unset __hub_spec __hub_function
 else
-  # Without git's completion: hub's commands as the first word, file names after it.
+  # __hub_fallback : without git's completion, hub's commands as the first word, then file names.
   __hub_fallback() {
     local cmd
     COMPREPLY=()

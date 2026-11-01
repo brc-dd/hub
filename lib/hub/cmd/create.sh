@@ -7,20 +7,23 @@
 # create from the top of the work tree and adds it as the remote origin. The repository is
 # private unless --public or --internal says otherwise, named after the project or the top
 # directory unless NAME is given (a .git suffix is dropped), owned by you unless OWNER/NAME names
-# an organization, and created on the default host (GH_HOST, else gh's only host) unless
-# HOST/OWNER/NAME or a repository URL names one. The remote's URL follows gh's git_protocol. The
-# name, the remote and, with --push, the current branch are checked before gh runs.
+# an organization, and created on the default host (GH_HOST, else the one host gh is logged in
+# to, else github.com) unless HOST/OWNER/NAME or a repository URL names one. The remote's URL
+# follows gh's git_protocol. The name, the remote and, with --push, the current branch are
+# checked before gh runs.
 #
 # Options:
-#   -p, --private                  Make the repository private (the default).
-#       --public                   Make it public.
-#       --internal                 Make it visible to its organization only.
-#   -d, --description DESCRIPTION  The repository's description.
-#   -h, --homepage HOMEPAGE        The repository's home page URL.
-#       --remote-name NAME         Name the remote NAME instead of origin.
-#       --push                     Push the current branch there and track it.
-#   -o, --browse                   Open https://HOST/OWNER/NAME in the browser.
-#   -c, --copy                     Copy that URL to the clipboard.
+#   -p, --private                   Make the repository private (the default).
+#       --public                    Make it public.
+#       --internal                  Make it visible to its organization only.
+#   -d, --description DESCRIPTION   The repository's description.
+#   -h, --homepage HOMEPAGE         The repository's home page URL.
+#       --remote-name NAME          Name the remote NAME instead of origin.
+#       --push                      Push the current branch there and track it.
+#   -o, --browse                    Open https://HOST/OWNER/NAME in the browser.
+#   -c, --copy                      Copy that URL to the clipboard.
+#
+# Exit status: git's or gh's when one fails, else the browser's or the clipboard tool's.
 #
 #   $ hub create --public --push dotfiles
 #   > gh repo create github.com/LOGIN/dotfiles --source=TOP --remote=origin --public

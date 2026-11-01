@@ -9,17 +9,17 @@
 # set-default); hub 2.x's GITHUB_HOST reaches gh as GH_HOST when GH_HOST is not set.
 #
 # hub 2.x's options in gh's spelling:
-#   issue -c CREATOR -@ USER     gh issue list -A CREATOR --mention USER
-#   issue -M MILESTONE           gh issue list -m MILESTONE (gh's -m is the milestone)
-#   issue -o KEY [-^]            gh issue list -S 'sort:KEY-desc' (sort:KEY-asc)
-#   issue -d DATE                gh issue list -S 'updated:>=DATE'
-#   issue|issue show -f FORMAT   --json FIELDS with --jq EXPR or -t TEMPLATE
-#   issue create -m MESSAGE      gh issue create -t TITLE -b BODY
-#   issue create -F FILE         gh issue create -t TITLE -F FILE (-F is the body only)
-#   issue create -o              gh issue create -w (gh's -o does not exist)
-#   issue update N ...           gh issue edit N (--add-label, --remove-label for -l)
-#   issue update N -s closed     gh issue close N (gh issue reopen N for open)
-#   issue labels                 gh label list
+#   issue -c CREATOR -@ USER        gh issue list -A CREATOR --mention USER
+#   issue -M MILESTONE              gh issue list -m MILESTONE (gh's -m is the milestone)
+#   issue -o KEY [-^]               gh issue list -S 'sort:KEY-desc' (sort:KEY-asc)
+#   issue -d DATE                   gh issue list -S 'updated:>=DATE'
+#   issue|issue show -f FORMAT      --json FIELDS with --jq EXPR or -t TEMPLATE
+#   issue create -m MESSAGE         gh issue create -t TITLE -b BODY
+#   issue create -F FILE            gh issue create -t TITLE -F FILE (-F is the body only)
+#   issue create -o                 gh issue create -w (gh's -o does not exist)
+#   issue update N ...              gh issue edit N (--add-label, --remove-label for -l)
+#   issue update N -s closed        gh issue close N (gh issue reopen N for open)
+#   issue labels                    gh label list
 #
 #   $ hub issue -s closed -L 5
 #   > gh issue list -s closed -L 5

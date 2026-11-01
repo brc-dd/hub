@@ -2,10 +2,10 @@
 # Summary: Fetch and fast-forward or delete local branches to match the remotes.
 # Usage: hub sync [REMOTE]
 #
-# hub's own command: these are all of its options. Fetches REMOTE (default: the project's
-# remote, upstream before github and origin) and every other remote a local branch tracks, with
-# git fetch --prune and your fetch settings, then goes through the local branches, the current
-# one after the others and those that track a local branch at the end:
+# hub's own command: it takes no options. Fetches REMOTE (default: the project's remote,
+# upstream before github and origin) and every other remote a local branch tracks, with git
+# fetch --prune and your fetch settings, then goes through the local branches, the current one
+# after the others and those that track a local branch at the end:
 #
 #   the default branch, behind REMOTE's      fast-forwarded from REMOTE, whatever it tracks
 #   behind its upstream                      fast-forwarded
@@ -14,14 +14,15 @@
 #     default branch                           to the default branch, when that exists here)
 #   upstream deleted, not merged             left alone, with a warning
 #
-# Symbolic refs and branches without an upstream are left alone. A branch whose upstream is a
-# local branch, or on a remote that could not be fetched, is never deleted; a squash-merged
-# branch counts as not merged. The default branch is held against its own upstream only when it
-# has commits that REMOTE's lacks. Local commits are never discarded: git refuses
-# non-fast-forwards and branches checked out in another work tree, and its message is shown.
-# The default branch is refs/remotes/REMOTE/HEAD (git remote set-head REMOTE --auto corrects
-# it), else gh's answer for a GitHub remote; when neither knows it, no branch is deleted. sync
-# tries every branch and exits 1 when an update or a deletion failed.
+# Symbolic refs and branches without an upstream, other than the default branch, are left
+# alone. A branch whose upstream is a local branch, or on a remote that could not be fetched, is
+# never deleted; a squash-merged branch counts as not merged. The default branch is held against
+# its own upstream only when it has commits that REMOTE's lacks. Local commits are never
+# discarded: git refuses non-fast-forwards and branches checked out in another work tree, and
+# its message is shown. The default branch is refs/remotes/REMOTE/HEAD (git remote set-head
+# REMOTE --auto corrects it), else gh's answer for a GitHub remote; when neither knows it, no
+# branch is deleted. sync tries every branch and exits 1 when a fetch of another tracked
+# remote, an update or a deletion failed; a failed fetch of REMOTE stops it with git's status.
 #
 #   $ hub sync
 #   > git fetch --prune --quiet -- upstream
@@ -132,6 +133,7 @@ _hub_sync_update() {
     # --no-squash: branch.*.mergeOptions may say --squash, which would not move the branch.
     hub::git merge --quiet --ff-only --no-squash "$3" || return
   else
+    # A branch that is not checked out moves by a local fetch, which refuses a non-fast-forward.
     hub::git fetch --quiet . "$3:refs/heads/$1" || return
   fi
   [[ ${HUB_NOOP-} == 1 ]] && return 0

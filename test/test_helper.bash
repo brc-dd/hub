@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # shellcheck disable=SC2154  # status, output and lines are set by bats' run
-# Summary: shared setup, fixtures and assertions of hub's bats tests.
+# Summary: Shared setup, fixtures and assertions of hub's bats tests.
 # Usage: load test_helper
 #
 # Every test runs in its own directory with its own HOME, git and gh configuration, and nothing
@@ -20,7 +20,7 @@ setup_file() { hub_test_exec_path; }
 setup() { hub_test_setup; }
 hub() { "$HUB_BIN" "$@"; }
 
-# hub_test_exec_path : builds $BATS_FILE_TMPDIR/git-core, git's helpers with https and http stubbed.
+# hub_test_exec_path : build $BATS_FILE_TMPDIR/git-core, git's helpers with https and http stubbed.
 hub_test_exec_path() {
   local dir=$BATS_FILE_TMPDIR/git-core real
   [[ ! -d $dir ]] || return 0
@@ -31,6 +31,7 @@ hub_test_exec_path() {
   ln -sf "$HUB_TEST_ROOT/test/stubs/git-remote-https" "$dir/git-remote-http"
 }
 
+# hub_test_setup : a test's own directory, HOME, git and gh configuration, and the stubs on PATH.
 hub_test_setup() {
   local root=$HUB_TEST_ROOT tmp
   tmp=$(cd "$BATS_TEST_TMPDIR" && pwd -P) || return 1
@@ -133,10 +134,10 @@ pushed_feature() {
   git push -q -u origin refs/heads/feature
 }
 
-# no_gh_path [COMMAND...] : a new directory for PATH holding git, bash and these commands, never gh
-# (a system directory such as /usr/bin may hold one, as on CI runners).
+# no_gh_path [COMMAND...] : a new directory for PATH holding git, bash and these commands, never gh.
 no_gh_path() {
   local dir cmd path
+  # A system directory such as /usr/bin may hold a gh, as on CI runners.
   dir=$(mktemp -d "$HUB_TEST_TMP/path.XXXXXX") || return 1
   for cmd in git bash "$@"; do
     path=$(command -v "$cmd") && ln -sf "$path" "$dir/$cmd" || return 1
@@ -144,11 +145,11 @@ no_gh_path() {
   printf '%s\n' "$dir"
 }
 
-# recording_gh [stdin] : a gh in a directory it prints, for PATH, answering as test/stubs/gh and
-# recording its latest call in $HUB_TEST_TMP: args (one argument per line), env ("GH_HOST=X
-# GH_REPO=Y", unset for an unset one), parent (its parent process's name) and, with stdin, stdin.
+# recording_gh [stdin] : the directory of a gh that answers as the stub and records its call.
 recording_gh() {
   local dir=$HUB_TEST_TMP/bin
+  # In $HUB_TEST_TMP: args (one per line), env ("GH_HOST=X GH_REPO=Y", unset for an unset one),
+  # parent (the name of gh's parent process) and, with stdin, stdin.
   mkdir -p "$dir" || return 1
   {
     cat <<'EOF'
@@ -166,19 +167,19 @@ EOF
   } >"$dir/gh" && chmod +x "$dir/gh" && printf '%s\n' "$dir"
 }
 
-# failing_gh MSG : a gh in a directory it prints, for PATH, answering as test/stubs/gh and, when
-# that fails, writing MSG on stderr, where gh writes its errors.
+# failing_gh MSG : the directory of a gh that answers as the stub, writing MSG when it fails.
 failing_gh() {
   local dir=$HUB_TEST_TMP/failing
   mkdir -p "$dir" || return 1
+  # MSG goes to stderr, where gh writes its errors.
   # shellcheck disable=SC2016  # the $@, $? and $rc belong to the gh script written here
   printf '#!/usr/bin/env bash\n%q "$@" && exit\nrc=$?\nprintf "%%s\\n" %q >&2\nexit "$rc"\n' \
     "$HUB_TEST_ROOT/test/stubs/gh" "$1" >"$dir/gh" && chmod +x "$dir/gh" && printf '%s\n' "$dir"
 }
 
-# stub_gh 'ARGS GLOB' 'STDOUT' [STATUS] : answer gh calls whose space-joined arguments match the
-# glob with STDOUT (printf %b escapes) and STATUS. Later registrations win.
+# stub_gh 'ARGS GLOB' 'STDOUT' [STATUS] : answer matching gh calls with STDOUT (%b) and STATUS.
 stub_gh() {
+  # The stub matches the space-joined arguments and takes the latest matching entry.
   printf '%s\x1f%s\x1f%s\n' "$1" "${2//$'\n'/\\n}" "${3:-0}" >>"$HUB_TEST_GH_STUBS"
 }
 
