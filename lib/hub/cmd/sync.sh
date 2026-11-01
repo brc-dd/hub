@@ -15,17 +15,19 @@
 #     default branch                           to the default branch, when that exists here)
 #   upstream deleted, not merged             left alone, with a warning
 #
-# Symbolic refs and branches without an upstream, other than the default branch, are left
-# alone. A branch whose upstream is a local branch, or on a remote that could not be fetched, is
-# never deleted; a squash-merged branch counts as not merged. The default branch is held against
-# its own upstream only when it has commits that REMOTE's lacks. Local commits are never
-# discarded: a branch checked out in another work tree is left alone with a warning, and git
-# refuses non-fast-forwards and shows its message. The default branch is
-# refs/remotes/REMOTE/HEAD, else gh's answer for a GitHub remote; when neither knows it, no
-# branch is deleted. git fetch creates that ref from git 2.48 on; with an older git, git remote
-# set-head REMOTE --auto creates it once, and it corrects it with any git. sync tries every
-# branch and exits 1 when a fetch of another tracked remote, an update or a deletion failed; a
-# failed fetch of REMOTE stops it with git's status.
+# Symbolic refs and branches without an upstream, other than the default branch, are left alone.
+# A branch whose upstream is a local branch, or on a remote that could not be fetched, is never
+# deleted; a squash-merged branch counts as not merged. The default branch is held against its
+# own upstream only when it has commits that REMOTE's lacks. Local commits are never discarded:
+# a branch checked out in another work tree is left alone with a warning, and git refuses
+# non-fast-forwards and shows its message. A branch that is not checked out moves by a fetch
+# from the repository itself, which settings against local paths (protocol.file.allow,
+# GIT_ALLOW_PROTOCOL) do not stop. The default branch is refs/remotes/REMOTE/HEAD, else gh's
+# answer for a GitHub remote; when neither knows it, no branch is deleted. git fetch creates
+# that ref from git 2.48 on; with an older git, git remote set-head REMOTE --auto creates it
+# once, and it corrects it with any git. sync tries every branch and exits 1 when a fetch of
+# another tracked remote, an update or a deletion failed; a failed fetch of REMOTE stops it with
+# git's status.
 #
 #   $ hub sync
 #   > git fetch --prune --quiet -- upstream
@@ -173,7 +175,10 @@ _hub_sync_update() {
   else
     # A branch that is not checked out moves by a fetch from the repository itself, which refuses
     # a non-fast-forward. Not from ".": that is the top of the work tree, not the git directory.
-    hub::git fetch --quiet "$6" "$3:refs/heads/$1" || return
+    # A policy against local paths (protocol.file.allow, GIT_ALLOW_PROTOCOL) is not meant for this
+    # fetch: GIT_ALLOW_PROTOCOL overrides both, and without submodules it reaches no other URL.
+    GIT_ALLOW_PROTOCOL='file' hub::git fetch --quiet --no-recurse-submodules "$6" \
+      "$3:refs/heads/$1" || return
   fi
   [[ ${HUB_NOOP-} == 1 ]] && return 0
   printf 'Updated branch %s (was %s).\n' "$1" "$(git rev-parse --short "$2")"

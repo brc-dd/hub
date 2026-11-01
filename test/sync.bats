@@ -355,8 +355,8 @@ Updated branch main (was $(short "$was"))."
   run hub --noop sync
   assert_status 1
   assert_output_contains "$warning busy is checked out in another work tree; leaving it alone"
-  assert_output_contains "git fetch --quiet $(git rev-parse --absolute-git-dir) \
-refs/remotes/origin/feature:refs/heads/feature"
+  assert_output_contains "git fetch --quiet --no-recurse-submodules \
+$(git rev-parse --absolute-git-dir) refs/remotes/origin/feature:refs/heads/feature"
   assert_output_lacks 'refs/heads/busy'
 }
 
@@ -382,6 +382,61 @@ refs/remotes/origin/feature:refs/heads/feature"
   run hub --git-dir="$gd" --work-tree=. sync
   assert_success
   assert_equals "$(git --git-dir="$gd" rev-parse refs/heads/main)" "$main"
+}
+
+@test "hub sync fast-forwards other branches when protocol.file.allow is never" {
+  serve_github mislav/dotfiles
+  clone_served mislav/dotfiles
+  pushed_branch feature
+  was=$(tip feature)
+  feature=$(server_commit mislav/dotfiles feature 'new on feature')
+  git config --global protocol.file.allow never
+  # The control: git itself refuses a fetch from a local path.
+  run git fetch --quiet "$(git rev-parse --absolute-git-dir)" refs/heads/main:refs/heads/copy
+  assert_status 128
+  assert_output_contains "transport 'file' not allowed"
+  run hub sync
+  assert_success
+  assert_output_equals "Updated branch feature (was $(short "$was"))."
+  assert_equals "$(tip feature)" "$feature"
+  assert_equals "$(git rev-parse refs/remotes/origin/feature)" "$feature"
+  assert_equals "$(git config --get protocol.file.allow)" never
+}
+
+@test "hub sync fast-forwards other branches when GIT_ALLOW_PROTOCOL leaves out file" {
+  serve_github mislav/dotfiles
+  clone_served mislav/dotfiles
+  pushed_branch feature
+  was=$(tip feature)
+  feature=$(server_commit mislav/dotfiles feature 'new on feature')
+  # The https stub is git's https transport, which the list allows; file is not in it.
+  export GIT_ALLOW_PROTOCOL=https:ssh
+  run git fetch --quiet "$(git rev-parse --absolute-git-dir)" refs/heads/main:refs/heads/copy
+  assert_status 128
+  assert_output_contains "transport 'file' not allowed"
+  run hub sync
+  assert_success
+  assert_output_equals "Updated branch feature (was $(short "$was"))."
+  assert_equals "$(tip feature)" "$feature"
+  assert_equals "$(git rev-parse refs/remotes/origin/feature)" "$feature"
+}
+
+@test "hub sync fetches submodules with the remote, not again for other branches" {
+  serve_github mislav/dotfiles mislav/vendor
+  clone_served mislav/dotfiles
+  git submodule add -q https://github.com/mislav/vendor.git vendor 2>/dev/null
+  git commit -q -m 'add vendor'
+  git push -q origin refs/heads/main
+  pushed_branch feature
+  was=$(tip feature)
+  feature=$(server_commit mislav/dotfiles feature 'new on feature')
+  vendor=$(server_commit mislav/vendor main 'new in vendor')
+  git config fetch.recurseSubmodules yes
+  run hub sync
+  assert_success
+  assert_output_equals "Updated branch feature (was $(short "$was"))."
+  assert_equals "$(tip feature)" "$feature"
+  assert_equals "$(git -C vendor rev-parse refs/remotes/origin/main)" "$vendor"
 }
 
 @test "hub sync exits 1 when a merged branch cannot be deleted" {
