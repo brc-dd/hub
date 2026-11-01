@@ -64,7 +64,8 @@ hub_cmd_merge() {
   ((squash || ff)) || opts+=(--no-ff)
   ((squash || message)) || opts+=(-m "${out%%$'\n'*}" -m "${out#*$'\n'}")
   hub::parse_github_url "${args[url]}"
-  number=${HUB_URL[number]}
+  # gh reads the number in decimal (pull/012 is #12); the ref must name that pull request too.
+  number=$((10#${HUB_URL[number]}))
   source=$(hub::fetch_source "${HUB_URL[host]}" "${HUB_URL[owner]}" "${HUB_URL[repo]}")
   # --refmap= keeps a configured refs/pull/* refspec from updating local branches.
   hub::git fetch --quiet --no-tags --refmap= -- "$source" "refs/pull/$number/head" || exit

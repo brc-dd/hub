@@ -43,6 +43,19 @@ assert_untouched() {
   assert_gh_called "pr view $url --json number,title,headRepositoryOwner,headRefName --jq *"
 }
 
+@test "hub merge reads a zero-padded pull request number as gh does, in decimal" {
+  local padded=${url%/*}/012
+  setup_pull
+  stub_gh "pr view $padded --json*" $'Merge pull request #12 from jingweno/fix-build\nFix the build'
+  run hub --noop merge "$padded"
+  assert_success
+  assert_line_equals 0 'git fetch --quiet --no-tags --refmap= -- origin refs/pull/12/head'
+  run hub merge "$padded"
+  assert_success
+  assert_equals "$(git rev-parse HEAD^2)" "$pull"
+  assert_equals "$(git log -1 --format=%s)" 'Merge pull request #12 from jingweno/fix-build'
+}
+
 @test "hub merge fetches through a remote whose name starts with a dash" {
   setup_pull
   git remote remove origin
