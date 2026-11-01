@@ -91,6 +91,23 @@ $warning diverged seems to contain unpushed commits"
   assert_equals "$(tip diverged)" "$was_diverged"
 }
 
+@test "hub sync names the local upstream a branch is ahead of, not unpushed commits" {
+  serve_github mislav/dotfiles
+  clone_served mislav/dotfiles
+  pushed_branch ahead
+  commit_on ahead 'local work'
+  git branch -q -t topic refs/heads/main
+  commit_on topic 'work on topic'
+  git push -q origin refs/heads/topic:refs/heads/topic 2>/dev/null
+  was_ahead=$(tip ahead) was_topic=$(tip topic)
+  run hub sync
+  assert_success
+  assert_output_equals "$warning ahead seems to contain unpushed commits
+$warning topic is ahead of main"
+  assert_equals "$(tip ahead)" "$was_ahead"
+  assert_equals "$(tip topic)" "$was_topic"
+}
+
 @test "hub sync deletes a branch that was merged and deleted on the remote, with its config" {
   serve_github mislav/dotfiles
   clone_served mislav/dotfiles
@@ -291,15 +308,31 @@ Updated branch main (was $(short "$was"))."
   pushed_branch feature
   git worktree add -q ../busy busy
   was=$(tip busy) was_feature=$(tip feature)
-  server_commit mislav/dotfiles busy 'new on busy' >/dev/null
+  server_commit mislav/dotfiles busy 'new on busy' busy new >/dev/null
   feature=$(server_commit mislav/dotfiles feature 'new on feature')
   run hub sync
   assert_status 1
-  assert_output_contains "fatal: refusing to fetch into branch 'refs/heads/busy' checked out at"
+  assert_output_contains "$warning busy is checked out in another work tree; leaving it alone"
   assert_output_contains "Updated branch feature (was $(short "$was_feature"))."
   assert_equals "$(tip busy)" "$was"
   assert_equals "$(tip feature)" "$feature"
   assert_equals "$(git -C ../busy status --porcelain)" ''
+}
+
+@test "hub sync does not fetch into a branch checked out in another work tree" {
+  serve_github mislav/dotfiles
+  clone_served mislav/dotfiles
+  pushed_branch busy
+  pushed_branch feature
+  git worktree add -q ../busy busy
+  server_commit mislav/dotfiles busy 'new on busy' >/dev/null
+  server_commit mislav/dotfiles feature 'new on feature' >/dev/null
+  git fetch -q origin
+  run hub --noop sync
+  assert_status 1
+  assert_output_contains "$warning busy is checked out in another work tree; leaving it alone"
+  assert_output_contains 'git fetch --quiet . refs/remotes/origin/feature:refs/heads/feature'
+  assert_output_lacks 'refs/heads/busy'
 }
 
 @test "hub sync exits 1 when a merged branch cannot be deleted" {
@@ -536,6 +569,59 @@ Updated branch main (was $(short "$was_main"))."
   assert_success
   assert_equals "$(tip localup)" "$main"
   assert_equals "$(tip other)" "$main"
+}
+
+@test "hub sync fast-forwards a chain of local upstreams in one run" {
+  serve_github mislav/dotfiles
+  clone_served mislav/dotfiles
+  git branch -q -t z-parent refs/heads/main
+  git branch -q -t a-child refs/heads/z-parent
+  main=$(server_commit mislav/dotfiles main 'new on main')
+  run hub sync
+  assert_success
+  assert_equals "${#lines[@]}" 3
+  assert_equals "$(tip main)" "$main"
+  assert_equals "$(tip z-parent)" "$main"
+  assert_equals "$(tip a-child)" "$main"
+}
+
+@test "hub sync fast-forwards the current branch after its local upstream" {
+  serve_github mislav/dotfiles
+  clone_served mislav/dotfiles
+  git branch -q -t parent refs/heads/main
+  git branch -q -t child refs/heads/parent
+  git switch -q child
+  main=$(server_commit mislav/dotfiles main 'new on main' README hello)
+  run hub sync
+  assert_success
+  assert_equals "$(tip main)" "$main"
+  assert_equals "$(tip parent)" "$main"
+  assert_equals "$(tip child)" "$main"
+  assert_equals "$(git rev-parse HEAD)" "$main"
+  assert_equals "$(git symbolic-ref HEAD)" refs/heads/child
+  assert_equals "$(git status --porcelain)" ''
+}
+
+@test "hub sync orders local upstreams against their names and gets past a cycle" {
+  serve_github mislav/dotfiles
+  clone_served mislav/dotfiles
+  was=$(tip main)
+  git branch -q -t m-mid refs/heads/main
+  git branch -q -t z-top refs/heads/m-mid
+  git branch -q -t a-leaf refs/heads/z-top
+  git branch -q c1 refs/heads/main
+  git branch -q -t c2 refs/heads/c1
+  git config branch.c1.remote .
+  git config branch.c1.merge refs/heads/c2
+  main=$(server_commit mislav/dotfiles main 'new on main')
+  run hub sync
+  assert_success
+  assert_equals "${#lines[@]}" 4
+  assert_equals "$(tip m-mid)" "$main"
+  assert_equals "$(tip z-top)" "$main"
+  assert_equals "$(tip a-leaf)" "$main"
+  assert_equals "$(tip c1)" "$was"
+  assert_equals "$(tip c2)" "$was"
 }
 
 @test "hub sync fast-forwards the current branch when a tag has its name" {
