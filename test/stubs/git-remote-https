@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# git's https and http remote helper for hub's tests: serves HOST/OWNER/REPO from
+# $HUB_TEST_SRV/HOST/OWNER/REPO.git through the helper protocol's connect capability.
+set -u
+url=${2:-$1}
+rest=${url#*://}
+host=${rest%%/*} path=${rest#*/}
+host=${host##*@} host=${host%%:*}
+path=${path%%[?#]*} path=${path%/} path=${path%.git}.git
+dir=${HUB_TEST_SRV:?not set}/${host,,}/$path
+while IFS= read -r line; do
+  case $line in
+    capabilities) printf 'connect\n\n' ;;
+    'connect git-upload-pack' | 'connect git-receive-pack')
+      if [[ ! -d $dir ]]; then
+        printf 'fatal: https stub: nothing is served at %s (%s)\n' "$url" "$dir" >&2
+        exit 128
+      fi
+      printf '\n'
+      # The server is another machine: the client's repository settings stay behind.
+      keep=" GIT_PROTOCOL GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM GIT_EXEC_PATH GIT_TERMINAL_PROMPT "
+      for v in "${!GIT_@}"; do
+        [[ $keep == *" $v "* ]] || unset "$v"
+      done
+      exec git "${line#connect git-}" "$dir"
+      ;;
+    '') exit 0 ;;
+    *)
+      printf 'fatal: https stub: unsupported: %s\n' "$line" >&2
+      exit 1
+      ;;
+  esac
+done

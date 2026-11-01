@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# A browser for hub's tests (also open and xdg-open): records the URL in $HUB_TEST_TMP/browser.log.
+printf '%s\n' "${@: -1}" >>"${HUB_TEST_TMP:?not set}/browser.log"
+exit "${HUB_TEST_BROWSER_STATUS:-0}"

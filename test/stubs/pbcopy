@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# A clipboard for hub's tests (also xclip and wl-copy): stdin goes to $HUB_TEST_TMP/clipboard.
+cat >"${HUB_TEST_TMP:?not set}/clipboard"
+exit "${HUB_TEST_CLIPBOARD_STATUS:-0}"

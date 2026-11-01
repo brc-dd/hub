@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# gh for hub's tests: logs the call, then replays the latest stub_gh entry whose glob matches.
+args=$*
+printf '%sgh %s\n' "${GH_REPO+GH_REPO=$GH_REPO }" "$args" >>"${HUB_TEST_GH_LOG:?not set}"
+mapfile -t stubs <"${HUB_TEST_GH_STUBS:?not set}"
+for ((i = ${#stubs[@]} - 1; i >= 0; i--)); do
+  IFS=$'\x1f' read -r pattern stdout rc <<<"${stubs[i]}"
+  # shellcheck disable=SC2053  # the pattern is a glob
+  if [[ $args == $pattern ]]; then
+    if [[ -n $stdout ]]; then printf '%b\n' "$stdout"; fi
+    exit "$rc"
+  fi
+done
+printf 'gh stub: unexpected call: gh %s\n' "$args" >&2
+exit 97

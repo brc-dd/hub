@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# ssh for hub's tests: -G goes to the real ssh with the test HOME's config and is logged in
+# $HUB_TEST_TMP/ssh.log; a git connection is served from $HUB_TEST_SRV/HOST/PATH.git.
+set -u
+for arg; do
+  if [[ $arg == -G ]]; then
+    printf '%s\n' "$*" >>"${HUB_TEST_TMP:?not set}/ssh.log"
+    real=$(PATH=$(getconf PATH) command -v ssh) || exit 255
+    config=$HOME/.ssh/config
+    [[ -f $config ]] || config=/dev/null
+    # OpenSSH reads the passwd entry's ~/.ssh/config, not $HOME's.
+    exec "$real" -F "$config" "$@"
+  fi
+done
+(($# >= 2)) || {
+  echo 'ssh stub: no host and command given' >&2
+  exit 255
+}
+host=${*: -2:1} cmd=${*: -1}
+host=${host#*@} host=${host,,}
+[[ $host != ssh.github.com ]] || host=github.com
+eval "set -- $cmd" || exit 255
+case ${1-} in
+  git-upload-pack | git-receive-pack) ;;
+  *)
+    printf 'ssh stub: refusing to run: %s\n' "$cmd" >&2
+    exit 255
+    ;;
+esac
+path=${2-} path=${path#/} path=${path%/} path=${path%.git}.git
+dir=${HUB_TEST_SRV:?not set}/$host/$path
+if [[ ! -d $dir ]]; then
+  printf 'ssh stub: nothing is served at %s:%s (%s)\n' "$host" "${2-}" "$dir" >&2
+  exit 255
+fi
+# The server is another machine: the client's repository settings stay behind.
+keep=" GIT_PROTOCOL GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM GIT_EXEC_PATH GIT_TERMINAL_PROMPT "
+for v in "${!GIT_@}"; do
+  [[ $keep == *" $v "* ]] || unset "$v"
+done
+exec git "${1#git-}" "$dir"
