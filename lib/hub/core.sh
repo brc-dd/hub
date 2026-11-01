@@ -5,9 +5,8 @@
 # Sourced by bin/hub with HUB_ROOT, HUB_LIB and HUB_COMMAND set. A helper prints its answer on
 # stdout and returns non-zero when it has none, unless its contract names a global it sets.
 
-HUB_ARGS=() HUB_OPERANDS=()
+HUB_ARGS=() HUB_OPERANDS=() HUB_VALUES=() HUB_OPTIONS=() HUB_FLAGS='' HUB_REST=''
 declare -gA HUB_URL=()
-unset HUB_GH_ESCAPE
 # gh reads GH_HOST; hub 2.x users have GITHUB_HOST.
 if [[ -z ${GH_HOST-} && -n ${GITHUB_HOST-} ]]; then export GH_HOST=$GITHUB_HOST; fi
 
@@ -113,14 +112,27 @@ hub::remote_exists() { git remote get-url -- "$1" >/dev/null 2>&1; }
 # hub::valid_remote_name NAME : NAME can name a remote.
 hub::valid_remote_name() { [[ $1 != -* ]] && git check-ref-format "refs/remotes/$1/HEAD"; }
 
-# hub::default_branch HOST OWNER REPO [REMOTE] : the repository's default branch.
+# hub::remote_head REMOTE : the branch refs/remotes/REMOTE/HEAD points at, when both refs exist.
+hub::remote_head() {
+  local ref head=refs/remotes/$1/
+  ref=$(git symbolic-ref --quiet "${head}HEAD" 2>/dev/null) && [[ $ref == "$head"?* ]] \
+    && git show-ref --verify --quiet "$ref" && printf '%s\n' "${ref#"$head"}"
+}
+
+# hub::require_new_remote NAME : die unless NAME can name a remote and no remote has it.
+hub::require_new_remote() {
+  hub::valid_remote_name "$1" || hub::die "not a remote name: ${1:-"''"}"
+  ! hub::remote_exists "$1" \
+    || hub::die "remote already exists: $1 (name another with --remote-name NAME)"
+}
+
+# hub::default_branch HOST OWNER REPO [REMOTE] : REMOTE's remote_head, else gh's; never dies.
 hub::default_branch() {
-  local ref head=refs/remotes/${4-}/
-  if [[ -n ${4-} ]] && ref=$(git symbolic-ref --quiet "${head}HEAD" 2>/dev/null) \
-    && [[ $ref == "$head"?* ]] && git show-ref --verify --quiet "$ref"; then
-    printf '%s\n' "${ref#"$head"}" && return 0
-  fi
-  ref=$(hub::gh_query repo view "$1/$2/$3" --json defaultBranchRef --jq .defaultBranchRef.name)
+  local ref
+  if [[ -n ${4-} ]] && hub::remote_head "$4"; then return 0; fi
+  [[ -n $1 ]] || return 1
+  # Without gh, bash's "command not found" goes to /dev/null too, and the answer is empty.
+  ref=$(gh repo view "$1/$2/$3" --json defaultBranchRef --jq .defaultBranchRef.name 2>/dev/null)
   [[ -n $ref ]] && printf '%s\n' "$ref"
 }
 
@@ -170,9 +182,10 @@ hub::push_remote() {
   fi
 }
 
-# hub::pushed BRANCH REMOTE : 0 pushed; 1 no REMOTE/BRANCH; 2 and the count of unpushed commits.
+# hub::pushed BRANCH REMOTE : 0 pushed; 1 no BRANCH or REMOTE/BRANCH; 2 and the unpushed count.
 hub::pushed() {
   local ref=refs/remotes/$2/$1
+  git rev-parse --verify --quiet "refs/heads/$1" >/dev/null || return 1
   git rev-parse --verify --quiet "$ref" >/dev/null || return 1
   git merge-base --is-ancestor "refs/heads/$1" "$ref" && return 0
   git rev-list --count "$ref..refs/heads/$1"
@@ -191,16 +204,18 @@ hub::gh_hosts() {
   done <"$file"
 }
 
-# hub::host : the default host: GH_HOST, else the only gh host, else github.com.
+# hub::host : the default host in lowercase: GH_HOST, else the only gh host, else github.com.
 hub::host() {
+  local host=${GH_HOST-}
   local -a hosts
-  [[ -n ${GH_HOST-} ]] && printf '%s\n' "$GH_HOST" && return 0
-  mapfile -t hosts < <(hub::gh_hosts)
-  if ((${#hosts[@]} == 1)); then
-    printf '%s\n' "${hosts[0]}"
-  else
-    printf '%s\n' github.com
+  if [[ -z $host ]]; then
+    mapfile -t hosts < <(hub::gh_hosts)
+    host=github.com
+    ((${#hosts[@]} != 1)) || host=${hosts[0]}
   fi
+  # The host goes to git and gh inside URLs and HOST/OWNER/REPO words: no option, no path.
+  [[ ${host,,} =~ ^[a-z0-9][a-z0-9.-]*$ ]] || hub::die "not a host name: $host"
+  printf '%s\n' "${host,,}"
 }
 
 # hub::known_host HOST : HOST is github.com, GH_HOST or a gh host, ignoring case.
@@ -229,10 +244,8 @@ hub::parse_url() {
   host=${host##*@} && host=${host%%:*} && host=${host,,}
   path=${path%/} && path=${path%.git}
   # The host may go to ssh -G: it must not read as an option.
-  [[ $host =~ ^[a-z0-9_][a-z0-9_.-]*$ ]] || return 1
-  [[ $path =~ ^([A-Za-z0-9][A-Za-z0-9-]*)/([A-Za-z0-9_.-]+)$ ]] || return 1
-  owner=${BASH_REMATCH[1]} repo=${BASH_REMATCH[2]}
-  [[ $repo != . && $repo != .. ]] || return 1
+  [[ $host =~ ^[a-z0-9_][a-z0-9_.-]*$ && $path == */* ]] && hub::is_shorthand "$path" || return 1
+  owner=${path%%/*} repo=${path#*/}
   if ((ssh)) && ! hub::known_host "$host"; then
     host=$(ssh -G "$host" 2>/dev/null | awk '$1 == "hostname" { print tolower($2); exit }')
   fi
@@ -277,17 +290,26 @@ hub::project_remote() {
   printf '%s\n' "${found%% *}"
 }
 
-# hub::parse_project STR : "HOST OWNER REPO" of OWNER/REPO, HOST/OWNER/REPO or a URL.
+# hub::parse_project STR : "HOST OWNER REPO" of [HOST/]OWNER/REPO[.git] or a URL, each part checked.
 hub::parse_project() {
-  local a b c
+  local host owner repo
   if [[ $1 == *:* ]]; then
     hub::parse_url "$1"
     return
   fi
-  [[ $1 =~ ^[^/[:space:]]+(/[^/[:space:]]+){1,2}$ ]] || return 1
-  IFS=/ read -r a b c <<<"$1"
-  [[ -n $c ]] && printf '%s %s %s\n' "${a,,}" "$b" "$c" && return 0
-  printf '%s %s %s\n' "$(hub::host)" "$a" "$b"
+  if [[ $1 =~ ^([^/]+)/([^/]+)/([^/]+)$ ]]; then
+    host=${BASH_REMATCH[1],,} owner=${BASH_REMATCH[2]} repo=${BASH_REMATCH[3]}
+    # cli/cli/issues is a typo, not a host. The host goes to gh: no option, no path.
+    [[ $host == *.* ]] || hub::known_host "$host" || return 1
+    [[ $host =~ ^[a-z0-9][a-z0-9.-]*$ ]] || return 1
+  elif [[ $1 =~ ^([^/]+)/([^/]+)$ ]]; then
+    owner=${BASH_REMATCH[1]} repo=${BASH_REMATCH[2]}
+    host=$(hub::host) || return 1
+  else
+    return 1
+  fi
+  repo=${repo%.git}
+  hub::is_shorthand "$owner/$repo" && printf '%s %s %s\n' "$host" "$owner" "$repo"
 }
 
 # hub::parse_github_url URL : HUB_URL (host owner repo kind number sha format range) of a web URL.
@@ -308,16 +330,17 @@ hub::parse_github_url() {
   fi
   case ${HUB_URL[kind]} in
     pull | issues) [[ ! ${part[3]-} =~ ^[0-9]+$ ]] || HUB_URL[number]=${part[3]} ;;&
-    pull) [[ ${part[4]-} != commits ]] || HUB_URL[sha]=${part[5]-} ;;
+    pull) [[ ${part[4]-} != commits || -z ${part[5]-} ]] || HUB_URL[sha]=${part[5]} ;;
     commit) HUB_URL[sha]=${part[3]-} ;;
-    compare) HUB_URL[range]=${path#*/*/compare/} ;;
+    compare) [[ -z ${part[3]-} ]] || HUB_URL[range]=${path#*/*/compare/} ;;
   esac
   [[ -z ${HUB_URL[sha]+set} || ${HUB_URL[sha]} =~ ^[0-9a-fA-F]{4,64}$ ]]
 }
 
-# hub::login [HOST] : your login on HOST (default: hub::host).
+# hub::login [HOST] : your login on HOST (default: hub::host); dies without gh or without one.
 hub::login() {
   local host=${1:-$(hub::host)} login=
+  hub::require_gh
   # A token variable overrides gh's stored account, whose cached user may be someone else.
   if [[ -z ${GH_TOKEN-}${GITHUB_TOKEN-}${GH_ENTERPRISE_TOKEN-}${GITHUB_ENTERPRISE_TOKEN-} ]]; then
     login=$(hub::gh_query config get user -h "$host")
@@ -328,19 +351,20 @@ hub::login() {
   printf '%s\n' "$login"
 }
 
-# hub::protocol [HOST] : ssh when gh's git_protocol for HOST is ssh, else https.
+# hub::protocol [HOST] : ssh when gh's git_protocol for HOST is ssh, else (gh missing too) https.
 hub::protocol() {
-  if [[ $(hub::gh_query config get git_protocol -h "${1:-$(hub::host)}") == ssh ]]; then
+  # Without gh, bash's "command not found" goes to /dev/null too, and the answer is empty.
+  if [[ $(gh config get git_protocol -h "${1:-$(hub::host)}" 2>/dev/null) == ssh ]]; then
     printf '%s\n' ssh
   else
     printf '%s\n' https
   fi
 }
 
-# hub::clone_url HOST OWNER REPO [PROTOCOL] : the repository's https (default) or ssh URL.
+# hub::clone_url HOST OWNER REPO [PROTOCOL] : its https or ssh URL (no PROTOCOL: hub::protocol).
 hub::clone_url() {
-  local user=git
-  if [[ ${4-} != ssh ]]; then
+  local user=git protocol=${4:-$(hub::protocol "$1")}
+  if [[ $protocol != ssh ]]; then
     printf 'https://%s/%s/%s.git\n' "$1" "$2" "$3"
     return 0
   fi
@@ -349,16 +373,26 @@ hub::clone_url() {
   printf '%s@%s:%s/%s.git\n' "$user" "$1" "$2" "$3"
 }
 
+# hub::is_owner STR : STR reads as the name of a GitHub user or organization.
+hub::is_owner() { [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]]; }
+
 # hub::is_shorthand STR : STR reads as OWNER/REPO or REPO.
 hub::is_shorthand() {
-  [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9-]*/([A-Za-z0-9_.-]+)$ ]] \
-    || [[ $1 =~ ^([A-Za-z0-9_.][A-Za-z0-9_.-]*)$ ]] || return 1
-  [[ ${BASH_REMATCH[1]} != . && ${BASH_REMATCH[1]} != .. ]]
+  local repo=${1#*/}
+  if [[ $1 == */* ]]; then
+    hub::is_owner "${1%%/*}" && [[ $repo =~ ^[A-Za-z0-9_.-]+$ ]] || return 1
+  else
+    # Alone, REPO must not read as an option.
+    [[ $1 =~ ^[A-Za-z0-9_.][A-Za-z0-9_.-]*$ ]] || return 1
+  fi
+  [[ $repo != . && $repo != .. ]]
 }
 
 # hub::local_source STR [bundle] : git would read STR as a local repository (or bundle).
 hub::local_source() {
+  # git tries STR, STR/.git, STR.git/.git (a work tree) and STR.git.
   [[ -e $1 ]] || git rev-parse --resolve-git-dir "$1.git" >/dev/null 2>&1 \
+    || git rev-parse --resolve-git-dir "$1.git/.git" >/dev/null 2>&1 \
     || [[ ${2-} == bundle && -f $1.bundle ]]
 }
 
@@ -368,61 +402,146 @@ hub::fetch_source() {
   if found=$(_hub_core_find_remote "$1 $2 $3"); then
     printf '%s\n' "${found%% *}"
   else
-    hub::clone_url "$1" "$2" "$3" "$(hub::protocol "$1")"
+    hub::clone_url "$1" "$2" "$3"
   fi
 }
 
-# hub::fetch_patch URL FORMAT FILE : download a pull, commit or compare URL as patch or diff.
-hub::fetch_patch() {
-  local endpoint
-  hub::parse_github_url "$1" || return 1
-  endpoint=repos/${HUB_URL[owner]}/${HUB_URL[repo]}
-  case ${HUB_URL[kind]}:${HUB_URL[sha]-}:${HUB_URL[number]-}:${HUB_URL[range]-} in
-    pull:?*:*:* | commit:?*:*:*) endpoint+=/commits/${HUB_URL[sha]} ;;
-    pull::?*:*) endpoint+=/pulls/${HUB_URL[number]} ;;
-    compare:*:*:?*) endpoint+=/compare/${HUB_URL[range]} ;;
-    *) return 1 ;;
-  esac
-  hub::require_gh
-  # Newer gh drops terminal escape sequences from its output unless asked to keep them.
-  [[ -n ${HUB_GH_ESCAPE+set} ]] \
-    || HUB_GH_ESCAPE=$(gh api --help 2>/dev/null | grep -o -m 1 -- --allow-escape-sequences)
-  gh api --hostname "${HUB_URL[host]}" "$endpoint" -H "Accept: application/vnd.github.$2" \
-    ${HUB_GH_ESCAPE:+"$HUB_GH_ESCAPE"} >"$3"
+# hub::pull_url WORD : WORD is the URL of a pull request or of one of its pages (sets HUB_URL).
+hub::pull_url() {
+  hub::parse_github_url "$1" && [[ ${HUB_URL[kind]} == pull && -n ${HUB_URL[number]-} ]]
 }
 
-# hub::scan VALUED ARGS... : HUB_OPERANDS, the operands' indexes in ARGS; unclear lines go to git.
-hub::scan() {
-  local valued=" $1 " word long i j
+# hub::patch_url WORD : WORD is a pull, commit or compare URL GitHub serves as a patch (HUB_URL).
+hub::patch_url() {
+  local page='^https?://[^/?#]+/[^/?#]+/[^/?#]+/pull/[0-9]+(\.(patch|diff)|/[^/?#]*)?/?([?#]|$)'
+  hub::parse_github_url "$1" || return 1
+  case ${HUB_URL[kind]} in
+    # A deeper page, such as pull/N/files/SHA, shows only some of the pull request's changes.
+    pull) [[ -n ${HUB_URL[number]-} ]] && [[ -n ${HUB_URL[sha]-} || $1 =~ $page ]] ;;
+    # hub::parse_github_url has checked the commit's sha.
+    commit) ;;
+    compare) [[ -n ${HUB_URL[range]-} ]] ;;
+    *) return 1 ;;
+  esac
+}
+
+# hub::download_patches FORMAT ARGS... : HUB_ARGS, patch URLs as downloaded files; sets EXIT trap.
+hub::download_patches() {
+  local format=$1 tmp i n=0 endpoint escape
   shift
+  HUB_ARGS=("$@")
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/hub-$HUB_COMMAND.XXXXXX") || exit 1
+  # shellcheck disable=SC2064  # the path is expanded now, quoted
+  trap "rm -rf -- $(printf '%q' "$tmp")" EXIT
+  for ((i = 0; i < $#; i++)); do
+    [[ ${HUB_ARGS[i]} != -- && ${HUB_ARGS[i]} != --end-of-options ]] || break
+    hub::patch_url "${HUB_ARGS[i]}" || continue
+    endpoint=repos/${HUB_URL[owner]}/${HUB_URL[repo]}
+    if [[ -n ${HUB_URL[sha]-} ]]; then
+      endpoint+=/commits/${HUB_URL[sha]}
+    elif [[ ${HUB_URL[kind]} == pull ]]; then
+      endpoint+=/pulls/${HUB_URL[number]}
+    else
+      endpoint+=/compare/${HUB_URL[range]}
+    fi
+    hub::require_gh
+    ((n += 1))
+    # Newer gh drops terminal escape sequences from its output unless asked to keep them.
+    [[ -n ${escape+set} ]] \
+      || escape=$(gh api --help 2>/dev/null | grep -o -m 1 -- --allow-escape-sequences)
+    gh api --hostname "${HUB_URL[host]}" "$endpoint" -H "Accept: application/vnd.github.$format" \
+      ${escape:+"$escape"} >"$tmp/$n.$format" || hub::die "could not download: ${HUB_ARGS[i]}"
+    HUB_ARGS[i]=$tmp/$n.$format
+  done
+}
+
+# _hub_core_entry VALUED WORD : WORD is one of VALUED's entries (an -X= entry is no option word).
+_hub_core_entry() { [[ $2 != *[[:space:]=]* && " $1 " == *" $2 "* ]]; }
+
+# _hub_core_cluster VALUED WORD : HUB_FLAGS and HUB_REST, a cluster split at its first value letter.
+_hub_core_cluster() {
+  local j
+  # An -X= entry is a letter whose value can only be attached (-S[key]): it ends the flags too.
+  for ((j = 1; j < ${#2}; j++)); do
+    [[ " $1 " != *" -${2:j:1} "* && " $1 " != *" -${2:j:1}= "* ]] || break
+  done
+  HUB_FLAGS=${2:1:j-1} HUB_REST=${2:j}
+}
+
+# hub::takes_value VALUED WORD : git reads the next word as WORD's value (-b, --dep, -qb).
+hub::takes_value() {
+  local long
+  ! _hub_core_entry "$1" "$2" || return 0
+  case $2 in
+    --) ;;
+    --*) for long in $1; do [[ $long != "$2"?* ]] || return 0; done ;;
+    -?*)
+      _hub_core_cluster "$1" "$2"
+      ((${#HUB_REST} == 1)) && [[ " $1 " == *" -$HUB_REST "* ]] && return 0
+      ;;
+  esac
+  return 1
+}
+
+# hub::drop_flag LETTER VALUED ARGS... : HUB_ARGS, ARGS without the flag -LETTER; fails without it.
+hub::drop_flag() {
+  local letter=$1 table=$2 word i found=1
+  shift 2
   local -a args=("$@")
-  HUB_OPERANDS=()
+  HUB_ARGS=()
   for ((i = 0; i < $#; i++)); do
     word=${args[i]}
     case $word in
+      -- | --end-of-options)
+        HUB_ARGS+=("${args[@]:i}")
+        break
+        ;;
+      -[!-]*)
+        _hub_core_cluster "$table" "$word"
+        # Only among letters: -p-x would become --x.
+        if [[ $HUB_FLAGS == *"$letter"* && $HUB_FLAGS =~ ^[A-Za-z0-9]+$ ]]; then
+          found=0 word=-${HUB_FLAGS//"$letter"/}$HUB_REST
+          [[ $word != - ]] || continue
+        fi
+        ;;
+    esac
+    HUB_ARGS+=("$word")
+    # An option's value stays as given (-o -p).
+    if hub::takes_value "$table" "$word" && ((i + 1 < $#)); then HUB_ARGS+=("${args[++i]}"); fi
+  done
+  return "$found"
+}
+
+# hub::scan VALUED ARGS... : HUB_OPERANDS, HUB_VALUES, HUB_OPTIONS; VALUED's -X= takes -Xvalue only.
+hub::scan() {
+  local table=$1 word i
+  shift
+  local -a args=("$@")
+  HUB_OPERANDS=() HUB_VALUES=() HUB_OPTIONS=()
+  # Help, and a line hub cannot read with certainty, go to git as given.
+  for ((i = 0; i < $#; i++)); do
+    word=${args[i]}
+    # The option words, -- or --end-of-options included: every word after either is an operand.
+    [[ $word != -?* ]] || HUB_OPTIONS+=("$i")
+    if hub::takes_value "$table" "$word"; then
+      # hub reads only an exact entry: git would expand --dep, and -qb is unclear.
+      if ! _hub_core_entry "$table" "$word" || ((i + 1 == $#)); then
+        hub::exec_git "$HUB_COMMAND" "$@"
+      fi
+      HUB_VALUES+=("$((i += 1))")
+      continue
+    fi
+    case $word in
       # git reads every word after either as an operand, -- included after --end-of-options.
       -- | --end-of-options) for ((i += 1; i < $#; i++)); do HUB_OPERANDS+=("$i"); done ;;
-      --help) hub::exec_git "$HUB_COMMAND" "$@" ;;
-      --*=*) ;;
-      --*)
-        if [[ $valued == *" $word "* ]]; then
-          ((i + 1 < $#)) || hub::exec_git "$HUB_COMMAND" "$@"
-          ((i += 1)) && continue
-        fi
-        # git would expand an abbreviation such as --dep to --depth.
-        for long in $valued; do
-          [[ $long != "$word"?* ]] || hub::exec_git "$HUB_COMMAND" "$@"
-        done
-        ;;
+      --help | --help-all) hub::exec_git "$HUB_COMMAND" "$@" ;;
+      --*) ;;
       -?*)
-        if [[ $valued == *" ${word:0:2} "* ]]; then
-          ((${#word} > 2 || i + 1 < $#)) || hub::exec_git "$HUB_COMMAND" "$@"
-          ((${#word} > 2)) || ((i += 1))
-          continue
-        fi
-        for ((j = 2; j < ${#word}; j++)); do
-          [[ $valued != *" -${word:j:1} "* ]] || hub::exec_git "$HUB_COMMAND" "$@"
-        done
+        _hub_core_cluster "$table" "$word"
+        # -h among the flags is git's usage; a value letter after a flag (-qbmain) is unclear.
+        [[ $HUB_FLAGS != *h* ]] || hub::exec_git "$HUB_COMMAND" "$@"
+        [[ -z $HUB_FLAGS || -z $HUB_REST || " $table " == *" -${HUB_REST::1}= "* ]] \
+          || hub::exec_git "$HUB_COMMAND" "$@"
         ;;
       *) HUB_OPERANDS+=("$i") ;;
     esac
@@ -432,14 +551,19 @@ hub::scan() {
 # hub::gh_subcommand ARGS... : HUB_ARGS, ARGS with show as view and list for no subcommand.
 hub::gh_subcommand() {
   local -a args=("$@")
-  local i=0
+  local i=0 help=0
   while ((i < $#)); do
     case ${args[i]} in
-      -R | --repo) ((i += 2)) ;;
+      -R | --repo)
+        [[ ${args[i + 1]-} != -h && ${args[i + 1]-} != --help ]] || help=1
+        ((i += 2))
+        ;;
       -R?* | --repo=*) ((i += 1)) ;;
       *) break ;;
     esac
   done
+  # gh prints its help for -R --help, but refuses the value when a subcommand follows.
+  ((! help || i < $#)) || return 1
   HUB_ARGS=("$@")
   # A -R without its value: gh says so.
   ((i <= $#)) || return 0
@@ -506,6 +630,16 @@ hub::url_escape() {
     out+=$char
   done
   printf '%s\n' "$out"
+}
+
+# hub::show_url PRINT COPY URL : print URL (PRINT 1), copy it (COPY 1), else open it unless printed.
+hub::show_url() {
+  if (($1)); then printf '%s\n' "$3"; fi
+  if (($2)); then
+    hub::copy "$3"
+  elif ((! $1)); then
+    hub::open_url "$3"
+  fi
 }
 
 # hub::open_url URL : open URL in the browser; the browser's status.

@@ -34,23 +34,6 @@ parses_to() {
   }
 }
 
-# no_gh_path : PATH holding git and bash only.
-no_gh_path() {
-  mkdir -p "$HUB_TEST_TMP/nogh"
-  ln -sf "$(command -v git)" "$HUB_TEST_TMP/nogh/git"
-  ln -sf "$(command -v bash)" "$HUB_TEST_TMP/nogh/bash"
-  printf '%s\n' "$HUB_TEST_TMP/nogh"
-}
-
-# stubs_path [STUB...] : PATH holding bash, cat and only these stubs of test/stubs.
-stubs_path() {
-  local dir stub
-  dir=$(mktemp -d "$HUB_TEST_TMP/path.XXXXXX") || return 1
-  ln -sf "$(command -v bash)" "$(command -v cat)" "$dir/"
-  for stub; do ln -sf "$HUB_TEST_ROOT/test/stubs/$stub" "$dir/$stub"; done
-  printf '%s\n' "$dir"
-}
-
 @test "die, warn and usage_error print hub's message format on stderr" {
   run hub::die 'feature is not pushed to origin (use -p to push it)'
   assert_status 1
@@ -200,6 +183,43 @@ stubs_path() {
   done
 }
 
+@test "require_new_remote refuses a name that cannot be a remote's, or is one" {
+  make_repo r origin=https://github.com/o/r.git
+  run hub::require_new_remote fresh
+  assert_success
+  assert_output_equals ''
+  run hub::require_new_remote origin
+  assert_status 1
+  assert_output_equals \
+    'hub test: remote already exists: origin (name another with --remote-name NAME)'
+  run hub::require_new_remote -x
+  assert_status 1
+  assert_output_equals 'hub test: not a remote name: -x'
+  run hub::require_new_remote ''
+  assert_output_equals "hub test: not a remote name: ''"
+  assert_equals "$(git remote)" origin
+}
+
+@test "remote_head names the branch the remote's HEAD points at, when both exist" {
+  make_repo r origin=https://github.com/o/r.git
+  run hub::remote_head origin
+  assert_failure
+  assert_output_equals ''
+  set_remote_head origin develop
+  run hub::remote_head origin
+  assert_success
+  assert_output_equals develop
+  git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/gone
+  run hub::remote_head origin
+  assert_failure
+  assert_output_equals ''
+  git symbolic-ref refs/remotes/origin/HEAD refs/heads/main
+  run hub::remote_head origin
+  assert_failure
+  run hub::remote_head ''
+  assert_failure
+}
+
 @test "default_branch follows the remote HEAD, else asks gh, else fails" {
   make_repo r origin=https://github.com/o/r.git
   set_remote_head origin develop
@@ -216,6 +236,21 @@ stubs_path() {
   run hub::default_branch ghe.example o r
   assert_status 1
   assert_output_equals ''
+}
+
+@test "default_branch skips gh without a host or without gh, and fails quietly" {
+  make_repo r origin=https://gitlab.com/o/r.git
+  run hub::default_branch '' '' '' origin
+  assert_status 1
+  assert_output_equals ''
+  assert_gh_not_called
+  PATH=$(no_gh_path) run hub::default_branch github.com o r origin
+  assert_status 1
+  assert_output_equals ''
+  set_remote_head origin trunk
+  PATH=$(no_gh_path) run hub::default_branch github.com o r origin
+  assert_success
+  assert_output_equals trunk
 }
 
 @test "repo_name is the project's name, else the directory's" {
@@ -375,6 +410,18 @@ stubs_path() {
   assert_success
 }
 
+@test "pushed returns 1 quietly for an unborn branch" {
+  make_repo r origin=https://github.com/o/r.git
+  git update-ref refs/remotes/origin/topic HEAD
+  git checkout -q --orphan topic
+  run hub::pushed topic origin
+  assert_status 1
+  assert_output_equals ''
+  run hub::pushed nothing origin
+  assert_status 1
+  assert_output_equals ''
+}
+
 @test "gh_hosts reads gh's hosts.yml where gh keeps it, quoted keys included" {
   run hub::gh_hosts
   assert_output_equals ''
@@ -408,6 +455,21 @@ stubs_path() {
   assert_output_equals github.com
   GH_HOST=other.example run hub::host
   assert_output_equals other.example
+}
+
+@test "host is in lowercase, and an invalid GH_HOST is refused" {
+  GH_HOST=GHE.Example.com run hub::host
+  assert_output_equals ghe.example.com
+  mkdir -p "$GH_CONFIG_DIR"
+  printf 'GHE.Example.com:\n    user: me\n' >"$GH_CONFIG_DIR/hosts.yml"
+  run hub::host
+  assert_output_equals ghe.example.com
+  local host
+  for host in -x ghe.example/o 'a b'; do
+    GH_HOST=$host run hub::host
+    assert_status 1
+    assert_output_equals "hub test: not a host name: $host"
+  done
 }
 
 @test "known_host knows github.com, GH_HOST and gh's hosts, in any case" {
@@ -525,6 +587,10 @@ stubs_path() {
   assert_output_equals 'ghe.example o r'
   run hub::parse_project GHE.Example/org/repo
   assert_output_equals 'ghe.example org repo'
+  run hub::parse_project o/r.git
+  assert_output_equals 'github.com o r'
+  run hub::parse_project ghe.example/o/r.git
+  assert_output_equals 'ghe.example o r'
   run hub::parse_project https://github.com/o/r.git/
   assert_output_equals 'github.com o r'
   run hub::parse_project git@github.com:o/r.git
@@ -537,6 +603,25 @@ stubs_path() {
     run hub::parse_project "$str"
     assert_failure
   done
+}
+
+@test "parse_project checks the owner, repository and host it reads" {
+  local str
+  for str in -o/r o_x/r o/. o/.. 'o/r!' o/r/ cli/cli/issues -x.example/o/r a_b.example/o/r \
+    ghe.example/-o/r ghe.example/o/.. o/.git ghe.example/o/.git; do
+    run hub::parse_project "$str"
+    assert_failure
+    assert_output_equals ''
+  done
+  run hub::parse_project my-org/some.repo_name
+  assert_output_equals 'github.com my-org some.repo_name'
+  GH_HOST=GHE.Example run hub::parse_project o/r
+  assert_output_equals 'ghe.example o r'
+  GH_HOST=ghe run hub::parse_project GHE/o/r
+  assert_output_equals 'ghe o r'
+  GH_REPO=-o/r run hub::project
+  assert_status 1
+  assert_output_equals 'hub test: GH_REPO must be OWNER/REPO, HOST/OWNER/REPO or a repository URL'
 }
 
 @test "parse_github_url reads the kinds of GitHub web URLs" {
@@ -560,6 +645,21 @@ stubs_path() {
   assert_output_equals 'github.com|o|r|tree||||'
   GH_HOST=ghe.example run url_fields https://ghe.example/o/r/pull/3
   assert_output_equals 'ghe.example|o|r|pull|3|||'
+}
+
+@test "parse_github_url reads pull/N/commits as the pull request and a bare compare as no range" {
+  run url_fields https://github.com/o/r/pull/12/commits
+  assert_success
+  assert_output_equals 'github.com|o|r|pull|12|||'
+  run url_fields https://github.com/o/r/pull/12/commits/
+  assert_output_equals 'github.com|o|r|pull|12|||'
+  run url_fields https://github.com/o/r/compare
+  assert_success
+  assert_output_equals 'github.com|o|r|compare||||'
+  run url_fields https://github.com/o/r/compare/
+  assert_output_equals 'github.com|o|r|compare||||'
+  hub::parse_github_url https://github.com/o/r/compare
+  assert_equals "${HUB_URL[range]-unset}" unset
 }
 
 @test "parse_github_url refuses other hosts and commits that are not hex" {
@@ -601,6 +701,12 @@ stubs_path() {
   assert_output_equals "$message (run: gh auth login -h ghe.example)"
 }
 
+@test "login without gh says gh is needed, once" {
+  PATH=$(no_gh_path) run hub::login ghe.example
+  assert_status 1
+  assert_output_equals 'hub test: this command needs the GitHub CLI, gh (https://cli.github.com)'
+}
+
 @test "protocol is gh's git_protocol for the host, https by default" {
   run hub::protocol
   assert_output_equals https
@@ -614,6 +720,14 @@ stubs_path() {
   assert_output_equals https
 }
 
+@test "protocol is https without gh, with no message" {
+  stub_gh 'config get git_protocol -h ghe.example' ssh
+  PATH=$(no_gh_path) run hub::protocol ghe.example
+  assert_success
+  assert_output_equals https
+  assert_gh_not_called
+}
+
 @test "clone_url builds https and ssh URLs, with the ghe.com tenant as the ssh user" {
   run hub::clone_url github.com o r
   assert_output_equals https://github.com/o/r.git
@@ -623,6 +737,31 @@ stubs_path() {
   assert_output_equals acme@acme.ghe.com:o/r.git
   run hub::clone_url acme.ghe.com o r https
   assert_output_equals https://acme.ghe.com/o/r.git
+}
+
+@test "clone_url takes hub::protocol when the protocol is omitted or empty" {
+  stub_gh 'config get git_protocol -h ghe.example' ssh
+  run hub::clone_url ghe.example o r
+  assert_output_equals git@ghe.example:o/r.git
+  run hub::clone_url ghe.example o r ''
+  assert_output_equals git@ghe.example:o/r.git
+  run hub::clone_url ghe.example o r https
+  assert_output_equals https://ghe.example/o/r.git
+  assert_equals "$(gh_calls)" "$(printf '%s\n' 'gh config get git_protocol -h ghe.example' \
+    'gh config get git_protocol -h ghe.example')"
+  PATH=$(no_gh_path) run hub::clone_url ghe.example o r
+  assert_output_equals https://ghe.example/o/r.git
+}
+
+@test "is_owner accepts the names of GitHub users and organizations" {
+  local str
+  for str in mislav my-org 0x a; do
+    hub::is_owner "$str"
+  done
+  for str in -x o_r o.r o/r '' 'a b'; do
+    run hub::is_owner "$str"
+    assert_failure
+  done
 }
 
 @test "is_shorthand accepts OWNER/REPO and REPO only" {
@@ -636,12 +775,14 @@ stubs_path() {
   done
 }
 
-@test "local_source sees paths, NAME.git repositories and bundles" {
+@test "local_source sees paths, NAME.git repositories and work trees, and bundles" {
   mkdir dir plain.git
   git init -q --bare repo.git
   touch tool.bundle
+  git init -q work.git
   hub::local_source dir
   hub::local_source repo
+  hub::local_source work
   hub::local_source tool bundle
   local str
   for str in plain tool nothing; do
@@ -661,40 +802,104 @@ stubs_path() {
   assert_output_equals git@github.com:x/y.git
 }
 
-@test "fetch_patch downloads pulls, commits and compares through gh api" {
-  stub_gh 'api --help' 'FLAGS\n  --allow-escape-sequences   Keep them'
-  stub_gh 'api --hostname github.com repos/o/r/pulls/12 *' 'From pull'
-  stub_gh 'api --hostname github.com repos/o/r/commits/abc1234 *' 'From commit'
-  stub_gh 'api --hostname github.com repos/o/r/compare/a...b *' 'diff --git'
-  run hub::fetch_patch https://github.com/o/r/pull/12 patch out.patch
-  assert_success
-  assert_equals "$(<out.patch)" 'From pull'
-  local accept='-H Accept: application/vnd.github'
-  assert_gh_called "api --hostname github.com repos/o/r/pulls/12 $accept.patch --allow-escape-*"
-  run hub::fetch_patch https://github.com/o/r/pull/12/commits/abc1234 diff out.diff
-  assert_equals "$(<out.diff)" 'From commit'
-  assert_gh_called "api --hostname github.com repos/o/r/commits/abc1234 $accept.diff *"
-  run hub::fetch_patch https://github.com/o/r/compare/a...b diff out.diff
-  assert_equals "$(<out.diff)" 'diff --git'
-  run hub::fetch_patch https://github.com/o/r/issues/3 patch out.patch
-  assert_failure
-  assert_equals "$(grep -c 'issues' "$HUB_TEST_GH_LOG")" 0
+@test "patch_url accepts the pull, commit and compare URLs GitHub serves as patches" {
+  local url
+  for url in https://github.com/o/r/pull/12 https://github.com/o/r/pull/12.patch \
+    https://github.com/o/r/pull/12.diff 'https://github.com/o/r/pull/12/files?diff=split#top' \
+    https://github.com/o/r/pull/12/ https://github.com/o/r/pull/12/commits \
+    https://github.com/o/r/pull/12/commits/abc1234 https://github.com/o/r/commit/abc1234.patch \
+    https://github.com/o/r/compare/a...b; do
+    hub::patch_url "$url"
+  done
+  hub::patch_url https://github.com/o/r/pull/12/commits/abc1234.diff
+  assert_equals "${HUB_URL[number]}:${HUB_URL[sha]}:${HUB_URL[format]}" 12:abc1234:diff
 }
 
-@test "fetch_patch asks gh api --help once, adds the flag only when listed, and fails with gh" {
+@test "patch_url refuses deeper pages, URLs without a number, sha or range, and other kinds" {
+  local url
+  for url in https://github.com/o/r/pull/12/files/abc1234 \
+    https://github.com/o/r/pull/12/changes/abc1234 https://github.com/o/r/pull/12/files/a..b \
+    https://github.com/o/r/pull/abc/commits/abc1234 https://github.com/o/r/pull/new/topic \
+    https://github.com/o/r/compare https://github.com/o/r/compare/ \
+    https://github.com/o/r/issues/3 https://github.com/o/r/tree/main https://github.com/o/r \
+    https://gitlab.com/o/r/commit/abc1234 https://github.com/o/r/commit/main not-a-url; do
+    run hub::patch_url "$url"
+    assert_failure
+  done
+}
+
+@test "pull_url accepts a pull request's URL and its pages, and nothing else" {
+  local url
+  for url in https://github.com/o/r/pull/12 https://github.com/o/r/pull/12/files/abc1234 \
+    https://github.com/o/r/pull/12/commits/abc1234 https://github.com/o/r/pull/12.patch; do
+    hub::pull_url "$url"
+  done
+  assert_equals "${HUB_URL[owner]}/${HUB_URL[repo]}#${HUB_URL[number]}" o/r#12
+  for url in https://github.com/o/r/pull/new/topic https://github.com/o/r/issues/12 \
+    https://gitlab.com/o/r/pull/12 https://github.com/o/r/pull not-a-url; do
+    run hub::pull_url "$url"
+    assert_failure
+  done
+}
+
+# downloads FORMAT ARGS... : hub::download_patches, then HUB_ARGS each in <>, a file as NAME:TEXT.
+downloads() {
+  local word
+  hub::download_patches "$@" || return
+  for word in "${HUB_ARGS[@]}"; do
+    if [[ -f $word ]]; then
+      printf '<%s:%s>' "${word#"$TMPDIR"/hub-test.??????/}" "$(<"$word")"
+    else
+      printf '<%s>' "$word"
+    fi
+  done
+}
+
+@test "download_patches puts each patch URL's download in its place, up to --, and cleans up" {
+  stub_gh 'api --help' 'FLAGS'
+  stub_gh 'api --hostname github.com repos/o/r/pulls/12 *' 'From pull'
+  stub_gh 'api --hostname github.com repos/o/r/commits/abc1234 *' 'From commit'
+  stub_gh 'api --hostname github.com repos/o/r/compare/a...b *' 'From compare'
+  mkdir tmp
+  local deeper=https://github.com/o/r/pull/12/files/abc1234
+  TMPDIR=$HUB_TEST_TMP/tmp run downloads diff -3 https://github.com/o/r/pull/12 x "$deeper" \
+    https://github.com/o/r/commit/abc1234 https://github.com/o/r/compare/a...b \
+    https://github.com/o/r/issues/3 -- https://github.com/o/r/pull/12
+  assert_success
+  assert_output_equals "<-3><1.diff:From pull><x><$deeper><2.diff:From commit>\
+<3.diff:From compare><https://github.com/o/r/issues/3><--><https://github.com/o/r/pull/12>"
+  assert_gh_called 'api --hostname github.com repos/o/r/pulls/12 -H Accept: *.github.diff'
+  assert_equals "$(gh_calls | grep -c 'issues\|files')" 0
+  assert_equals "$(ls tmp)" ''
+  TMPDIR=$HUB_TEST_TMP/tmp run downloads patch --end-of-options https://github.com/o/r/pull/12
+  assert_output_equals '<--end-of-options><https://github.com/o/r/pull/12>'
+  assert_equals "$(gh_calls | grep -c pulls/12)" 1
+}
+
+@test "download_patches dies naming the URL it could not download, and cleans up" {
+  stub_gh 'api --help' 'FLAGS'
+  stub_gh 'api --hostname github.com repos/o/r/commits/abc1234 *' 'gh: Not Found' 1
+  mkdir tmp
+  TMPDIR=$HUB_TEST_TMP/tmp run downloads patch https://github.com/o/r/commit/abc1234
+  assert_status 1
+  assert_output_equals 'hub test: could not download: https://github.com/o/r/commit/abc1234'
+  assert_equals "$(ls tmp)" ''
+}
+
+@test "download_patches asks gh api --help once and adds the flag only when listed" {
+  local url=https://github.com/o/r/commit/abc1234 accept='-H Accept: application/vnd.github'
   stub_gh 'api --help' 'FLAGS\n  --jq string'
   stub_gh 'api --hostname github.com repos/o/r/commits/abc1234 *' 'From commit'
-  twice() {
-    hub::fetch_patch https://github.com/o/r/commit/abc1234 patch one.patch \
-      && hub::fetch_patch https://github.com/o/r/commit/abc1234.patch patch two.patch
-  }
-  run twice
-  assert_success
+  mkdir tmp
+  TMPDIR=$HUB_TEST_TMP/tmp run downloads patch "$url" "$url.patch"
+  assert_output_equals '<1.patch:From commit><2.patch:From commit>'
   assert_equals "$(grep -c 'api --help' "$HUB_TEST_GH_LOG")" 1
-  assert_gh_called 'api --hostname github.com repos/o/r/commits/abc1234 -H Accept: *.patch'
-  stub_gh 'api --hostname github.com repos/o/r/commits/abc1234 *' 'gh: Not Found' 1
-  run hub::fetch_patch https://github.com/o/r/commit/abc1234 patch three.patch
-  assert_status 1
+  assert_equals "$(gh_calls | grep -c "repos/o/r/commits/abc1234 $accept.patch\$")" 2
+  : >"$HUB_TEST_GH_LOG"
+  stub_gh 'api --help' 'FLAGS\n  --allow-escape-sequences   Keep them'
+  TMPDIR=$HUB_TEST_TMP/tmp run downloads diff "$url"
+  assert_gh_called "api --hostname github.com repos/o/r/commits/abc1234 $accept.diff\
+ --allow-escape-sequences"
 }
 
 @test "scan finds the operands around separate, attached and long values" {
@@ -709,6 +914,56 @@ stubs_path() {
   assert_equals "${HUB_OPERANDS[*]}" 2
   hub::scan '-b' -qv o/r
   assert_equals "${HUB_OPERANDS[*]}" 1
+}
+
+@test "scan records the option words up to -- in HUB_OPTIONS" {
+  HUB_COMMAND=clone
+  hub::scan '-b -o' -q -b main o/r --origin=up -- -x dir
+  assert_equals "${HUB_OPTIONS[*]}" '0 1 4 5'
+  assert_equals "${HUB_OPERANDS[*]}" '3 6 7'
+  hub::scan '-b' - x --end-of-options -q
+  assert_equals "${HUB_OPTIONS[*]}" 2
+}
+
+@test "scan records the indexes of separate option values in HUB_VALUES" {
+  HUB_COMMAND=clone
+  hub::scan '-b -o --branch --depth' -b main --depth 1 o/r -q --origin=up -ofork -o -x dir
+  assert_equals "${HUB_OPERANDS[*]}" '4 10'
+  assert_equals "${HUB_VALUES[*]}" '1 3 9'
+  hub::scan '-b' o/r -- -b x
+  assert_equals "${HUB_VALUES[*]}" ''
+}
+
+@test "scan hands -h anywhere among a cluster's flags to git, and not a value's h" {
+  HUB_COMMAND=merge HUB_NOOP=1
+  local word
+  for word in -h -qh -hq -vqh; do
+    run hub::scan '-m -b' "$word" x
+    assert_output_equals "git merge $word x"
+  done
+  hub::scan '-m -b' -bh x -mhello -- -h
+  assert_equals "${HUB_OPERANDS[*]}" '1 4'
+}
+
+@test "scan reads an -X= letter's attached value as the rest of the cluster" {
+  HUB_COMMAND=merge HUB_NOOP=1
+  hub::scan '-m -S=' -Sme nosuch -qSmx -qShx -S -m msg x
+  assert_equals "${HUB_OPERANDS[*]}" '1 7'
+  assert_equals "${HUB_VALUES[*]}" 6
+  run hub::scan '-m -S=' -S=
+  assert_output_equals ''
+}
+
+@test "takes_value follows git's reading of the next word" {
+  local table='-o --origin -b --branch --depth -S=' word
+  for word in -b --branch --depth --dep --or -qb -vqo; do
+    hub::takes_value "$table" "$word"
+  done
+  for word in -bmain -qbmain -qob --depth=1 -- --end-of-options --quiet --branchx -q x - \
+    -S -qS -Sb -qSb -S= '-o --origin' ''; do
+    run hub::takes_value "$table" "$word"
+    assert_failure
+  done
 }
 
 @test "scan reads every word after --end-of-options as an operand, as git does" {
@@ -727,10 +982,24 @@ stubs_path() {
   assert_output_equals 'git clone o/r --depth'
   run hub::scan '-b' o/r -b
   assert_output_equals 'git clone o/r -b'
+  run hub::scan '-b' -qbmain o/r
+  assert_output_equals 'git clone -qbmain o/r'
   run hub::scan '-b' o/r --help
   assert_output_equals 'git clone o/r --help'
+  run hub::scan '-b' --help-all o/r
+  assert_output_equals 'git clone --help-all o/r'
   run hub::scan '-b' -- --help
   assert_output_equals ''
+}
+
+@test "drop_flag removes a flag letter wherever git reads it as a flag, and only there" {
+  run args_of hub::drop_flag p '-o -b' -p -qp -pomine -po x -o -p -b p -p-x -- -p
+  assert_output_equals '<-q><-omine><-o><x><-o><-p><-b><p><-p-x><--><-p>'
+  run args_of hub::drop_flag p '-o' -q --push x -op
+  assert_status 1
+  assert_output_equals ''
+  hub::drop_flag p '-o' -q --push x -op || true
+  assert_equals "${HUB_ARGS[*]}" '-q --push x -op'
 }
 
 @test "the operand tables name options of git, and no flag of git is a proper prefix of one" {
@@ -813,6 +1082,24 @@ stubs_path() {
   assert_status 1
 }
 
+@test "gh_subcommand returns 1 for help given as the value of -R or --repo" {
+  local args
+  for args in '-R --help' '--repo -h' '-R o/r --repo --help' '-R --help -R o/r'; do
+    # shellcheck disable=SC2086  # the words of args are separate arguments
+    run hub::gh_subcommand $args
+    assert_status 1
+  done
+  run args_of hub::gh_subcommand -R-h view
+  assert_output_equals '<-R-h><view>'
+}
+
+@test "gh_subcommand leaves -R --help before a subcommand for gh to refuse" {
+  run args_of hub::gh_subcommand -R --help list
+  assert_output_equals '<-R><--help><list>'
+  run args_of hub::gh_subcommand --repo -h show 1
+  assert_output_equals '<--repo><-h><view><1>'
+}
+
 @test "normalize_opts splits clusters and detaches values" {
   run args_of hub::normalize_opts bhm '--base --head --message' -uc -bmain --base=dev \
     --head topic -m 'two words' - -- -b x
@@ -830,6 +1117,27 @@ stubs_path() {
 @test "url_escape keeps branch names readable and encodes the rest" {
   run hub::url_escape 'feature/x y#1%é~a:b@c-d_e.f'
   assert_output_equals 'feature/x%20y%231%25%C3%A9~a:b@c-d_e.f'
+}
+
+@test "show_url prints, copies or opens the URL as asked, with the tool's status" {
+  run hub::show_url 1 0 https://github.com/o/r
+  assert_success
+  assert_output_equals https://github.com/o/r
+  run ls browser.log clipboard
+  assert_failure
+  run hub::show_url 0 1 https://github.com/o/r/pulls
+  assert_output_equals ''
+  assert_equals "$(<clipboard)" https://github.com/o/r/pulls
+  HUB_TEST_CLIPBOARD_STATUS=17 run hub::show_url 1 1 https://github.com/o/r/issues
+  assert_status 17
+  assert_output_equals https://github.com/o/r/issues
+  assert_equals "$(<clipboard)" https://github.com/o/r/issues
+  run ls browser.log
+  assert_failure
+  HUB_TEST_BROWSER_STATUS=19 run hub::show_url 0 0 https://github.com/o/r/wiki
+  assert_status 19
+  assert_output_equals ''
+  assert_equals "$(<browser.log)" https://github.com/o/r/wiki
 }
 
 @test "open_url runs GH_BROWSER, else BROWSER, else open, and returns its status" {
@@ -857,7 +1165,7 @@ https://github.com/o/r/actions'
 
 @test "open_url falls back to xdg-open without open" {
   unset GH_BROWSER
-  PATH=$(stubs_path xdg-open) run hub::open_url https://github.com/o/r/releases
+  PATH=$(no_gh_path xdg-open) run hub::open_url https://github.com/o/r/releases
   assert_success
   assert_equals "$(<browser.log)" https://github.com/o/r/releases
 }
@@ -874,13 +1182,13 @@ https://github.com/o/r/actions'
 }
 
 @test "copy falls back to wl-copy, then to xclip with the clipboard selection" {
-  PATH=$(stubs_path wl-copy) run hub::copy one
+  PATH=$(no_gh_path cat wl-copy) run hub::copy one
   assert_success
   assert_equals "$(<clipboard)" one
   mkdir xbin
   printf '#!/usr/bin/env bash\nprintf "%%s|" "$@" >xclip.args\ncat >clipboard\n' >xbin/xclip
   chmod +x xbin/xclip
-  PATH=$(stubs_path):$HUB_TEST_TMP/xbin run hub::copy two
+  PATH=$(no_gh_path cat):$HUB_TEST_TMP/xbin run hub::copy two
   assert_success
   assert_equals "$(<clipboard)" two
   assert_equals "$(<xclip.args)" '-selection|clipboard|'
