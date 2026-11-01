@@ -3,8 +3,8 @@ class Hub < Formula
 
   desc "Git wrapper that adds GitHub commands, built on the gh CLI"
   homepage "https://github.com/#{REPO}"
-  url "https://github.com/#{REPO}/archive/refs/tags/v0.2.0.tar.gz"
-  sha256 "2b45669199b1a4a25b3eb2a0dbb6ef2fa1805860f42020dac65c2af7a85157f9"
+  url "https://github.com/#{REPO}/archive/refs/tags/v0.3.0.tar.gz"
+  sha256 "bf64a2d0304f0094c5a3d773eceabdb3e79d4d651dfb8b270fe9a60a653e1284"
   license "MIT"
   head "https://github.com/#{REPO}.git", branch: "main"
 
