@@ -290,7 +290,7 @@ assert_untouched() {
 @test "hub merge --help-all is git's usage, before the lookup and the fetch" {
   setup_pull
   run hub merge --help-all "$url"
-  assert_status 129
+  assert_git_help merge
   assert_gh_not_called
   assert_equals "$(git rev-parse --verify --quiet FETCH_HEAD)" ''
 }
