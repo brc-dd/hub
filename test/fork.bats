@@ -95,6 +95,14 @@ dotfiles() {
   assert_equals "$(git remote get-url mislav)" https://github.com/mislav/dotfiles-1.git
 }
 
+@test "hub fork reads the fork's URL from the last line gh prints" {
+  dotfiles
+  stub_gh 'repo fork *' $'alice/dotfiles already exists\nhttps://github.com/alice/dotfiles'
+  run hub fork --remote-name alice
+  assert_success
+  assert_equals "$(git remote get-url alice)" https://github.com/alice/dotfiles.git
+}
+
 @test "hub fork gives the remote gh's git_protocol for the fork's host" {
   dotfiles
   stub_gh 'config get git_protocol -h github.com' ssh
@@ -191,7 +199,7 @@ dotfiles() {
     'hub fork: remote already exists: origin (name another with --remote-name NAME)'
   run hub fork --remote-name 'my fork'
   assert_status 1
-  assert_output_equals 'hub fork: not a remote name: my fork'
+  assert_output_equals 'hub fork: not a remote name: my\ fork'
   run hub fork --remote-name=-x
   assert_status 1
   assert_output_equals 'hub fork: not a remote name: -x'
@@ -211,24 +219,26 @@ dotfiles() {
   assert_status 1
   local hint='(run: gh auth login -h github.com)'
   assert_output_equals "hub fork: could not determine your GitHub login for github.com $hint"
-  run gh_calls
-  assert_output_contains 'gh config get user -h github.com'
-  assert_output_contains 'gh api --hostname github.com user --jq .login'
-  assert_output_lacks 'repo fork'
+  # Without a token variable the API is not asked.
+  assert_equals "$(gh_calls)" 'gh config get user -h github.com'
   assert_equals "$(git remote)" origin
 }
 
 @test "hub fork without gh on PATH says so once and changes nothing" {
   dotfiles
   local needs='hub fork: this command needs the GitHub CLI, gh (https://cli.github.com)'
-  for args in '' --no-remote '--remote-name x'; do
+  for args in '' --no-remote '--remote-name x' '--remote-name origin' origin; do
     # shellcheck disable=SC2086  # the words of args are separate arguments
     PATH=$(no_gh_path) run hub fork $args
     assert_status 1
     assert_output_equals "$needs"
   done
+  cd "$HUB_TEST_TMP"
+  PATH=$(no_gh_path) run hub fork
+  assert_status 1
+  assert_output_equals "$needs"
   assert_gh_not_called
-  assert_equals "$(git remote)" origin
+  assert_equals "$(git -C "$HUB_TEST_TMP/dotfiles" remote)" origin
 }
 
 @test "hub fork refuses unknown options, extra arguments, missing values and two organizations" {
@@ -240,6 +250,7 @@ dotfiles() {
   assert_line_equals 1 "$usage"
   assert_line_equals 2 '                [--default-branch-only] [ORG]'
   run hub fork --no-remote=1
+  assert_status 1
   assert_line_equals 0 'hub fork: unknown option: --no-remote=1'
   run hub fork acme other
   assert_status 1
@@ -247,8 +258,20 @@ dotfiles() {
   run hub fork --org
   assert_status 1
   assert_line_equals 0 'hub fork: --org needs a value'
-  run hub fork --fork-name=
+  run hub fork --fork-name
+  assert_status 1
   assert_line_equals 0 'hub fork: --fork-name needs a value'
+  run hub fork --fork-name=
+  assert_status 1
+  assert_line_equals 0 'hub fork: empty fork name'
+  assert_line_equals 1 "$usage"
+  run hub fork --org ''
+  assert_status 1
+  assert_line_equals 0 'hub fork: empty organization'
+  assert_line_equals 1 "$usage"
+  run hub fork --remote-name ''
+  assert_status 1
+  assert_output_equals "hub fork: not a remote name: ''"
   run hub fork ''
   assert_status 1
   assert_line_equals 0 'hub fork: empty organization'
@@ -274,6 +297,18 @@ dotfiles() {
   assert_output_equals 'gh repo fork github.com/dotcom/dotfiles --clone=false --org=acme'
   run gh_calls
   assert_output_lacks 'repo fork'
+  assert_equals "$(git remote)" origin
+}
+
+@test "hub --noop fork predicts the fork from the names as given, which GitHub may normalize" {
+  dotfiles
+  run hub --noop fork --fork-name 'my fork'
+  assert_success
+  assert_line_equals 0 "gh repo fork github.com/dotcom/dotfiles --clone=false --fork-name=my\\ fork"
+  assert_line_equals 1 "git remote add -- mislav https://github.com/mislav/my\\ fork.git"
+  run hub --noop fork --org 'Acme Corp' --remote-name y
+  assert_success
+  assert_line_equals 1 "git remote add -- y https://github.com/Acme\\ Corp/dotfiles.git"
   assert_equals "$(git remote)" origin
 }
 

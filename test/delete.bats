@@ -35,6 +35,24 @@ load test_helper
   done
 }
 
+@test "hub delete NAME drops a trailing .git" {
+  stub_gh 'repo delete *' ''
+  run hub delete dotfiles.git --yes
+  assert_success
+  assert_gh_called 'repo delete github.com/mislav/dotfiles --yes'
+}
+
+@test "hub delete names an invalid GH_HOST once, whatever the operand" {
+  local arg
+  for arg in dotfiles o/r; do
+    GH_HOST='a b' run hub delete -y "$arg"
+    assert_status 1
+    assert_output_equals 'hub delete: not a host name: a\ b'
+  done
+  run gh_calls
+  assert_output_lacks 'repo delete'
+}
+
 @test "hub delete NAME is your login's on GH_HOST" {
   stub_gh 'config get user -h ghe.example.com' alice
   stub_gh 'repo delete *' ''
@@ -125,12 +143,18 @@ load test_helper
 
 @test "hub delete refuses what is not a repository before asking gh anything" {
   local name forms='NAME, OWNER/NAME, HOST/OWNER/NAME or a repository URL'
-  for name in 'a b' . .. 'octo/' 'octo//site' 'octo/site/' 'a/b/c/d' -x/octo/site 'o_o/site' \
+  for name in . .. 'octo/' 'octo//site' 'octo/site/' 'a/b/c/d' -x/octo/site 'o_o/site' \
     'octo/../site' 'https://example.com/octo/site' 'octo/site/tree' -x .git 'octo/.git'; do
     run hub delete -y -- "$name"
     assert_status 1
     assert_output_equals "hub delete: not a repository: $name (use $forms)"
   done
+  run hub delete -y -- 'a b'
+  assert_status 1
+  assert_output_equals "hub delete: not a repository: a\\ b (use $forms)"
+  run hub delete ''
+  assert_status 1
+  assert_output_equals "hub delete: not a repository: '' (use $forms)"
   assert_gh_not_called
 }
 
@@ -146,7 +170,7 @@ load test_helper
 
 @test "hub delete needs gh" {
   local name gh_url=https://cli.github.com
-  for name in octo/site dotfiles; do
+  for name in octo/site dotfiles 'bad name'; do
     PATH=$(no_gh_path) run hub delete -y "$name"
     assert_status 1
     assert_output_equals "hub delete: this command needs the GitHub CLI, gh ($gh_url)"

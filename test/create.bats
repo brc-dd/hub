@@ -93,8 +93,10 @@ EOF
 @test "hub create passes the visibility, the last one given, and never gh's -p" {
   make_repo work
   run hub create --public
+  assert_success
   assert_gh_called 'repo create github.com/mislav/work --source=* --remote=origin --public'
   run hub create --private --internal
+  assert_success
   assert_gh_called 'repo create github.com/mislav/work --source=* --remote=origin --internal'
   : >"$HUB_TEST_GH_LOG"
   run hub create --public -p
@@ -117,6 +119,7 @@ EOF
   assert_success
   assert_gh_called '* --remote=up --private --description --public --homepage x'
   run hub create -dabc
+  assert_success
   assert_gh_called '* --remote=origin --private --description abc'
 }
 
@@ -225,6 +228,22 @@ gh repo create github.com/mislav/work --source=$HUB_TEST_TMP/work --remote=origi
   assert_gh_called 'repo create github.com/mislav/work *'
 }
 
+@test "hub create -o still opens the browser when -c finds no clipboard tool" {
+  make_repo work
+  local bin=$HUB_TEST_TMP/noclip dir
+  local -a dirs
+  mkdir "$bin"
+  IFS=: read -ra dirs <<<"$PATH"
+  for dir in "${dirs[@]}"; do
+    if [[ -d $dir ]]; then ln -s "$dir"/* "$bin"/ 2>/dev/null || true; fi
+  done
+  rm -f "$bin/pbcopy" "$bin/wl-copy" "$bin/xclip"
+  PATH=$bin run hub create -c -o
+  assert_status 1
+  assert_output_contains 'hub create: no clipboard tool found'
+  assert_equals "$(opened)" https://github.com/mislav/work
+}
+
 @test "hub create stops when gh fails, before the remote, the push and the browser" {
   git init -q --bare "$(server_dir mislav/work)"
   make_repo work
@@ -240,15 +259,18 @@ gh repo create github.com/mislav/work --source=$HUB_TEST_TMP/work --remote=origi
 
 @test "hub create refuses bad names and remotes before asking gh anything" {
   make_repo work
+  local forms='NAME, OWNER/NAME, HOST/OWNER/NAME or a repository URL'
   run hub create 'my repo'
   assert_status 1
-  assert_output_equals \
-    'hub create: not a repository name: my repo (use letters, digits, -, _ and .)'
+  assert_output_equals "hub create: not a repository: my\\ repo (use $forms)"
   run hub create .git
-  assert_output_equals "hub create: not a repository name: '' (use letters, digits, -, _ and .)"
+  assert_status 1
+  assert_output_equals "hub create: not a repository: .git (use $forms)"
+  run hub create ''
+  assert_status 1
+  assert_output_equals "hub create: not a repository: '' (use $forms)"
   run hub create a/b/c/d
   assert_status 1
-  local forms='NAME, OWNER/NAME, HOST/OWNER/NAME or a repository URL'
   assert_output_equals "hub create: not a repository: a/b/c/d (use $forms)"
   local owner
   for owner in .. . - -x .x 'a$b'; do
@@ -263,15 +285,42 @@ gh repo create github.com/mislav/work --source=$HUB_TEST_TMP/work --remote=origi
   assert_status 1
   assert_output_equals "hub create: not a remote name: ''"
   run hub create --remote-name -x
+  assert_status 1
   assert_output_equals 'hub create: not a remote name: -x'
   run hub create --remote-name 'a b'
-  assert_output_equals 'hub create: not a remote name: a b'
+  assert_status 1
+  assert_output_equals 'hub create: not a remote name: a\ b'
   git remote add origin https://example.com/x.git
   run hub create
   assert_status 1
   assert_output_equals \
     'hub create: remote already exists: origin (name another with --remote-name NAME)'
   assert_gh_not_called
+}
+
+@test "hub create names an invalid GH_HOST once, whatever the operand" {
+  make_repo work
+  local arg
+  for arg in '' tools myorg/tools; do
+    # shellcheck disable=SC2086  # an empty arg is no argument
+    GH_HOST='a b' run hub create $arg
+    assert_status 1
+    assert_output_equals 'hub create: not a host name: a\ b'
+  done
+  assert_gh_not_called
+}
+
+@test "hub create without gh on PATH says so before any other check" {
+  make_repo work
+  local needs='hub create: this command needs the GitHub CLI, gh (https://cli.github.com)'
+  git remote add origin https://example.com/x.git
+  PATH=$(no_gh_path) run hub create
+  assert_status 1
+  assert_output_equals "$needs"
+  PATH=$(no_gh_path) run hub create --remote-name x myorg/tools
+  assert_status 1
+  assert_output_equals "$needs"
+  assert_equals "$(git remote)" origin
 }
 
 @test "hub create refuses unknown options, gh's own options and extra arguments" {
@@ -288,8 +337,10 @@ gh repo create github.com/mislav/work --source=$HUB_TEST_TMP/work --remote=origi
   assert_status 1
   assert_line_equals 0 'hub create: unexpected argument: two'
   run hub create -d
+  assert_status 1
   assert_line_equals 0 'hub create: -d needs a value'
   run hub create --remote-name
+  assert_status 1
   assert_line_equals 0 'hub create: --remote-name needs a value'
   run hub create -h
   assert_status 1
@@ -315,11 +366,11 @@ gh repo create github.com/mislav/work --source=$HUB_TEST_TMP/work --remote=origi
   cd bare.git
   run hub create
   assert_status 1
-  assert_output_equals 'hub create: run hub create from a work tree'
+  assert_output_equals 'hub create: not inside a work tree'
   cd objects
   run hub create
   assert_status 1
-  assert_output_equals 'hub create: run hub create from a work tree'
+  assert_output_equals 'hub create: not inside a work tree'
   cd "$HUB_TEST_TMP"
   make_repo work
   cd .git

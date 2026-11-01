@@ -5,10 +5,12 @@
 # hub's own command: these are all of its options. Deletes the repository with gh repo delete,
 # which asks you to type its name first unless -y is given. A bare NAME is yours: your login on
 # the default host. NAME may also be a repository URL. Deleting needs the delete_repo scope;
-# grant it once with `gh auth refresh -s delete_repo`. The exit status is gh's.
+# grant it once with `gh auth refresh -s delete_repo`.
 #
 # Options:
 #   -y, --yes   Delete without asking for confirmation.
+#
+# Exit status: gh's.
 #
 #   $ hub delete -y dotfiles
 #   > gh repo delete github.com/mislav/dotfiles --yes
@@ -31,15 +33,17 @@ hub_cmd_delete() {
     shift
   done
   ((${#operands[@]} > 0)) || hub::usage_error 'name the repository to delete'
-  ((${#operands[@]} == 1)) || hub::usage_error "unexpected argument: ${operands[1]}"
+  ((${#operands[@]} == 1)) || hub::usage_error "unexpected argument: $(hub::shown "${operands[1]}")"
+  hub::require_gh
+  # The default host first: a bad GH_HOST is the only message.
+  host=$(hub::host) || exit 1
   if [[ ${operands[0]} == */* ]]; then
     read -r host owner repo < <(hub::parse_project "${operands[0]}")
   elif hub::is_shorthand "${operands[0]%.git}"; then
-    host=$(hub::host) || exit 1
     repo=${operands[0]%.git}
   fi
   if [[ -z $repo ]]; then
-    hub::die "not a repository: ${operands[0]}" \
+    hub::die "not a repository: $(hub::shown "${operands[0]}")" \
       '(use NAME, OWNER/NAME, HOST/OWNER/NAME or a repository URL)'
   fi
   [[ -n $owner ]] || owner=$(hub::login "$host") || exit 1

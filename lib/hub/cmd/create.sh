@@ -57,23 +57,24 @@ hub_cmd_create() {
   done
   ((${#operands[@]} <= 1)) || hub::usage_error "unexpected argument: ${operands[1]}"
 
-  [[ $(hub::git_query rev-parse --is-bare-repository) != true ]] \
-    || hub::die 'run hub create from a work tree'
+  hub::require_gh
   hub::require_repo
   top=$(hub::toplevel)
   if ((${#operands[@]} == 0)); then
     host=$(hub::host) && repo=$(hub::repo_name) || exit 1
-  elif [[ ${operands[0]} == */* ]]; then
-    if ! read -r host owner repo < <(hub::parse_project "${operands[0]}"); then
-      hub::die "not a repository: ${operands[0]}" \
-        '(use NAME, OWNER/NAME, HOST/OWNER/NAME or a repository URL)'
-    fi
   else
+    # The default host first: a bad GH_HOST is the only message.
     host=$(hub::host) || exit 1
-    repo=${operands[0]%.git}
+    if [[ ${operands[0]} == */* ]]; then
+      read -r host owner repo < <(hub::parse_project "${operands[0]}")
+    else
+      repo=${operands[0]%.git}
+    fi
   fi
-  hub::is_shorthand "$repo" \
-    || hub::die "not a repository name: ${repo:-"''"} (use letters, digits, -, _ and .)"
+  if ! hub::is_shorthand "$repo"; then
+    hub::die "not a repository: $(hub::shown "${operands[0]-$repo}")" \
+      '(use NAME, OWNER/NAME, HOST/OWNER/NAME or a repository URL)'
+  fi
   hub::require_new_remote "$remote"
   if ((push)); then
     branch=$(hub::current_branch) || hub::die 'not on a branch (--push pushes the current branch)'

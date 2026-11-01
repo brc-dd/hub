@@ -16,7 +16,7 @@
 #   -u, --url        Print the URL instead of opening it.
 #   -c, --copy       Copy the URL to the clipboard instead of opening it; with -u, print and copy.
 #
-# The exit status is the browser's or the clipboard tool's.
+# Exit status: the browser's or the clipboard tool's.
 #
 #   $ hub compare v1.0..v1.1
 #   > open https://github.com/mislav/dotfiles/compare/v1.0...v1.1
@@ -94,7 +94,7 @@ _hub_compare_head() {
   fi
   # 2: pushed, with local commits on top; the page shows what GitHub has.
   hub::pushed "$branch" "$remote" >/dev/null || (($? == 2)) \
-    || hub::die "$branch is not pushed to $remote; push it first or name a range"
+    || hub::die "$branch is not pushed to $remote (push it first, or name a range)"
   found=$(hub::remote_project "$remote" push) \
     || hub::die "$remote does not push to a GitHub repository (name a range)"
   read -r fork_host fork_owner _ <<<"$found"

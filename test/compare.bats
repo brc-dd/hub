@@ -85,8 +85,10 @@ $page/feature"
 @test "hub compare escapes the range but keeps slashes and colons" {
   make_repo work origin=https://github.com/mislav/dotfiles.git
   run hub compare -u 'fix/a+b#1'
+  assert_success
   assert_output_equals "$page/fix/a%2Bb%231"
   run hub compare -u 'main...alice:my branch'
+  assert_success
   assert_output_equals "$page/main...alice:my%20branch"
 }
 
@@ -150,6 +152,7 @@ $page/feature"
   assert_status 1
   assert_line_equals 0 'hub compare: unknown option: -x'
   run hub compare --url=yes a..b
+  assert_status 1
   assert_line_equals 0 'hub compare: unknown option: --url=yes'
   run hub compare -b
   assert_status 1
@@ -232,11 +235,13 @@ $page/feature"
   git switch -q -c feature
   run hub compare
   assert_status 1
-  assert_output_equals 'hub compare: feature is not pushed to origin; push it first or name a range'
+  assert_output_equals \
+    'hub compare: feature is not pushed to origin (push it first, or name a range)'
   git switch -q --orphan unborn
   run hub compare -u
   assert_status 1
-  assert_output_equals 'hub compare: unborn is not pushed to origin; push it first or name a range'
+  assert_output_equals \
+    'hub compare: unborn is not pushed to origin (push it first, or name a range)'
   git switch -q --detach feature
   run hub compare -u
   assert_status 1
@@ -279,7 +284,7 @@ $page/feature"
   git config remote.pushDefault upstream
   run hub compare -u
   assert_status 1
-  local refusal='hub compare: feature is not pushed to upstream; push it first or name a range'
+  local refusal='hub compare: feature is not pushed to upstream (push it first, or name a range)'
   assert_output_equals "$refusal"
 }
 
@@ -311,7 +316,8 @@ $page/feature"
   git config branch.feature.pushRemote origin
   run hub compare -u
   assert_status 1
-  assert_output_equals 'hub compare: feature is not pushed to origin; push it first or name a range'
+  assert_output_equals \
+    'hub compare: feature is not pushed to origin (push it first, or name a range)'
 }
 
 @test "hub compare refuses a push remote that is not on the project's host" {

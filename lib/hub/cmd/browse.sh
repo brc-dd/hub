@@ -15,6 +15,8 @@
 #   -u, --url    Print the URL instead of opening it.
 #   -c, --copy   Copy the URL to the clipboard instead of opening it; with -u, print and copy.
 #
+# Exit status: the browser's or the clipboard tool's.
+#
 #   $ hub browse -- issues
 #   > open https://github.com/mislav/dotfiles/issues
 #   $ hub browse -u cli/cli releases
@@ -39,10 +41,11 @@ hub_cmd_browse() {
   # -- takes the repository's place: only a SUBPAGE may follow it.
   if ((dashdash)); then
     ((${#operands[@]} == 0)) || hub::usage_error "unexpected argument: --"
-    (($# <= 1)) || hub::usage_error "unexpected argument: $2"
+    (($# <= 1)) || hub::usage_error "unexpected argument: $(hub::shown "$2")"
     subpage=${1-}
   else
-    ((${#operands[@]} <= 2)) || hub::usage_error "unexpected argument: ${operands[2]}"
+    ((${#operands[@]} <= 2)) \
+      || hub::usage_error "unexpected argument: $(hub::shown "${operands[2]}")"
     subpage=${operands[1]-}
   fi
   if ((dashdash == 0 && ${#operands[@]})); then
@@ -67,17 +70,19 @@ hub_cmd_browse() {
 # _hub_browse_repository STR : "HOST OWNER REPO" of the operand; REPO alone is your login's.
 _hub_browse_repository() {
   local host login
-  if [[ $1 != */* ]] && hub::is_shorthand "$1"; then
-    host=$(hub::host) && login=$(hub::login "$host") || return 1
-    printf '%s %s %s\n' "$host" "$login" "$1"
+  # The default host first: a bad GH_HOST is the only message.
+  host=$(hub::host) || return 1
+  if [[ $1 != */* ]] && hub::is_shorthand "${1%.git}"; then
+    login=$(hub::login "$host") || return 1
+    printf '%s %s %s\n' "$host" "$login" "${1%.git}"
   else
     hub::parse_project "$1" \
-      || hub::die "not a repository: $1 (use REPO, OWNER/REPO, HOST/OWNER/REPO or a URL)"
+      || hub::die "not a repository: $(hub::shown "$1")" \
+        '(use REPO, OWNER/REPO, HOST/OWNER/REPO or a repository URL)'
   fi
 }
 
-# _hub_browse_branch_page PAGE : "HOST OWNER REPO PAGE/BRANCH" of the current branch where it
-# pushes, when that branch is not the default branch and is on its push remote.
+# _hub_browse_branch_page PAGE : "HOST OWNER REPO PAGE/BRANCH" of a pushed, non-default branch.
 _hub_browse_branch_page() {
   local branch remote default='' rc=0 found
   branch=$(hub::current_branch) || return 1

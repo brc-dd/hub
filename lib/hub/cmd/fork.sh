@@ -36,11 +36,11 @@ hub_cmd_fork() {
       --no-remote) no_remote=1 ;;
       --default-branch-only) branch_only=1 ;;
       --remote-name | --org | --fork-name)
-        [[ -n ${2-} ]] || hub::usage_error "$1 needs a value"
+        (($# > 1)) || hub::usage_error "$1 needs a value"
         case $1 in
-          --remote-name) remote=$2 ;;
-          --org) org=$2 ;;
-          --fork-name) fork_name=$2 ;;
+          --remote-name) remote=$2 && [[ -n $2 ]] || hub::die "not a remote name: ''" ;;
+          --org) org=$2 && [[ -n $2 ]] || hub::usage_error 'empty organization' ;;
+          --fork-name) fork_name=$2 && [[ -n $2 ]] || hub::usage_error 'empty fork name' ;;
         esac
         shift
         ;;
@@ -63,6 +63,7 @@ hub_cmd_fork() {
   [[ -z $fork_name ]] || opts+=("--fork-name=$fork_name")
   ((! branch_only)) || opts+=(--default-branch-only)
 
+  hub::require_gh
   if ((! no_remote)) || [[ -z ${GH_REPO-} ]]; then hub::require_repo; fi
   project=$(hub::project) || exit 1
   read -r host owner repo <<<"$project"
@@ -74,13 +75,17 @@ hub_cmd_fork() {
   # remote itself, for the fork whose web URL gh prints (an existing fork keeps its own name).
   out=$(hub::gh repo fork "$host/$owner/$repo" --clone=false "${opts[@]}") || exit
   if [[ ${HUB_NOOP-} == 1 ]]; then
+    # A prediction from the names as given: GitHub may normalize them, so nothing is checked.
     printf '%s\n' "$out"
-    out=https://$host/${org:-$(hub::login "$host")}/${fork_name:-$repo}
-  fi
-  fork=${out##*$'\n'}
-  fork=${fork#*://*/}
-  if [[ $fork != */* ]] || ! hub::is_shorthand "$fork"; then
-    hub::die "gh did not print the fork's URL: $out (add the remote with git remote add)"
+    fork=$org
+    [[ -n $fork ]] || fork=$(hub::login "$host") || exit 1
+    fork+=/${fork_name:-$repo}
+  else
+    fork=${out##*$'\n'}
+    fork=${fork#*://*/}
+    if [[ $fork != */* ]] || ! hub::is_shorthand "$fork"; then
+      hub::die "gh did not print the fork's URL: $out (add the remote with git remote add)"
+    fi
   fi
   hub::git remote add -- "$remote" "$(hub::clone_url "$host" "${fork%%/*}" "${fork#*/}")"
 }

@@ -64,6 +64,9 @@ https://github.com/mislav/dotfiles/settings/branches'
   run hub browse -u dotfiles
   assert_success
   assert_output_equals https://github.com/mislav/dotfiles
+  run hub browse -u dotfiles.git
+  assert_success
+  assert_output_equals https://github.com/mislav/dotfiles
   assert_gh_called 'config get user -h github.com'
   export GH_HOST=ghe.example.com
   stub_gh 'config get user -h ghe.example.com' hubot
@@ -328,6 +331,7 @@ pushed_to_other() {
   GH_REPO=cli/cli.git run hub browse -u
   assert_output_equals https://github.com/cli/cli
   run hub browse -u ghe.example.com/octo/proj.git
+  assert_success
   assert_output_equals https://ghe.example.com/octo/proj
 }
 
@@ -381,7 +385,7 @@ pushed_to_other() {
 }
 
 @test "hub browse refuses a repository it cannot read" {
-  local hint='(use REPO, OWNER/REPO, HOST/OWNER/REPO or a URL)'
+  local hint='(use REPO, OWNER/REPO, HOST/OWNER/REPO or a repository URL)'
   run hub browse a/b/c/d
   assert_status 1
   assert_output_equals "hub browse: not a repository: a/b/c/d $hint"
@@ -397,10 +401,23 @@ pushed_to_other() {
   run hub browse 'a/b?x=1'
   assert_status 1
   assert_output_equals "hub browse: not a repository: a/b?x=1 $hint"
+  run hub browse ''
+  assert_status 1
+  assert_output_equals "hub browse: not a repository: '' $hint"
   run hub browse cli/cli/issues
   assert_status 1
   assert_output_equals "hub browse: not a repository: cli/cli/issues $hint"
   assert_equals "$(opened)" ''
+  assert_gh_not_called
+}
+
+@test "hub browse names an invalid GH_HOST once, whatever the operand" {
+  local arg
+  for arg in dotfiles cli/cli; do
+    GH_HOST='a b' run hub browse -u "$arg"
+    assert_status 1
+    assert_output_equals 'hub browse: not a host name: a\ b'
+  done
   assert_gh_not_called
 }
 
@@ -422,6 +439,7 @@ pushed_to_other() {
   assert_line_equals 0 'hub browse: unknown option: --urls'
   assert_line_equals 1 'Usage: hub browse [-u] [-c] [[[HOST/]OWNER/]REPO | --] [SUBPAGE]'
   run hub browse -ux cli/cli
+  assert_status 1
   assert_line_equals 0 'hub browse: unknown option: -x'
   run hub browse cli/cli issues extra
   assert_status 1

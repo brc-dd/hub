@@ -11,9 +11,8 @@
 # branch.
 #
 # Options:
-#   -v, --verbose
-#        Print STATE, NAME and URL of every check instead (the first 100), failures first,
-#        then pending ones, then the rest; nothing when there is no check.
+#   -v, --verbose   Print STATE, NAME and URL of every check instead (the first 100), failures
+#                   first, then pending ones, then the rest; nothing when there is no check.
 #
 # Exit status: 0 success, 1 failure or error (also when the lookup fails or GitHub has no
 # such commit), 2 pending, 3 no status.
