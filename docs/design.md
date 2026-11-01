@@ -316,11 +316,13 @@ out, with the command to use instead, is in
   the rules in [Where a branch pushes](#where-a-branch-pushes) decide, and
   `pull-request -p` pushes an explicit refspec. `hub push A,B` follows a
   remote's push refspecs and its mirror setting.
-- `hub push` asks git how it reads a word with a comma
-  (`git ls-remote --get-url`), so a word git rewrites through
-  `url.BASE.insteadOf` is one destination. A rewrite set only through
-  `url.BASE.pushInsteadOf` is not read, and such a word is split as a list
-  of remotes.
+- `hub push` asks git how it reads a word with a comma, and `hub fetch` how
+  it reads its first operand (`git ls-remote --get-url`), so a word git
+  rewrites through `url.BASE.insteadOf` is one destination. `hub remote add`
+  and `set-url` ask git the same way, so such a word is stored as given. A
+  rewrite set only through `url.BASE.pushInsteadOf` is not read by push, and
+  such a word is split as a list of remotes. git fetch `--multiple` never
+  rewrites a list's members, so fetch asks only about the whole word.
 - For a remote that fetches from one repository and pushes to another, the
   pushed check reads the push remote's remote-tracking branch by name; use
   `-p` or `-f` when it is wrong.

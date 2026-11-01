@@ -70,6 +70,15 @@ All notable changes to hub are documented here. The format follows
   member of the enterprise.
 - `fetch` refuses a list that names one missing user in two cases
   (`alice,Alice`) instead of adding two remotes.
+- `fetch` hands a first operand that git rewrites through
+  `url.BASE.insteadOf`, and a URL or host:path word containing a comma, to
+  git untouched instead of adding remotes for it.
+- `fetch` counts a list member as a remote group only by git's lowercase
+  key, and refuses a group named in another case (`Friends`) before asking
+  gh or adding a remote.
+- `remote add NAME WORD` and `remote set-url NAME WORD` keep a word git
+  rewrites through `url.BASE.insteadOf` instead of replacing it with a
+  GitHub URL.
 - Refusals of `ci-status`, `compare`, `alias`, `fork` and `pull-request`
   show the user's word quoted, so an empty word or a newline is visible.
 - hub refuses to run when the `git` on `PATH` is hub itself through a
