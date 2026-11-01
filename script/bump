@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+# Summary: Commit and tag a new version of hub.
+# Usage: script/bump [-n] [-s] VERSION
+#
+# On a clean main, for a VERSION (X.Y.Z or X.Y.Z-PRE) whose tag vVERSION does not exist yet:
+# moves the notes under "## [Unreleased]" in CHANGELOG.md to a new "## [VERSION] - YYYY-MM-DD"
+# section, keeping an empty Unreleased section, updates the link references at the end, writes
+# VERSION, commits "hub vVERSION" and tags it vVERSION. Nothing is pushed: script/release does
+# that. Fails when the Unreleased section has no notes.
+#
+# Options:
+#   -n, --dry-run   Print the changes and the git commands instead of making them.
+#   -s, --sign      Make a signed tag (git tag -s) instead of an annotated one.
+#
+#   $ script/bump 0.2.0
+#   > git add VERSION CHANGELOG.md
+#   > git commit -q -m 'hub v0.2.0'
+#   > git tag -a v0.2.0 -m 'hub v0.2.0'
+
+set -euo pipefail
+
+semver_id='(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
+semver="^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-$semver_id(\.$semver_id)*)?$"
+
+die() {
+  printf 'script/bump: %s\n' "$*" >&2
+  exit 1
+}
+
+usage_error() {
+  printf 'script/bump: %s\n' "$1" >&2
+  awk '/^# Usage: / { u = 1 } u && !/^# (Usage: | )/ { exit } u { sub(/^# /, ""); print }' "$0" >&2
+  exit 1
+}
+
+run() {
+  if ((dry_run)); then
+    printf '[dry-run]'
+    printf ' %q' "$@"
+    printf '\n'
+  else
+    "$@"
+  fi
+}
+
+dry_run=0 tag_kind=-a version=
+for arg; do
+  case $arg in
+    -n | --dry-run) dry_run=1 ;;
+    -s | --sign) tag_kind=-s ;;
+    -h | --help) exec awk 'NR > 1 && !/^#/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "$0" ;;
+    -*) usage_error "unknown option: $arg" ;;
+    *)
+      [[ -z $version ]] || usage_error "unexpected argument: $arg"
+      version=${arg#v}
+      ;;
+  esac
+done
+[[ -n $version ]] || usage_error 'no version given'
+[[ $version =~ $semver ]] || die "not a X.Y.Z or X.Y.Z-PRE version: $version"
+tag=v$version
+
+cd "$(dirname "$0")/.."
+[[ $(git symbolic-ref --quiet --short HEAD) == main ]] || die 'not on main (git switch main)'
+# --untracked-files=all: status.showUntrackedFiles=no would hide untracked files.
+[[ -z $(git status --porcelain --untracked-files=all) ]] \
+  || die 'the working tree is not clean (git status)'
+if git rev-parse --quiet --verify "refs/tags/$tag" >/dev/null; then
+  die "tag $tag exists already"
+fi
+
+changelog=$(mktemp) start=$(git rev-parse HEAD) wrote=0
+# on_exit : removes the temporary file; a failure after the writes (a hook, signing) says how to
+# undo them.
+on_exit() {
+  local rc=$?
+  rm -f "$changelog"
+  ((! rc || ! wrote)) || printf 'script/bump: stopped; git reset --hard %s undoes it\n' "$start" >&2
+}
+trap on_exit EXIT
+rc=0
+awk -v version="$version" -v date="$(date +%Y-%m-%d)" '
+  function reference(line) { return line ~ /^\[[^]]+\]: / }
+  !found && /^## \[Unreleased\][ \t]*$/ {
+    print; print ""; print "## [" version "] - " date
+    found = lead = section = 1; next
+  }
+  section && (/^## / || reference($0)) { section = 0 }
+  # Empty subheadings (### Changed) are not notes.
+  section && !/^[ \t]*$/ && !/^#/ { notes = 1 }
+  lead && /^[ \t]*$/ { next }
+  lead && !section { exit }
+  lead { print ""; lead = 0 }
+  !linked && /^\[Unreleased\]: .*\/compare\/[^ ]+\.\.\.HEAD[ \t]*$/ {
+    base = substr($0, 15, index($0, "/compare/") - 15)
+    previous = substr($0, index($0, "/compare/") + 9)
+    sub(/\.\.\.HEAD[ \t]*$/, "", previous)
+    print "[Unreleased]: " base "/compare/v" version "...HEAD"
+    print "[" version "]: " base "/compare/" previous "...v" version
+    linked = 1; next
+  }
+  { print }
+  END { exit !found ? 2 : !notes ? 3 : !linked ? 4 : 0 }
+' CHANGELOG.md >"$changelog" || rc=$?
+case $rc in
+  0) ;;
+  2) die 'CHANGELOG.md has no "## [Unreleased]" heading' ;;
+  3) die 'CHANGELOG.md has no notes under "## [Unreleased]"' ;;
+  4) die 'CHANGELOG.md has no "[Unreleased]: URL/compare/vX.Y.Z...HEAD" link reference' ;;
+  *) die 'could not read CHANGELOG.md' ;;
+esac
+
+if ((dry_run)); then
+  printf '[dry-run] VERSION: %s -> %s\n' "$(<VERSION)" "$version"
+  diff -u -L CHANGELOG.md -L CHANGELOG.md CHANGELOG.md "$changelog" || (($? == 1))
+else
+  wrote=1
+  printf '%s\n' "$version" >VERSION
+  cat "$changelog" >CHANGELOG.md
+fi
+run git add VERSION CHANGELOG.md
+run git commit -q -m "hub $tag"
+run git tag "$tag_kind" "$tag" -m "hub $tag"

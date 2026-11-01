@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+# Summary: Point Formula/hub.rb at a release.
+# Usage: script/update-formula [--sha256=HEX] [-n] [-f] vX.Y.Z
+#        script/update-formula --self-test
+#
+# Rewrites the url and sha256 lines of Formula/hub.rb (its own, not a resource's) for the source
+# tarball of tag vX.Y.Z of the formula's REPO, downloading the tarball for its checksum. Refuses
+# a version lower than the one the formula names (by SemVer precedence) without -f.
+#
+# Options:
+#       --sha256=HEX   Use this checksum instead of downloading the tarball.
+#   -n, --dry-run      Print the change as a diff instead of writing it.
+#   -f, --force        Also go back to a lower version.
+#       --self-test    Check the version comparison against known orders.
+#
+#   $ script/update-formula v0.2.0
+#   > curl -fsSL --retry 3 https://github.com/brc-dd/hub/archive/refs/tags/v0.2.0.tar.gz
+
+set -euo pipefail
+
+semver_id='(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
+semver="^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-$semver_id(\.$semver_id)*)?$"
+formula=Formula/hub.rb
+
+die() {
+  printf 'script/update-formula: %s\n' "$*" >&2
+  exit 1
+}
+
+usage_error() {
+  printf 'script/update-formula: %s\n' "$1" >&2
+  awk '/^# Usage: / { u = 1 } u && !/^# (Usage: | )/ { exit } u { sub(/^# /, ""); print }' "$0" >&2
+  exit 1
+}
+
+# version_lt A B : A has lower SemVer precedence than B (both X.Y.Z[-PRE], no build metadata).
+version_lt() {
+  local LC_ALL=C a b x y i num='^[0-9]+$'
+  # Only the first hyphen starts the pre-release; later ones belong to its identifiers.
+  a=${1/-/.} b=${2/-/.}
+  # A release outranks its pre-releases: ~ sorts after every identifier character.
+  [[ $1 == *-* ]] || a+=.~
+  [[ $2 == *-* ]] || b+=.~
+  IFS=. read -r -a a <<<"$a"
+  IFS=. read -r -a b <<<"$b"
+  for ((i = 0; i < ${#a[@]} && i < ${#b[@]}; i++)); do
+    x=${a[i]} y=${b[i]}
+    [[ $x == "$y" ]] && continue
+    if [[ $x =~ $num && $y =~ $num ]]; then
+      # Compared as strings, by length first: numbers may exceed 64 bits, and have no leading 0.
+      ((${#x} < ${#y})) || { ((${#x} == ${#y})) && [[ $x < "$y" ]]; }
+    elif [[ $x =~ $num ]]; then
+      return 0
+    elif [[ $y =~ $num ]]; then
+      return 1
+    else
+      [[ $x < "$y" ]]
+    fi
+    return
+  done
+  ((${#a[@]} < ${#b[@]}))
+}
+
+self_test() {
+  local line i j
+  local -a v
+  for line in \
+    '1.0.0-alpha 1.0.0-alpha.1 1.0.0-alpha.beta 1.0.0-beta 1.0.0-beta.2 1.0.0-beta.11 1.0.0-rc.1
+     1.0.0' \
+    '1.0.0 1.0.1 1.9.0 1.10.0 2.0.0-0 2.0.0 10.0.0' \
+    '1.0.0-2 1.0.0-10 1.0.0-99999999999999999999 1.0.0-100000000000000000000 1.0.0-1a 1.0.0-Alpha
+     1.0.0-a-b 1.0.0-a0 1.0.0-alpha'; do
+    read -r -d '' -a v <<<"$line" || true
+    for ((i = 0; i < ${#v[@]}; i++)); do
+      [[ ${v[i]} =~ $semver ]] || die "self-test: not a version: ${v[i]}"
+      for ((j = 0; j < ${#v[@]}; j++)); do
+        if version_lt "${v[i]}" "${v[j]}"; then
+          ((i < j)) || die "self-test: ${v[i]} is not lower than ${v[j]}, but it says so"
+        else
+          ((i >= j)) || die "self-test: ${v[i]} is lower than ${v[j]}, but it says not"
+        fi
+      done
+    done
+  done
+  echo 'The version order is right.'
+}
+
+dry_run=0 force=0 self_test=0 sha256='' sha256_given=0 tag=''
+for arg; do
+  case $arg in
+    --sha256=*) sha256=${arg#*=} sha256_given=1 ;;
+    -n | --dry-run) dry_run=1 ;;
+    -f | --force) force=1 ;;
+    --self-test) self_test=1 ;;
+    -h | --help) exec awk 'NR > 1 && !/^#/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "$0" ;;
+    -*) usage_error "unknown option: $arg" ;;
+    *)
+      [[ -z $tag ]] || usage_error "unexpected argument: $arg"
+      tag=$arg
+      ;;
+  esac
+done
+if ((self_test)); then
+  (($# == 1)) || usage_error '--self-test takes no other arguments'
+  self_test
+  exit
+fi
+[[ -n $tag ]] || usage_error 'no version given'
+[[ $tag == v* && ${tag#v} =~ $semver ]] || die "not a vX.Y.Z[-PRE] tag: $tag"
+((! sha256_given)) || [[ $sha256 =~ ^[0-9a-f]{64}$ ]] \
+  || die "not a SHA-256 checksum (64 lowercase hex digits): $sha256"
+
+cd "$(dirname "$0")/.."
+[[ -f $formula ]] || die "no $formula"
+current=$(sed -n 's#^  url ".*/archive/refs/tags/v\([^/]*\)\.tar\.gz"$#\1#p' "$formula" | head -n 1)
+if ((! force)); then
+  [[ $current =~ $semver ]] \
+    || die "$formula has no url naming a vX.Y.Z tarball (-f to rewrite it anyway)"
+  if version_lt "${tag#v}" "$current"; then
+    die "$formula points at v$current, which is newer than $tag (-f to go back)"
+  fi
+fi
+
+if [[ -z $sha256 ]]; then
+  repo=$(sed -n 's/^ *REPO = "\([^"]*\)".*/\1/p' "$formula")
+  [[ -n $repo ]] || die "$formula does not set REPO"
+  url=https://github.com/$repo/archive/refs/tags/$tag.tar.gz
+  printf 'Downloading %s\n' "$url" >&2
+  # pipefail: a failed download must not hash an empty stream.
+  sha256=$(curl -fsSL --retry 3 "$url" | shasum -a 256) || die "could not download $url"
+  sha256=${sha256%% *}
+fi
+
+new=$(mktemp)
+trap 'rm -f "$new"' EXIT
+# Two spaces of indent: the formula's own lines, not those of a resource block.
+awk -v url="https://github.com/#{REPO}/archive/refs/tags/$tag.tar.gz" -v sha256="$sha256" '
+  !u && /^  url "/ { sub(/"[^"]*"/, "\"" url "\""); u = 1 }
+  !s && /^  sha256 "/ { sub(/"[^"]*"/, "\"" sha256 "\""); s = 1 }
+  { print }
+  END { exit !(u && s) }
+' "$formula" >"$new" || die "$formula has no url or no sha256 line"
+if ((dry_run)); then
+  diff -u -L "$formula" -L "$formula" "$formula" "$new" || (($? == 1))
+else
+  cat "$new" >"$formula"
+  printf 'Pointed %s at %s (sha256 %s)\n' "$formula" "$tag" "$sha256"
+fi

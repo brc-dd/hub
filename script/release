@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+# Summary: Release a new version of hub.
+# Usage: script/release [-n] VERSION
+#
+# Checks that the release can be made, then runs make check and script/bump VERSION, and pushes
+# main and the tag vVERSION to origin in one atomic push. The Release workflow that the tag
+# starts publishes the GitHub release and, for a stable version, updates Formula/hub.rb; this
+# script publishes nothing itself.
+#
+# The checks, made before anything is committed or pushed: main is checked out and clean;
+# origin's URL and each of its push URLs name the formula's REPO on github.com (https, ssh:// or
+# git@github.com:), so releases come from a checkout of that repository; after git fetch origin,
+# main is not behind origin/main; gh can see REPO; script/bump --dry-run VERSION passes (a new
+# SemVer tag, notes in CHANGELOG.md); for a stable VERSION, script/update-formula accepts
+# vVERSION (it is not lower than the version the formula names).
+#
+# Options:
+#   -n, --dry-run   Make the checks, then print the commands instead of running them.
+#
+#   $ script/release 0.2.0
+#   > make check
+#   > script/bump 0.2.0
+#   > git push --atomic origin refs/heads/main:refs/heads/main refs/tags/v0.2.0:refs/tags/v0.2.0
+
+set -euo pipefail
+
+die() {
+  printf 'script/release: %s\n' "$*" >&2
+  exit 1
+}
+
+usage_error() {
+  printf 'script/release: %s\n' "$1" >&2
+  awk '/^# Usage: / { u = 1 } u && !/^# (Usage: | )/ { exit } u { sub(/^# /, ""); print }' "$0" >&2
+  exit 1
+}
+
+run() {
+  if ((dry_run)); then
+    printf '[dry-run]'
+    printf ' %q' "$@"
+    printf '\n'
+  else
+    "$@"
+  fi
+}
+
+# github_repo URL : the OWNER/REPO of a github.com URL over https, ssh:// or scp-like ssh.
+github_repo() {
+  local url=${1%/} re='^(https://github\.com/|ssh://git@github\.com/|git@github\.com:)'
+  re+='([A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+)$'
+  url=${url%.git}
+  [[ $url =~ $re ]] || return 1
+  printf '%s\n' "${BASH_REMATCH[2]}"
+}
+
+# check_url KIND URL : URL names github.com/$repo, or the release stops.
+check_url() {
+  local name shown=$2
+  name=$(github_repo "$2") || name=
+  # A token kept in the URL must not reach the terminal.
+  [[ ! $shown =~ ^(https?://)[^/]*@(.*)$ ]] || shown=${BASH_REMATCH[1]}${BASH_REMATCH[2]}
+  [[ -n $name && ${name,,} == "${repo,,}" ]] \
+    || die "origin's $1 $shown is not github.com/$repo (releases come from a checkout of $repo)"
+}
+
+dry_run=0 version=
+for arg; do
+  case $arg in
+    -n | --dry-run) dry_run=1 ;;
+    -h | --help) exec awk 'NR > 1 && !/^#/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "$0" ;;
+    -*) usage_error "unknown option: $arg" ;;
+    *)
+      [[ -z $version ]] || usage_error "unexpected argument: $arg"
+      version=${arg#v}
+      ;;
+  esac
+done
+[[ -n $version ]] || usage_error 'no version given'
+tag=v$version
+
+cd "$(dirname "$0")/.."
+[[ $(git symbolic-ref --quiet --short HEAD) == main ]] || die 'not on main (git switch main)'
+# --untracked-files=all: status.showUntrackedFiles=no would hide untracked files.
+[[ -z $(git status --porcelain --untracked-files=all) ]] \
+  || die 'the working tree is not clean (git status)'
+
+repo=$(sed -n 's/^ *REPO = "\([^"]*\)".*/\1/p' Formula/hub.rb) || repo=
+[[ -n $repo ]] || die 'Formula/hub.rb does not set REPO'
+url=$(git remote get-url origin 2>/dev/null) || die 'no origin remote'
+check_url URL "$url"
+# Every push URL receives the tag; git lists the fetch URL when no push URL is set.
+push_urls=$(git remote get-url --push --all origin)
+while IFS= read -r url; do
+  check_url 'push URL' "$url"
+done <<<"$push_urls"
+
+git fetch --quiet origin
+git rev-parse --quiet --verify refs/remotes/origin/main >/dev/null \
+  || die 'origin has no main branch (git fetch origin)'
+git merge-base --is-ancestor refs/remotes/origin/main HEAD \
+  || die 'main is behind origin/main (git pull --rebase origin main)'
+gh repo view "github.com/$repo" --json nameWithOwner --jq .nameWithOwner >/dev/null \
+  || die "gh cannot see github.com/$repo (gh auth status)"
+script/bump --dry-run "$version" >/dev/null
+# The workflow points the formula only at stable versions: a pre-release may be of an older line.
+if [[ $version != *-* ]]; then
+  script/update-formula --dry-run --sha256="$(printf '0%.0s' {1..64})" "$tag" >/dev/null
+fi
+
+printf 'Releasing hub %s to github.com/%s\n' "$version" "$repo"
+run make check
+run script/bump "$version"
+run git push --atomic origin refs/heads/main:refs/heads/main "refs/tags/$tag:refs/tags/$tag"
+what='and points Formula/hub.rb at it'
+[[ $version != *-* ]] || what='as a pre-release'
+printf 'The Release workflow publishes %s %s (gh run watch -R %s).\n' "$tag" "$what" "$repo"

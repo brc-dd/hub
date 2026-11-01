@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Summary: Print the tag of the highest published stable release.
+# Usage: script/stable-tag
+#
+# Prints the highest vX.Y.Z tag, by number, among the published releases that are not drafts or
+# pre-releases of the repository gh resolves (GH_REPO in the Release workflow). Fails when there
+# is none, or when gh may have left some out.
+
+set -euo pipefail
+
+limit=1000
+
+die() {
+  printf 'script/stable-tag: %s\n' "$*" >&2
+  exit 1
+}
+
+case ${1-} in
+  '') ;;
+  -h | --help) exec awk 'NR > 1 && !/^#/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "$0" ;;
+  *) die "takes no arguments (Usage: script/stable-tag)" ;;
+esac
+
+tags=$(gh release list --exclude-drafts --exclude-pre-releases --limit "$limit" \
+  --json tagName --jq '.[].tagName')
+count=$(grep -c . <<<"$tags") || count=0
+# gh lists by date, at most --limit of them: a full page may miss the highest version.
+((count < limit)) || die "gh listed $count releases, as many as it was asked for, so the" \
+  "highest version may be missing (raise the limit in script/stable-tag)"
+tag=$(grep -Ex 'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)' <<<"$tags" \
+  | sort -t . -k 1.2,1n -k 2,2n -k 3,3n | tail -n 1) || true
+[[ -n $tag ]] || die 'no published stable release has a vX.Y.Z tag'
+printf '%s\n' "$tag"
