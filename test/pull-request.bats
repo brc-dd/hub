@@ -553,6 +553,9 @@ stub_pulls() {
   run hub pull-request -p -F dir
   assert_status 1
   assert_output_contains 'hub pull-request: cannot read the message from dir'
+  run hub pull-request -p -F $'no\nsuch'
+  assert_status 1
+  assert_output_contains "hub pull-request: cannot read the message from \$'no\\nsuch'"
   assert_equals "$(server_branches mislav/dotfiles)" main
   assert_gh_not_called
 }
@@ -791,15 +794,15 @@ stub_pulls() {
   assert_equals "$(opened)" ''
 }
 
-@test "hub pull-request says so when the new pull request's URL cannot be looked up" {
+@test "hub pull-request claims nothing when no open pull request is found after gh pr create" {
   feature_repo
   git push -q -u origin feature
   stub_create
   stub_pulls github.com/mislav/dotfiles mislav:feature 'null'
   run hub pull-request -o -m 'Fix the bug'
   assert_status 1
-  local expected='hub pull-request: the pull request was created, but its URL could not be looked'
-  expected+=" up (gh api --hostname github.com 'repos/mislav/dotfiles/pulls?head=mislav:feature"
+  local expected='hub pull-request: no open pull request from feature was found after gh pr'
+  expected+=" create (gh api --hostname github.com 'repos/mislav/dotfiles/pulls?head=mislav:feature"
   expected+="&state=open')"
   assert_output_contains "$expected"
   assert_equals "$(opened)" ''

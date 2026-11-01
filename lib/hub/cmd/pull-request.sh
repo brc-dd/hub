@@ -99,7 +99,7 @@ hub_cmd_pull_request() {
   ((! have_file)) || [[ -n $file ]] || hub::usage_error '-F needs a file name'
 
   if ((have_file)); then
-    text=$(cat -- "$file") || hub::die "cannot read the message from $file"
+    text=$(cat -- "$file") || hub::die "cannot read the message from $(hub::shown "$file")"
   else
     text=$(printf '%s\n\n' "${messages[@]}")
   fi
@@ -175,9 +175,10 @@ hub_cmd_pull_request() {
     hub::quote gh api --hostname "$host" "$path" --jq '.[0].html_url'
   else
     url=$(gh api --hostname "$host" "$path" --jq '.[0].html_url')
+    # gh exits 0 without creating one when the user picks its prompt's "Continue in browser".
     [[ $url == http* ]] \
-      || hub::die "the pull request was created, but its URL could not be looked up (gh api" \
-        "--hostname $host '$path')"
+      || hub::die "no open pull request from $(hub::shown "$label") was found after gh pr create" \
+        "(gh api --hostname $host '$path')"
   fi
   # Subshells, so that a missing clipboard tool or browser does not cancel the other action.
   if ((copy)); then (hub::copy "$url") || rc=$?; fi
