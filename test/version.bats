@@ -30,6 +30,13 @@ load test_helper
   assert_output_contains $'\n'"$expected"$'\ngh version 2.103.3'
 }
 
+@test "hub version takes --build-options more than once" {
+  stub_gh '--version' 'gh version 2.103.3 (2026-10-26)'
+  run hub version --build-options --build-options
+  assert_success
+  assert_equals "$(grep -c '^git version' <<<"$output")" 1
+}
+
 @test "hub version refuses other options and arguments" {
   run hub version extra
   assert_status 1
@@ -49,6 +56,10 @@ load test_helper
   assert_success
   assert_line_equals 0 'Summary: Show the versions of hub, git and gh.'
   run hub version -h
+  assert_success
+  assert_line_equals 0 'Summary: Show the versions of hub, git and gh.'
+  run hub version --build-options --help
+  assert_success
   assert_line_equals 0 'Summary: Show the versions of hub, git and gh.'
   assert_gh_not_called
 }

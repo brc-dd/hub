@@ -139,6 +139,7 @@ load test_helper
 
 @test "hub pr -R --help and --repo -h print hub's manual" {
   run hub pr --help
+  assert_success
   local manual=$output
   run hub pr -R --help
   assert_success
@@ -162,6 +163,7 @@ load test_helper
 
 @test "hub help pr prints the same manual" {
   run hub pr --help
+  assert_success
   local manual=$output
   run hub help pr
   assert_success

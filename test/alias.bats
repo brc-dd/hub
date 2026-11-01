@@ -29,9 +29,11 @@ load test_helper
   done
   for shell in csh tcsh; do
     run hub alias "$shell"
+    assert_success
     assert_output_equals "$head ~/.${shell}rc, $tail"$'\n'"eval \"\`hub alias -s $shell\`\""
   done
   run hub alias fish
+  assert_success
   assert_output_equals "$head ~/.config/fish/config.fish, $tail"$'\nhub alias -s fish | source'
 }
 
@@ -42,8 +44,10 @@ load test_helper
   SHELL=/bin/zsh run hub alias -s
   assert_output_equals 'alias git=hub'
   run hub alias csh -s
+  assert_success
   assert_output_equals 'alias git hub'
   run hub alias -- fish
+  assert_success
   assert_line_equals 1 'hub alias -s fish | source'
 }
 
@@ -63,6 +67,7 @@ load test_helper
   assert_status 1
   assert_line_equals 0 'hub alias: unknown option: -x'
   run hub alias -sx bash
+  assert_status 1
   assert_line_equals 0 'hub alias: unknown option: -x'
 }
 

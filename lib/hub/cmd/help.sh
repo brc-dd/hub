@@ -8,6 +8,7 @@
 # command line is git help's.
 #
 #   $ hub help pull-request
+#   Summary: Open a pull request for the current branch.
 #   $ hub help -a
 #   > git help -a
 

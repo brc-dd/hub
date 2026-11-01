@@ -6,7 +6,8 @@
 # one, then hands every argument to gh gist in its place: show is view, and no subcommand (none,
 # or an option first) is list. -h or --help before the subcommand prints this manual; after it,
 # gh's help. gh gist has no -R: hub skips -R VALUE before the subcommand, as for pr, and gh then
-# refuses it. gh picks the host (GH_HOST, else the host it is logged in to), also for a gist URL.
+# refuses it. gh picks the host (GH_HOST, else the host it is logged in to), also for a gist URL;
+# hub 2.x's GITHUB_HOST reaches gh as GH_HOST when GH_HOST is not set.
 #
 # hub 2.x's options in gh's spelling:
 #   gist create --public FILE...   gh gist create --public FILE... (-p is --public too)

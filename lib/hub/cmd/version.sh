@@ -16,15 +16,20 @@
 
 hub_cmd_version() {
   local version
-  case ${1-} in
-    '' | --build-options) ;;
-    -h | --help) hub::usage ;;
-    -*) hub::usage_error "unknown option: $1" ;;
-    *) hub::usage_error "unexpected argument: $1" ;;
-  esac
-  (($# <= 1)) || hub::usage_error "unexpected argument: $2"
+  local -a build=()
+  hub::normalize_opts '' '' "$@"
+  set -- "${HUB_ARGS[@]}"
+  while (($#)); do
+    case $1 in
+      --build-options) build=(--build-options) ;;
+      -h | --help) hub::usage ;;
+      -?*) hub::usage_error "unknown option: $1" ;;
+      *) hub::usage_error "unexpected argument: $1" ;;
+    esac
+    shift
+  done
   version=$(<"$HUB_ROOT/VERSION") || version=unknown
   printf 'hub %s (brc-dd/hub)\n' "$version"
-  git --version "$@" || return
+  git --version "${build[@]}" || return
   if command -v gh >/dev/null; then gh --version | head -n 1; fi
 }

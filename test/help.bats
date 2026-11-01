@@ -36,11 +36,18 @@ load test_helper
 
 @test "hub help with any other command line runs git help" {
   run hub --noop help log
+  assert_success
   assert_output_equals 'git help log'
   run hub --noop help version extra
+  assert_success
   assert_output_equals 'git help version extra'
   run hub --noop help -a
+  assert_success
   assert_output_equals 'git help -a'
+  run hub --noop help ../core
+  assert_output_equals 'git help ../core'
+  run hub --noop help Version
+  assert_output_equals 'git help Version'
   run hub -c man.viewer=hubtest -c man.hubtest.cmd=echo help log
   assert_success
   assert_output_equals 'git-log'

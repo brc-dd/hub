@@ -5,8 +5,8 @@
 # gh's command: gh release's options and output. hub renames one subcommand and fills in a
 # missing one, then hands every argument to gh release in its place: show is view, and no
 # subcommand (none, or an option first) is list. -h or --help before the subcommand prints this
-# manual; after it, gh's help. gh picks the repository and host (-R, GH_REPO, gh repo
-# set-default).
+# manual; after it, gh's help. gh picks the repository and host (-R, GH_REPO, GH_HOST, gh repo
+# set-default); hub 2.x's GITHUB_HOST reaches gh as GH_HOST when GH_HOST is not set.
 #
 # hub 2.x's options in gh's spelling:
 #   release -d                      gh release list (drafts are listed; --exclude-drafts hides them)
