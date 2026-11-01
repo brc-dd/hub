@@ -33,6 +33,19 @@ EOF
 
 probe() { "$HUB_TEST_TMP/it's here/bin/hub" "$@"; }
 
+# bounded SECONDS CMD... : CMD's status, or 137 when it is killed after SECONDS.
+bounded() {
+  local pid watcher rc=0
+  "${@:2}" &
+  pid=$!
+  # An exec loop keeps its pid. The watcher lets go of bats' descriptor 3.
+  { sleep "$1" && kill -9 "$pid"; } >/dev/null 2>&1 3>&- &
+  watcher=$!
+  wait "$pid" || rc=$?
+  kill "$watcher" 2>/dev/null
+  return "$rc"
+}
+
 @test "a plain git command runs git with the same output and no gh call" {
   make_repo r
   echo change >file
@@ -289,11 +302,12 @@ found ../deep/file"
 @test "hub refuses to run when git on PATH is hub itself" {
   mkdir bin
   ln -s "$HUB_BIN" bin/git
-  PATH=$HUB_TEST_TMP/bin:$PATH run hub status
+  # Without the refusal hub would exec itself forever.
+  PATH=$HUB_TEST_TMP/bin:$PATH run bounded 20 hub status
   assert_status 1
   local fix='install hub under its own name and alias git to it'
-  assert_output_equals "hub: git on PATH is hub itself ($HUB_TEST_TMP/bin/git); $fix"
-  PATH=$HUB_TEST_TMP/bin:$PATH run hub version
+  assert_output_equals "hub: git on PATH is hub itself: $HUB_TEST_TMP/bin/git ($fix)"
+  PATH=$HUB_TEST_TMP/bin:$PATH run bounded 20 hub version
   assert_status 1
   assert_output_contains 'git on PATH is hub itself'
 }
@@ -312,5 +326,5 @@ found ../deep/file"
   run /bin/bash "$HUB_BIN" version
   assert_status 1
   assert_output_contains 'hub: bash 5 or newer is required for hub'"'"'s commands (this is bash 3.'
-  assert_output_contains 'on macOS: brew install bash'
+  assert_output_contains '; on macOS: brew install bash)'
 }

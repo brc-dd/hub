@@ -174,6 +174,13 @@ parses_to() {
   assert_failure
   run hub::remote_exists nope
   assert_failure
+  # git remote add refuses -x, git config does not; git push reads both kinds below.
+  git config remote.-x.url https://github.com/x/r.git
+  hub::remote_exists -x
+  git config --global remote.two.url https://github.com/mislav/two.git
+  hub::remote_exists two
+  GIT_CONFIG_PARAMETERS="'remote.three.url=https://github.com/x/three.git'" \
+    hub::remote_exists three
   hub::valid_remote_name alice
   hub::valid_remote_name my.fork-2
   local name
@@ -356,6 +363,16 @@ parses_to() {
   assert_output_equals parent
 }
 
+@test "push_remote fails without your login rather than guess origin, the parent" {
+  make_repo r origin=https://github.com/o/r.git mine=https://github.com/mislav/r.git \
+    other=https://github.com/x/r.git
+  stub_gh 'config get user -h github.com' '' 1
+  run hub::push_remote main
+  assert_status 1
+  assert_output_equals ''
+  assert_equals "$(gh_calls)" 'gh config get user -h github.com'
+}
+
 @test "push_remote takes origin when two remotes are forks of your login" {
   make_repo r up=https://github.com/o/r.git a=https://github.com/mislav/r.git \
     b=git@github.com:MISLAV/r2.git origin=https://github.com/o/r.git
@@ -465,11 +482,14 @@ parses_to() {
   run hub::host
   assert_output_equals ghe.example.com
   local host
-  for host in -x ghe.example/o 'a b'; do
+  for host in -x ghe.example/o; do
     GH_HOST=$host run hub::host
     assert_status 1
     assert_output_equals "hub test: not a host name: $host"
   done
+  GH_HOST='a b' run hub::host
+  assert_status 1
+  assert_output_equals 'hub test: not a host name: a\ b'
 }
 
 @test "known_host knows github.com, GH_HOST and gh's hosts, in any case" {
@@ -512,22 +532,28 @@ parses_to() {
     file:///srv/o/r.git https://github.com/o/r/extra https://gitlab.com/o/r not-a-url \
     'git@-oProxyCommand=x:o/r' 'https://github.com/o/r x' https://github.com//r '' \
     'https://github.com/o/r?x=1' 'https://github.com/o/r#x' ssh://git@github.com/~o/r \
-    https://github.com/o/.. https://github.com/-o/r https://github.com/o_x/r; do
+    https://github.com/o/.. https://github.com/-o/r https://github.com/o_x/r \
+    https://ssh.github.com/o/r; do
     parses_to "$url" ''
   done
+  # None reaches ssh -G: -oProxyCommand=x would be an option there.
+  assert_equals "$(cat "$HUB_TEST_TMP/ssh.log" 2>/dev/null)" ''
 }
 
 @test "parse_url resolves an ssh alias once with ssh -G, never an https host" {
   mkdir -p "$HOME/.ssh"
   printf '%s\n' 'Host gh-work' '  HostName ssh.github.com' 'Host gh-plain' \
-    '  HostName GitHub.com' >"$HOME/.ssh/config"
+    '  HostName GitHub.com' 'Host Gh-Work' '  HostName github.com' >"$HOME/.ssh/config"
   parses_to gh-work:o/r.git 'github.com o r'
   assert_equals "$(<"$HUB_TEST_TMP/ssh.log")" '-G gh-work'
   parses_to ssh://git@gh-plain/o/r 'github.com o r'
   parses_to https://gh-work/o/r ''
   parses_to git@github.com:o/r 'github.com o r'
   parses_to git@nowhere.example:o/r ''
-  assert_equals "$(<"$HUB_TEST_TMP/ssh.log")" $'-G gh-work\n-G gh-plain\n-G nowhere.example'
+  # ssh matches Host patterns case-sensitively, as git hands the host over.
+  parses_to git@Gh-Work:o/r 'github.com o r'
+  assert_equals "$(<"$HUB_TEST_TMP/ssh.log")" \
+    $'-G gh-work\n-G gh-plain\n-G nowhere.example\n-G Gh-Work'
 }
 
 @test "remote_project reads a remote's fetch or push URL" {
@@ -578,6 +604,9 @@ parses_to() {
   GH_REPO=o/r/ run hub::project
   assert_status 1
   assert_output_equals 'hub test: GH_REPO must be OWNER/REPO, HOST/OWNER/REPO or a repository URL'
+  GH_HOST=ghe.corp:8443 GH_REPO=o/r run hub::project
+  assert_status 1
+  assert_output_equals 'hub test: not a host name: ghe.corp:8443'
 }
 
 @test "parse_project reads OWNER/REPO, HOST/OWNER/REPO and URLs" {
@@ -689,15 +718,17 @@ parses_to() {
   assert_output_equals 0
 }
 
-@test "login asks the API when the cache has no user, and dies when nothing answers" {
+@test "login dies when nothing answers, asking the API only with a token variable" {
+  local message='hub test: could not determine your GitHub login for ghe.example'
   stub_gh 'config get user -h ghe.example' '' 1
   stub_gh 'api --hostname ghe.example user --jq .login' bob
   run hub::login ghe.example
-  assert_output_equals bob
-  stub_gh 'api --hostname ghe.example user --jq .login' '' 1
-  run hub::login ghe.example
   assert_status 1
-  local message='hub test: could not determine your GitHub login for ghe.example'
+  assert_output_equals "$message (run: gh auth login -h ghe.example)"
+  assert_equals "$(gh_calls)" 'gh config get user -h ghe.example'
+  stub_gh 'api --hostname ghe.example user --jq .login' '' 1
+  GH_TOKEN=token run hub::login ghe.example
+  assert_status 1
   assert_output_equals "$message (run: gh auth login -h ghe.example)"
 }
 
@@ -821,6 +852,7 @@ parses_to() {
     https://github.com/o/r/pull/12/changes/abc1234 https://github.com/o/r/pull/12/files/a..b \
     https://github.com/o/r/pull/abc/commits/abc1234 https://github.com/o/r/pull/new/topic \
     https://github.com/o/r/compare https://github.com/o/r/compare/ \
+    https://github.com/o/r/compare/feature 'https://github.com/o/r/compare/feature?expand=1' \
     https://github.com/o/r/issues/3 https://github.com/o/r/tree/main https://github.com/o/r \
     https://gitlab.com/o/r/commit/abc1234 https://github.com/o/r/commit/main not-a-url; do
     run hub::patch_url "$url"
@@ -876,12 +908,12 @@ downloads() {
   assert_equals "$(gh_calls | grep -c pulls/12)" 1
 }
 
-@test "download_patches dies naming the URL it could not download, and cleans up" {
+@test "download_patches stops with gh's status, naming the URL, and cleans up" {
   stub_gh 'api --help' 'FLAGS'
-  stub_gh 'api --hostname github.com repos/o/r/commits/abc1234 *' 'gh: Not Found' 1
+  stub_gh 'api --hostname github.com repos/o/r/commits/abc1234 *' 'gh: Not Found' 4
   mkdir tmp
   TMPDIR=$HUB_TEST_TMP/tmp run downloads patch https://github.com/o/r/commit/abc1234
-  assert_status 1
+  assert_status 4
   assert_output_equals 'hub test: could not download: https://github.com/o/r/commit/abc1234'
   assert_equals "$(ls tmp)" ''
 }
@@ -925,13 +957,11 @@ downloads() {
   assert_equals "${HUB_OPTIONS[*]}" 2
 }
 
-@test "scan records the indexes of separate option values in HUB_VALUES" {
+@test "scan skips separate option values, whatever they look like" {
   HUB_COMMAND=clone
   hub::scan '-b -o --branch --depth' -b main --depth 1 o/r -q --origin=up -ofork -o -x dir
   assert_equals "${HUB_OPERANDS[*]}" '4 10'
-  assert_equals "${HUB_VALUES[*]}" '1 3 9'
-  hub::scan '-b' o/r -- -b x
-  assert_equals "${HUB_VALUES[*]}" ''
+  assert_equals "${HUB_OPTIONS[*]}" '0 2 5 6 7 8'
 }
 
 @test "scan hands -h anywhere among a cluster's flags to git, and not a value's h" {
@@ -949,7 +979,6 @@ downloads() {
   HUB_COMMAND=merge HUB_NOOP=1
   hub::scan '-m -S=' -Sme nosuch -qSmx -qShx -S -m msg x
   assert_equals "${HUB_OPERANDS[*]}" '1 7'
-  assert_equals "${HUB_VALUES[*]}" 6
   run hub::scan '-m -S=' -S=
   assert_output_equals ''
 }

@@ -36,8 +36,10 @@ hub_test_setup() {
   tmp=$(cd "$BATS_TEST_TMPDIR" && pwd -P) || return 1
   # A caller's GIT_DIR, GIT_INDEX_FILE or GIT_CONFIG_PARAMETERS would point the fixtures at the
   # caller's repository, CDPATH would move their cd, BROWSER would open a real browser, and every
-  # bash started (hub, the stubs) would source BASH_ENV, and sh ENV, again.
+  # bash started (hub, the stubs) would source BASH_ENV, and sh ENV, again. Tests read git's
+  # messages, which a translated git prints in the caller's language.
   unset "${!GIT_@}" "${!GH_@}" "${!GITHUB_@}" "${!HUB_@}" CDPATH BROWSER BASH_ENV ENV
+  export LC_ALL=C
   export HUB_TEST_ROOT=$root HUB_BIN=$root/bin/hub HUB_TEST_TMP=$tmp
   export HOME=$tmp/home XDG_CONFIG_HOME=$tmp/home/.config
   export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=$tmp/gitconfig GIT_TERMINAL_PROMPT=0

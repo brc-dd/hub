@@ -1,11 +1,10 @@
 # shellcheck shell=bash
-# shellcheck disable=SC2034  # HUB_* result variables are set here and read by modules
 # Summary: Shared helpers of hub's modules.
 #
 # Sourced by bin/hub with HUB_ROOT, HUB_LIB and HUB_COMMAND set. A helper prints its answer on
 # stdout and returns non-zero when it has none, unless its contract names a global it sets.
 
-HUB_ARGS=() HUB_OPERANDS=() HUB_VALUES=() HUB_OPTIONS=() HUB_FLAGS='' HUB_REST=''
+HUB_ARGS=() HUB_OPERANDS=() HUB_OPTIONS=() HUB_FLAGS='' HUB_REST=''
 declare -gA HUB_URL=()
 # gh reads GH_HOST; hub 2.x users have GITHUB_HOST.
 if [[ -z ${GH_HOST-} && -n ${GITHUB_HOST-} ]]; then export GH_HOST=$GITHUB_HOST; fi
@@ -43,6 +42,15 @@ hub::quote() {
   local line
   printf -v line '%q ' "$@"
   printf '%s\n' "${line% }"
+}
+
+# hub::shown WORD : WORD for a message; empty, whitespace and control characters get hub::quote.
+hub::shown() {
+  if [[ -n $1 && $1 != *[[:space:][:cntrl:]]* ]]; then
+    printf '%s\n' "$1"
+  else
+    hub::quote "$1"
+  fi
 }
 
 # hub::run CMD ARGS... : run a command with side effects; under --noop print it instead.
@@ -107,7 +115,12 @@ hub::current_branch() {
 hub::remotes() { git remote 2>/dev/null; }
 
 # hub::remote_exists NAME : NAME is a remote.
-hub::remote_exists() { git remote get-url -- "$1" >/dev/null 2>&1; }
+# git remote lists remotes of every configuration file and -c, get-url those in .git/remotes.
+hub::remote_exists() {
+  local name
+  while IFS= read -r name; do [[ $name != "$1" ]] || return 0; done < <(hub::remotes)
+  git remote get-url -- "$1" >/dev/null 2>&1
+}
 
 # hub::valid_remote_name NAME : NAME can name a remote.
 hub::valid_remote_name() { [[ $1 != -* ]] && git check-ref-format "refs/remotes/$1/HEAD"; }
@@ -121,7 +134,7 @@ hub::remote_head() {
 
 # hub::require_new_remote NAME : die unless NAME can name a remote and no remote has it.
 hub::require_new_remote() {
-  hub::valid_remote_name "$1" || hub::die "not a remote name: ${1:-"''"}"
+  hub::valid_remote_name "$1" || hub::die "not a remote name: $(hub::shown "$1")"
   ! hub::remote_exists "$1" \
     || hub::die "remote already exists: $1 (name another with --remote-name NAME)"
 }
@@ -153,8 +166,9 @@ hub::repo_name() {
 
 # hub::push_remote BRANCH : the remote hub pushes BRANCH to and reads it back from.
 hub::push_remote() {
-  local branch=$1 remote ref host owner repo login
+  local branch=$1 remote ref host owner repo
   local -a remotes mine=()
+  local -A logins=()
   if remote=$(git config "branch.$1.pushRemote") || remote=$(git config remote.pushDefault); then
     # git refuses to push to an empty name; hub does not look further either.
     [[ -n $remote ]] || return 1
@@ -170,8 +184,9 @@ hub::push_remote() {
   ((${#remotes[@]} == 1)) && printf '%s\n' "${remotes[0]}" && return 0
   for remote in "${remotes[@]}"; do
     read -r host owner repo < <(hub::remote_project "$remote" push) || continue
-    login=$(hub::login "$host" 2>/dev/null) || continue
-    [[ ${owner,,} != "${login,,}" ]] || mine+=("$remote")
+    # Without your login hub cannot tell your fork from the parent: no guess.
+    [[ -n ${logins[$host]-} ]] || logins[$host]=$(hub::login "$host" 2>/dev/null) || return 1
+    [[ ${owner,,} != "${logins[$host],,}" ]] || mine+=("$remote")
   done
   if ((${#mine[@]} == 1)); then
     printf '%s\n' "${mine[0]}"
@@ -214,7 +229,7 @@ hub::host() {
     ((${#hosts[@]} != 1)) || host=${hosts[0]}
   fi
   # The host goes to git and gh inside URLs and HOST/OWNER/REPO words: no option, no path.
-  [[ ${host,,} =~ ^[a-z0-9][a-z0-9.-]*$ ]] || hub::die "not a host name: $host"
+  [[ ${host,,} =~ ^[a-z0-9][a-z0-9.-]*$ ]] || hub::die "not a host name: $(hub::shown "$host")"
   printf '%s\n' "${host,,}"
 }
 
@@ -231,7 +246,7 @@ hub::known_host() {
 
 # hub::parse_url URL : "HOST OWNER REPO" of a GitHub remote URL.
 hub::parse_url() {
-  local url=$1 host path owner repo ssh=0
+  local url=$1 host raw path owner repo ssh=0
   case $url in
     https://* | http://* | git://*) url=${url#*://} ;;
     ssh://* | git+ssh://* | ssh+git://*) url=${url#*://} ssh=1 ;;
@@ -241,13 +256,14 @@ hub::parse_url() {
     *) return 1 ;;
   esac
   host=${url%%/*} path=${url#*/}
-  host=${host##*@} && host=${host%%:*} && host=${host,,}
+  raw=${host##*@} && raw=${raw%%:*} && host=${raw,,}
   path=${path%/} && path=${path%.git}
   # The host may go to ssh -G: it must not read as an option.
   [[ $host =~ ^[a-z0-9_][a-z0-9_.-]*$ && $path == */* ]] && hub::is_shorthand "$path" || return 1
   owner=${path%%/*} repo=${path#*/}
   if ((ssh)) && ! hub::known_host "$host"; then
-    host=$(ssh -G "$host" 2>/dev/null | awk '$1 == "hostname" { print tolower($2); exit }')
+    # ssh matches Host patterns case-sensitively: the alias goes as written.
+    host=$(ssh -G "$raw" 2>/dev/null | awk '$1 == "hostname" { print tolower($2); exit }')
   fi
   ((ssh == 0)) || [[ $host != ssh.github.com ]] || host=github.com
   hub::known_host "$host" && printf '%s %s %s\n' "$host" "$owner" "$repo"
@@ -275,6 +291,8 @@ _hub_core_find_remote() {
 hub::project() {
   local found
   if [[ -n ${GH_REPO-} ]]; then
+    # A bad GH_HOST is its own message, not a bad GH_REPO.
+    hub::host >/dev/null || exit 1
     hub::parse_project "$GH_REPO" && return 0
     hub::die 'GH_REPO must be OWNER/REPO, HOST/OWNER/REPO or a repository URL'
   fi
@@ -344,8 +362,9 @@ hub::login() {
   # A token variable overrides gh's stored account, whose cached user may be someone else.
   if [[ -z ${GH_TOKEN-}${GITHUB_TOKEN-}${GH_ENTERPRISE_TOKEN-}${GITHUB_ENTERPRISE_TOKEN-} ]]; then
     login=$(hub::gh_query config get user -h "$host")
+  else
+    login=$(hub::gh_query api --hostname "$host" user --jq .login)
   fi
-  [[ -n $login ]] || login=$(hub::gh_query api --hostname "$host" user --jq .login)
   [[ -n $login ]] \
     || hub::die "could not determine your GitHub login for $host (run: gh auth login -h $host)"
   printf '%s\n' "$login"
@@ -420,14 +439,15 @@ hub::patch_url() {
     pull) [[ -n ${HUB_URL[number]-} ]] && [[ -n ${HUB_URL[sha]-} || $1 =~ $page ]] ;;
     # hub::parse_github_url has checked the commit's sha.
     commit) ;;
-    compare) [[ -n ${HUB_URL[range]-} ]] ;;
+    # compare/BRANCH (GitHub's "Compare & pull request" link) has no range to download.
+    compare) [[ ${HUB_URL[range]-} == *..* ]] ;;
     *) return 1 ;;
   esac
 }
 
 # hub::download_patches FORMAT ARGS... : HUB_ARGS, patch URLs as downloaded files; sets EXIT trap.
 hub::download_patches() {
-  local format=$1 tmp i n=0 endpoint escape
+  local format=$1 tmp i n=0 endpoint escape rc
   shift
   HUB_ARGS=("$@")
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/hub-$HUB_COMMAND.XXXXXX") || exit 1
@@ -450,7 +470,11 @@ hub::download_patches() {
     [[ -n ${escape+set} ]] \
       || escape=$(gh api --help 2>/dev/null | grep -o -m 1 -- --allow-escape-sequences)
     gh api --hostname "${HUB_URL[host]}" "$endpoint" -H "Accept: application/vnd.github.$format" \
-      ${escape:+"$escape"} >"$tmp/$n.$format" || hub::die "could not download: ${HUB_ARGS[i]}"
+      ${escape:+"$escape"} >"$tmp/$n.$format" || {
+      rc=$?
+      _hub_core_say "could not download: ${HUB_ARGS[i]}"
+      exit "$rc"
+    }
     HUB_ARGS[i]=$tmp/$n.$format
   done
 }
@@ -512,12 +536,12 @@ hub::drop_flag() {
   return "$found"
 }
 
-# hub::scan VALUED ARGS... : HUB_OPERANDS, HUB_VALUES, HUB_OPTIONS; VALUED's -X= takes -Xvalue only.
+# hub::scan VALUED ARGS... : HUB_OPERANDS and HUB_OPTIONS; VALUED's -X= takes -Xvalue only.
 hub::scan() {
   local table=$1 word i
   shift
   local -a args=("$@")
-  HUB_OPERANDS=() HUB_VALUES=() HUB_OPTIONS=()
+  HUB_OPERANDS=() HUB_OPTIONS=()
   # Help, and a line hub cannot read with certainty, go to git as given.
   for ((i = 0; i < $#; i++)); do
     word=${args[i]}
@@ -528,7 +552,7 @@ hub::scan() {
       if ! _hub_core_entry "$table" "$word" || ((i + 1 == $#)); then
         hub::exec_git "$HUB_COMMAND" "$@"
       fi
-      HUB_VALUES+=("$((i += 1))")
+      ((i += 1))
       continue
     fi
     case $word in

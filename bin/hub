@@ -25,22 +25,24 @@ HUB_ROOT=${hub_self%/*}/..
 HUB_LIB=$HUB_ROOT/lib/hub
 export HUB_ROOT HUB_LIB
 
+# hub_require_bash5 : exit 1 unless this is bash 5 or newer.
 hub_require_bash5() {
   ((BASH_VERSINFO[0] >= 5)) && return 0
-  printf "hub: bash 5 or newer is required for hub's commands (this is bash %s); %s\n" \
+  printf "hub: bash 5 or newer is required for hub's commands (this is bash %s; %s)\n" \
     "$BASH_VERSION" 'on macOS: brew install bash' >&2
   exit 1
 }
 
-# exec git would run this file again, forever.
+# hub_refuse_git_is_hub : exit 1 when the first git on PATH is this file.
 hub_refuse_git_is_hub() {
   local dir hub_path
   IFS=: read -r -a hub_path <<<"$PATH"
   for dir in "${hub_path[@]}"; do
     dir=${dir:-.}
     [[ -f $dir/git && -x $dir/git ]] || continue
+    # exec git would run this file again, forever.
     if [[ $dir/git -ef $hub_self ]]; then
-      printf 'hub: git on PATH is hub itself (%s); %s\n' "$dir/git" \
+      printf 'hub: git on PATH is hub itself: %s (%s)\n' "$dir/git" \
         'install hub under its own name and alias git to it' >&2
       exit 1
     fi

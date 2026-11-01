@@ -61,6 +61,15 @@ plain"
   assert_failure
 }
 
+@test "every test runs in the C locale, whatever the caller's" {
+  mkdir inner
+  run env LC_ALL=de_DE.UTF-8 LANG=de_DE.UTF-8 BATS_TEST_TMPDIR="$PWD/inner" \
+    BATS_FILE_TMPDIR="$BATS_FILE_TMPDIR" bash -c \
+    'source "$HUB_TEST_ROOT/test/test_helper.bash" && hub_test_setup && echo "$LC_ALL"'
+  assert_success
+  assert_output_equals C
+}
+
 @test "the gh stub logs no call before a test makes one" {
   assert_gh_not_called
 }
