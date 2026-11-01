@@ -215,6 +215,10 @@ without gh: `gh config set git_protocol ssh` is the setting, and `-p` on clone
 and `remote add` is a one-off. `hub::clone_url` builds `https://HOST/O/R.git`
 or `git@HOST:O/R.git`; on `*.ghe.com` the ssh user is the tenant.
 
+**Browser.** `hub::open_url` takes the browser gh would: `GH_BROWSER`, else
+gh's `browser` setting (`gh config get browser`, empty without gh), else
+`BROWSER`, else `open` or `xdg-open`.
+
 **URLs.** `hub::parse_url` reads https, http, git, ssh (also `git+ssh` and
 `ssh+git`) and scp-like URLs (no `/` before the first colon) as
 `HOST OWNER REPO`. The host is lowercased and the port ignored; OWNER and REPO
@@ -240,10 +244,12 @@ to. `hub::push_remote BRANCH` takes the first rule that applies:
 6. `origin`, when it exists.
 
 Otherwise there is no answer, and the command says so. A pushRemote or
-pushDefault that is set but empty is no answer either, as git push refuses it.
-When rule 5 cannot read your login for a host, there is no answer: falling
-through to `origin` could mean the parent repository. Two remotes of your
-login fall through to `origin`.
+pushDefault that is set but names no remote is no answer either: an empty
+value, which git push refuses, or a URL, which git push takes as an anonymous
+remote but which has no remote-tracking refs for hub to read. When rule 5
+cannot read your login for a host, there is no answer: falling through to
+`origin` could mean the parent repository. Two remotes of your login fall
+through to `origin`.
 
 Rule 3 skips an upstream of another name on purpose. After
 `git checkout -b fix origin/main`, the upstream is a start point, not a
@@ -336,7 +342,11 @@ out, with the command to use instead, is in
   leaves a branch checked out in another work tree alone, but
   `git worktree list` does not show a branch that another work tree is
   rebasing or bisecting: with git older than 2.35, sync can fast-forward
-  such a branch (git 2.35 and later refuse to move it).
+  such a branch (git 2.35 and later refuse to move it). sync moves a branch
+  that is not checked out by a fetch from the repository itself; settings
+  against local paths (`protocol.file.allow`, `GIT_ALLOW_PROTOCOL`) do not
+  stop it, and that fetch does not recurse into submodules (the fetch of the
+  remotes does, by your settings).
 - git cherry-pick also takes the revision walker's options (`--grep`,
   `--author` and others); hub's table leaves them out, so a commit URL given
   as their value is read as an operand.

@@ -15,6 +15,10 @@ make selftest     # script/update-formula --self-test
 make install      # symlinks under PREFIX (/usr/local); make uninstall removes them
 ```
 
+`make install` makes the links in order: the command, then the bash, zsh and
+fish completions. A refusal at a later destination leaves the earlier links
+in place, and `make uninstall` removes them.
+
 ## Layout
 
 ```

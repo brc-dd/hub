@@ -36,9 +36,10 @@ Requirements (macOS and Linux):
   main`, `git checkout -b topic`). Other git commands reach git on any bash,
   macOS's bash 3.2 included. The formula runs hub with Homebrew's bash; after
   `make install` on macOS, put Homebrew's bash first on `PATH`.
-- git 2.29 or newer: hub uses `git switch`, `--end-of-options`,
-  for-each-ref's `%(upstream:remotename)` and, in `cherry-pick`, `git fetch
-  --no-write-fetch-head`, which leaves `FETCH_HEAD` alone.
+- git 2.30 or newer: hub uses `git switch`, `--end-of-options` (also with
+  `git rev-parse`), for-each-ref's `%(upstream:remotename)` and, in
+  `cherry-pick`, `git fetch --no-write-fetch-head`, which leaves `FETCH_HEAD`
+  alone.
 - gh 2.55 or newer, logged in with `gh auth login`: hub reads your login from
   gh and uses `gh pr create --fill-first` and `--editor`, and `--json` with
   `--jq`, which older 2.x releases lack in part.
@@ -120,7 +121,7 @@ subcommand is missing:
 | `GH_REPO=[HOST/]OWNER/REPO` | The project, instead of the remotes `upstream`, `github`, `origin`, then the rest. |
 | `GH_TOKEN`, or gh's other token variables | gh uses the token; hub asks GitHub whose it is instead of reading gh's stored login. |
 | `gh config set git_protocol ssh` | ssh URLs for new clones and remotes; `-p` on `clone` and `remote` does it once. |
-| `GH_BROWSER`, `BROWSER` | The browser for `browse`, `compare` and `-o`; else `open`, else `xdg-open`. |
+| `GH_BROWSER`, `gh config set browser CMD`, `BROWSER` | The browser for `browse`, `compare` and `-o`, in that order; else `open`, else `xdg-open`. |
 | `hub --noop COMMAND` | Prints the git and gh commands that change something instead of running them. |
 
 ## How it works

@@ -8,9 +8,9 @@ All notable changes to hub are documented here. The format follows
 
 ### Changed
 
-- hub needs git 2.29 or newer, for `cherry-pick`'s
-  `git fetch --no-write-fetch-head`, and gh 2.55 or newer, for
-  `gh pr create --editor`.
+- hub needs git 2.30 or newer, for `cherry-pick`'s
+  `git fetch --no-write-fetch-head` and `git rev-parse --end-of-options`, and
+  gh 2.55 or newer, for `gh pr create --editor`.
 
 ### Fixed
 
@@ -89,6 +89,23 @@ All notable changes to hub are documented here. The format follows
 - zsh completion offers the options of hub's own commands when git's own
   `git-completion.zsh` is the `_git` completer, as Homebrew git and Apple's
   Command Line Tools install it.
+- `browse`, `compare` and the `-o` of `pull-request` and `create` open URLs
+  in the browser named by gh's `browser` setting when `GH_BROWSER` is unset,
+  before `BROWSER`.
+- `merge` reads a zero-padded pull request number in a URL (`pull/012`) as
+  gh does, as pull request 12, instead of fetching `refs/pull/012/head`.
+- `sync` fast-forwards branches that are not checked out also when
+  `protocol.file.allow` is `never` or `GIT_ALLOW_PROTOCOL` leaves out `file`.
+- `pull-request`, `compare` and `browse` no longer follow a pushRemote or
+  pushDefault that holds a URL or another word that names no remote;
+  `pull-request` says it cannot tell where the branch pushes.
+- `fork` and `create` refuse a remote name that differs from an existing
+  remote's only in case (`remote already exists: NAME`).
+- `pull-request -o` and `-c` no longer claim a pull request was created when
+  `gh pr create` exits without one (gh's "Continue in browser"); they say
+  that no open pull request from the head was found.
+- `pull-request -F FILE` shows the file name quoted in its refusal, like
+  other words the user typed.
 
 ## [0.2.0] - 2026-11-01
 
