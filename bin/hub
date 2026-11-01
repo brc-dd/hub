@@ -36,7 +36,8 @@ hub_require_bash5() {
 # hub_refuse_git_is_hub : exit 1 when the first git on PATH is this file.
 hub_refuse_git_is_hub() {
   local dir hub_path
-  IFS=: read -r -a hub_path <<<"$PATH"
+  # The appended colon keeps a trailing empty field (the current directory), which read -a drops.
+  IFS=: read -r -a hub_path <<<"$PATH:"
   for dir in "${hub_path[@]}"; do
     dir=${dir:-.}
     [[ -f $dir/git && -x $dir/git ]] || continue
@@ -58,8 +59,10 @@ if [[ ${1-} == --run && -n ${HUB_REEXEC-} ]]; then
   cd -P -- "./${GIT_PREFIX:-.}" || exit 1
   unset GIT_PREFIX
   # git exports the git directory it found; without GIT_WORK_TREE, git would then take the
-  # current directory for the top of the work tree.
-  [[ ${HUB_KEEP_GIT_DIR-} == 1 ]] || unset GIT_DIR
+  # current directory for the top of the work tree. From a bare repository or a .git directory
+  # it also exports GIT_IMPLICIT_WORK_TREE=0, which would leave a clone's hooks and submodules
+  # without a work tree.
+  [[ ${HUB_KEEP_GIT_DIR-} == 1 ]] || unset GIT_DIR GIT_IMPLICIT_WORK_TREE
   unset HUB_KEEP_GIT_DIR
   export HUB_COMMAND=${1-}
   shift

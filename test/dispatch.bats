@@ -312,6 +312,41 @@ found ../deep/file"
   assert_output_contains 'git on PATH is hub itself'
 }
 
+@test "hub refuses to run when git on PATH is hub itself through a trailing empty entry" {
+  mkdir tools
+  ln -s "$(command -v bash)" tools/bash
+  ln -s "$(command -v readlink)" tools/readlink
+  ln -s "$HUB_BIN" git
+  # The empty entry after the last colon is the current directory, where exec git looks too.
+  run bounded 20 /usr/bin/env PATH="$HUB_TEST_TMP/tools:" "$HUB_BIN" status
+  assert_status 1
+  local fix='install hub under its own name and alias git to it'
+  assert_output_equals "hub: git on PATH is hub itself: ./git ($fix)"
+  local real
+  real=$(command -v git)
+  run bounded 20 /usr/bin/env PATH="${real%/*}:$HUB_TEST_TMP/tools:" "$HUB_BIN" --version
+  assert_success
+  assert_output_contains 'git version'
+}
+
+@test "a hub command run from inside a .git directory gives git's commands a work tree" {
+  serve_github mislav/top mislav/sub
+  git clone -q https://github.com/mislav/top.git top
+  cd top
+  git submodule add -q https://github.com/mislav/sub.git s
+  git commit -q -m 'add s'
+  git push -q origin HEAD:main
+  cd "$HUB_TEST_TMP"
+  make_repo r
+  cd .git
+  # git exports GIT_IMPLICIT_WORK_TREE=0 here, which would leave the submodule step without one.
+  run hub clone --recurse-submodules mislav/top "$HUB_TEST_TMP/dst"
+  assert_success
+  assert_equals "$(git -C "$HUB_TEST_TMP/dst/s" log -1 --format=%s)" 'initial commit'
+  assert_equals "$(git -C "$HUB_TEST_TMP/dst" config remote.origin.url)" \
+    https://github.com/mislav/top.git
+}
+
 # The bash 3.2 path can only be tested where /bin/bash is that old (macOS).
 @test "an old bash runs plain git commands and refuses hub's own" {
   local major
