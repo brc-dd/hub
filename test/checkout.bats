@@ -4,6 +4,8 @@
 load test_helper
 
 pr=https://github.com/rails/rails/pull/42
+usage="Usage: hub checkout [-b BRANCH] [-d | --detach] [--recurse-submodules] PULL-REQUEST-URL \
+[BRANCH]"
 
 setup() {
   hub_test_setup
@@ -101,8 +103,9 @@ resets the branch to the pull request instead (run it yourself)"
   for word in -q --track --recurse-submodules=yes --no-detach -db -- --end-of-options; do
     run hub checkout "$pr" "$word"
     assert_status 1
-    assert_output_equals \
-      'hub checkout: gh pr checkout takes -b BRANCH, --detach and --recurse-submodules only'
+    assert_line_equals 0 "hub checkout: unknown option: $word (gh pr checkout takes -b BRANCH, \
+--detach and --recurse-submodules only)"
+    assert_line_equals 1 "$usage"
   done
   assert_gh_not_called
 }
@@ -113,7 +116,8 @@ resets the branch to the pull request instead (run it yourself)"
   assert_output_equals 'hub checkout: the branch name is empty'
   run hub checkout -b '' "$pr"
   assert_status 1
-  assert_output_equals 'hub checkout: the branch name is empty'
+  assert_line_equals 0 'hub checkout: -b needs a branch name'
+  assert_line_equals 1 "$usage"
   assert_gh_not_called
 }
 
@@ -157,8 +161,7 @@ refs/remotes/origin/main'
   run hub checkout main "$pr"
   assert_status 1
   assert_line_equals 0 'hub checkout: unexpected argument: main'
-  assert_line_equals 1 \
-    'Usage: hub checkout [-b BRANCH] [--detach] [--recurse-submodules] PULL-REQUEST-URL [BRANCH]'
+  assert_line_equals 1 "$usage"
   run hub checkout "$pr" review extra
   assert_status 1
   assert_line_equals 0 'hub checkout: unexpected argument: extra'
@@ -170,7 +173,7 @@ refs/remotes/origin/main'
   assert_line_equals 0 'hub checkout: unexpected argument: two (-b names the branch already)'
   run hub checkout "$pr" -b
   assert_status 1
-  assert_line_equals 0 'hub checkout: -b needs a branch name'
+  assert_line_equals 0 'hub checkout: -b needs a value'
   run hub checkout -b "$pr"
   assert_status 1
   assert_line_equals 0 'hub checkout: the pull request URL is missing'
@@ -219,6 +222,19 @@ refs/remotes/origin/main'
   assert_output_equals "git checkout $pr --help"
   run hub checkout --help-all "$pr"
   assert_status 129
+  assert_gh_not_called
+}
+
+@test "hub checkout -h among git checkout's one-letter flags is git's usage" {
+  local word
+  for word in -qh -dh -fh -2qh; do
+    run hub checkout "$word" "$pr"
+    assert_status 129
+    assert_output_contains 'usage: git checkout'
+    run hub checkout "$pr" "$word"
+    assert_status 129
+    assert_output_contains 'usage: git checkout'
+  done
   assert_gh_not_called
 }
 

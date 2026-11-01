@@ -8,8 +8,9 @@
 # downloaded through gh's API as a patch series, so the commits keep their authors and messages;
 # git am gets the file in the URL's place, and the other words stay as given. A failed download
 # stops hub before git am runs. Other URLs, such as one commit's page within a pull request
-# (.../pull/N/files/SHA), stay as given. Outside a work tree, or while an am session is in
-# progress, nothing is downloaded and git am answers. Without such a URL, this is plain git am.
+# (.../pull/N/files/SHA), stay as given. Outside a work tree hub stops before downloading; while
+# an am session is in progress, nothing is downloaded and git am answers. Without such a URL,
+# this is plain git am.
 #
 #   $ hub am -3 https://github.com/cli/cli/pull/55
 #   > gh api --hostname github.com repos/cli/cli/pulls/55 -H 'Accept: application/vnd.github.patch'

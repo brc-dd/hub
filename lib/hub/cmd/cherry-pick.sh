@@ -24,7 +24,9 @@ hub_cmd_cherry_pick() {
   for ((i = 0; i < $#; i++)); do
     case ${args[i]} in
       -- | --end-of-options) break ;;
-      -h | --help | --help-all) hub::exec_git cherry-pick "$@" ;;
+      --help | --help-all) hub::exec_git cherry-pick "$@" ;;
+      # -h alone or among git cherry-pick's one-letter flags (-xh) asks for git's usage.
+      -*) [[ ! ${args[i]} =~ ^-[nesx]*h ]] || hub::exec_git cherry-pick "$@" ;;
     esac
     hub::patch_url "${args[i]}" && [[ -n ${HUB_URL[sha]-} ]] || continue
     urls+=("$i")
@@ -38,7 +40,7 @@ hub_cmd_cherry_pick() {
     if ((${#sha} < 40)); then
       hub::require_gh
       sha=$(gh api --hostname "${hosts[i]}" \
-        "repos/${owners[i]}/${repos[i]}/commits/$sha" --jq .sha) || exit 1
+        "repos/${owners[i]}/${repos[i]}/commits/$sha" --jq .sha) || exit
       sha=${sha,,}
       [[ $sha =~ ^[0-9a-f]{40}$ ]] || hub::die "no such commit: ${args[i]}"
     elif ((${#sha} > 40)); then

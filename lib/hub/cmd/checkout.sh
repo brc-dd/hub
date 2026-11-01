@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # Summary: Check out a pull request, or run git checkout.
-# Usage: hub checkout [-b BRANCH] [--detach] [--recurse-submodules] PULL-REQUEST-URL [BRANCH]
+# Usage: hub checkout [-b BRANCH] [-d | --detach] [--recurse-submodules] PULL-REQUEST-URL [BRANCH]
 #        hub checkout GIT-CHECKOUT-ARGS...
 #
 # A git command hub extends: git checkout's options apply. A pull request URL (any page of it)
@@ -22,13 +22,15 @@
 # git's own manual: git checkout --help
 
 hub_cmd_checkout() {
-  local word found=0 url='' host='' detach=0 recurse=0 branch operand
+  local word only found=0 url='' host='' detach=0 recurse=0 branch operand
   local -a gh_args=()
   for word; do
     case $word in
       -- | --end-of-options) break ;;
       # git's manual and usage, whatever else is on the line.
-      -h | --help | --help-all) hub::exec_git checkout "$@" ;;
+      --help | --help-all) hub::exec_git checkout "$@" ;;
+      # -h alone or among git checkout's one-letter flags (-qh) asks for git's usage.
+      -*) [[ ! $word =~ ^-[lqmdtf23p]*h ]] || hub::exec_git checkout "$@" ;;
     esac
     if ((! found)) && hub::pull_url "$word"; then found=1; fi
   done
@@ -36,7 +38,8 @@ hub_cmd_checkout() {
   while (($#)); do
     case $1 in
       -b)
-        (($# > 1)) || hub::usage_error '-b needs a branch name'
+        (($# > 1)) || hub::usage_error '-b needs a value'
+        [[ -n $2 ]] || hub::usage_error '-b needs a branch name'
         branch=$2 && shift
         ;;
       -b?*) branch=${1#-b} ;;
@@ -46,7 +49,10 @@ hub_cmd_checkout() {
         hub::die "$1 discards local changes in git; gh pr checkout --force resets the branch to" \
           'the pull request instead (run it yourself)'
         ;;
-      -?*) hub::die 'gh pr checkout takes -b BRANCH, --detach and --recurse-submodules only' ;;
+      -?*)
+        only='gh pr checkout takes -b BRANCH, --detach and --recurse-submodules only'
+        hub::usage_error "unknown option: $1 ($only)"
+        ;;
       '') hub::die 'the branch name is empty' ;;
       *)
         if hub::pull_url "$1"; then
@@ -63,13 +69,13 @@ hub_cmd_checkout() {
   done
   [[ -n $url ]] || hub::usage_error 'the pull request URL is missing'
   if [[ -n ${operand+set} ]]; then
-    [[ -z ${branch+set} ]] \
-      || hub::usage_error "unexpected argument: $operand (-b names the branch already)"
+    [[ -z ${branch+set} ]] || hub::usage_error \
+      "unexpected argument: $(hub::shown "$operand") (-b names the branch already)"
     branch=$operand
   fi
   if [[ -n ${branch+set} ]]; then
-    [[ -n $branch ]] || hub::die 'the branch name is empty'
-    _hub_checkout_valid_branch "$branch" || hub::die "not a valid branch name: $branch"
+    _hub_checkout_valid_branch "$branch" \
+      || hub::die "not a valid branch name: $(hub::shown "$branch")"
     gh_args+=(-b "$branch")
   fi
   ((! detach)) || gh_args+=(--detach)
@@ -78,9 +84,9 @@ hub_cmd_checkout() {
   GH_HOST=$host hub::exec_gh pr checkout "$url" "${gh_args[@]}"
 }
 
-# _hub_checkout_valid_branch NAME : gh's git fetch REMOTE SRC:NAME and git checkout NAME make
-# and check out the branch NAME (not an option, an @{-N} expansion or another ref namespace).
+# _hub_checkout_valid_branch NAME : gh's fetch and checkout make and check out the branch NAME.
 _hub_checkout_valid_branch() {
+  # Not an option, an @{-N} expansion or another ref namespace.
   [[ $(hub::git_query check-ref-format --branch "$1") == "$1" ]] \
     && [[ ! $1 =~ ^(refs|heads|tags|remotes)/ ]]
 }

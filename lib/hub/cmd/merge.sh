@@ -9,7 +9,8 @@
 # hub's --no-ff; -m, -F or --no-message replace its message; --squash leaves both out. The pull
 # request is merged alone: any other operand is an error. Nothing is pushed (gh pr merge merges
 # on GitHub). Without a pull request URL, or with --abort, --quit or --continue, this is plain
-# git merge.
+# git merge; so is a URL of only some of the pull request's changes (.../pull/N/commits/SHA,
+# .../pull/N/files/SHA) or of its patch.
 #
 #   $ hub merge https://github.com/jingweno/gh/pull/73
 #   > git fetch --quiet --no-tags --refmap= -- origin refs/pull/73/head
@@ -42,8 +43,8 @@ hub_cmd_merge() {
     esac
   done
   for i in "${HUB_OPERANDS[@]}"; do
-    # The pull request itself, not a commit or patch of it.
-    if ((i < end && url < 0)) && hub::pull_url "${args[i]}" \
+    # The pull request itself, not a commit, a patch or a page of some of its changes.
+    if ((i < end && url < 0)) && hub::patch_url "${args[i]}" && [[ ${HUB_URL[kind]} == pull ]] \
       && [[ -z ${HUB_URL[sha]-}${HUB_URL[format]-} ]]; then
       url=$i
     elif ((extra < 0)); then
@@ -52,13 +53,14 @@ hub_cmd_merge() {
   done
   ((url >= 0)) || hub::exec_git merge "$@"
   if ((extra >= 0)); then
-    hub::die "a pull request is merged alone (unexpected argument: $(hub::quote "${args[extra]}"))"
+    hub::usage_error \
+      "unexpected argument: $(hub::shown "${args[extra]}") (a pull request is merged alone)"
   fi
   hub::require_repo
   hub::require_gh
   out=$(gh pr view "${args[url]}" --json number,title,headRepositoryOwner,headRefName --jq \
     '"Merge pull request #\(.number) from \(.headRepositoryOwner.login)/\(.headRefName)", .title') \
-    || exit 1
+    || exit
   ((squash || ff)) || opts+=(--no-ff)
   ((squash || message)) || opts+=(-m "${out%%$'\n'*}" -m "${out#*$'\n'}")
   hub::parse_github_url "${args[url]}"

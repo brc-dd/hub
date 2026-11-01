@@ -14,7 +14,9 @@
 #   $ hub apply https://github.com/cli/cli/pull/55
 #   > gh api --hostname github.com repos/cli/cli/pulls/55 -H 'Accept: application/vnd.github.diff'
 #   > git apply TMPDIR/hub-apply.XXXXXX/1.diff
-#   $ hub apply --index https://github.com/cli/cli/commit/1a2b3c4
+#   $ hub apply --index https://github.com/cli/cli/pull/7
+#   > gh api --hostname github.com repos/cli/cli/pulls/7 -H 'Accept: application/vnd.github.diff'
+#   > git apply --index TMPDIR/hub-apply.XXXXXX/1.diff
 #
 # git's own manual: git apply --help
 

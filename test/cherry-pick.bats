@@ -211,9 +211,18 @@ assert_untouched() {
   local lookup='api --hostname github.com repos/octo/app/commits/abcdef1 --jq .sha'
   run hub cherry-pick "https://github.com/octo/app/commit/$pick" \
     https://github.com/octo/app/commit/abcdef1
-  assert_status 1
+  assert_failure
   assert_output_equals "gh stub: unexpected call: gh $lookup"
   assert_gh_called "$lookup"
+  assert_untouched
+  assert_equals "$(git rev-parse --verify --quiet FETCH_HEAD)" ''
+}
+
+@test "hub cherry-pick relays gh's exit status" {
+  setup_commit
+  stub_gh 'api --hostname github.com repos/octo/app/commits/abcdef1 --jq .sha' '' 4
+  run hub cherry-pick https://github.com/octo/app/commit/abcdef1
+  assert_status 4
   assert_untouched
   assert_equals "$(git rev-parse --verify --quiet FETCH_HEAD)" ''
 }
@@ -321,6 +330,21 @@ assert_untouched() {
   assert_status 129
   assert_output_contains 'usage: git cherry-pick'
   assert_gh_not_called
+}
+
+@test "hub cherry-pick -xh is git's usage, before gh is asked or anything is fetched" {
+  setup_commit
+  local word
+  for word in -xh -nh -esh; do
+    run hub cherry-pick "$word" "https://github.com/octo/app/commit/$pick"
+    assert_status 129
+    assert_output_contains 'usage: git cherry-pick'
+    run hub cherry-pick "$word" "https://github.com/octo/app/commit/${pick:0:7}"
+    assert_status 129
+  done
+  assert_gh_not_called
+  assert_untouched
+  assert_equals "$(git rev-parse --verify --quiet FETCH_HEAD)" ''
 }
 
 @test "hub cherry-pick --help hands the line to git for its manual" {

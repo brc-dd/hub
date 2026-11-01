@@ -54,7 +54,7 @@ assert_untouched() {
   assert_output_contains "'refs/pull/12/head' of https://github.com/octo/app"
 }
 
-@test "hub merge accepts any page of a pull request" {
+@test "hub merge accepts a page of the whole pull request" {
   setup_pull
   run hub merge "$url/files"
   assert_success
@@ -214,20 +214,21 @@ assert_untouched() {
 
 @test "hub merge merges a pull request alone" {
   local -a line
-  local spec alone='hub merge: a pull request is merged alone'
+  local spec alone='(a pull request is merged alone)'
   setup_pull
   git branch topic main
   for spec in "$url topic|topic" "topic $url|topic" "$url topic -- other|topic" \
     "$url -- other|other" "$url $url|$url"; do
     read -r -a line <<<"${spec%|*}"
     run hub merge "${line[@]}"
-    assert_failure
-    assert_output_equals "$alone (unexpected argument: ${spec#*|})"
+    assert_status 1
+    assert_line_equals 0 "hub merge: unexpected argument: ${spec#*|} $alone"
+    assert_line_equals 1 'Usage: hub merge [GIT-MERGE-OPTIONS...] PULL-REQUEST-URL'
     assert_untouched
   done
   run hub merge "$url" ''
-  assert_failure
-  assert_output_equals "$alone (unexpected argument: '')"
+  assert_status 1
+  assert_line_equals 0 "hub merge: unexpected argument: '' $alone"
   assert_untouched
 }
 
@@ -242,6 +243,7 @@ assert_untouched() {
   assert_equals "$(git rev-parse HEAD)" "$(tip topic)"
   git reset -q --hard "$base"
   for word in "-- $url" "--end-of-options $url" "$url/commits/$pull" "$url.patch" \
+    "$url/files/$pull" "$url/changes/$pull" "$url/files/$base..$pull" \
     https://gitlab.com/octo/app/pull/12; do
     read -r -a line <<<"$word"
     run hub merge "${line[@]}"
@@ -299,6 +301,15 @@ assert_untouched() {
   PATH=$(failing_gh 'GraphQL: Could not resolve to a PullRequest'):$PATH run hub merge "$url"
   assert_status 1
   assert_output_equals 'GraphQL: Could not resolve to a PullRequest'
+  assert_equals "$(git rev-parse HEAD)" "$base"
+  assert_equals "$(git rev-parse --verify --quiet FETCH_HEAD)" ''
+}
+
+@test "hub merge relays gh's exit status" {
+  setup_pull
+  stub_gh 'pr view *' '' 4
+  run hub merge "$url"
+  assert_status 4
   assert_equals "$(git rev-parse HEAD)" "$base"
   assert_equals "$(git rev-parse --verify --quiet FETCH_HEAD)" ''
 }
