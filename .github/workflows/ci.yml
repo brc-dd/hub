@@ -35,6 +35,10 @@ jobs:
           brew install bash
           echo "$(brew --prefix)/bin" >>"$GITHUB_PATH"
 
+      - name: Zsh
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends zsh
+
       - name: Bats
         run: |
           git -c advice.detachedHead=false clone --quiet --depth 1 --branch "v$BATS_VERSION" \
@@ -68,6 +72,7 @@ jobs:
         run: |
           bash --version | head -n 1
           git --version
+          zsh --version
           bats --version
           shellcheck --version | sed -n 2p
           shfmt --version
