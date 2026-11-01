@@ -62,7 +62,8 @@ hub_cmd_remote() {
       spec=${args[slot]}
       # git reads a relative path from the top directory; one that exists here is a path too.
       top=$(hub::toplevel) || top=$(hub::git_query rev-parse --absolute-git-dir)
-      if ! hub::is_shorthand "$spec" || hub::local_source "$spec" \
+      # x/..git and .git stay git's, as for clone.
+      if ! hub::is_shorthand "${spec%.git}" || hub::local_source "$spec" \
         || (cd "$top" && hub::local_source "$spec") \
         || { [[ $spec != */* ]] && ! hub::is_owner "$spec"; }; then
         hub::exec_git remote "${args[@]}"
@@ -78,7 +79,7 @@ hub_cmd_remote() {
   [[ -n $host ]] || host=$(hub::host) || exit 1
   if [[ $spec == */* ]]; then
     owner=${spec%%/*} repo=${spec#*/}
-    [[ $repo != ?*.git ]] || repo=${repo%.git}
+    repo=${repo%.git}
   else
     owner=$spec
     # origin alone means your own copy.

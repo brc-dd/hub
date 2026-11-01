@@ -194,6 +194,35 @@ remotes() { git remote | tr '\n' ' '; }
   assert_gh_not_called
 }
 
+@test "hub fetch from a subdirectory hands a local repository at the top to git" {
+  git init -q -b main alice
+  git -C alice commit -q --allow-empty -m 'local alice'
+  mkdir sub
+  cd sub
+  run hub fetch alice
+  assert_success
+  assert_equals "$(git rev-parse FETCH_HEAD)" "$(git -C ../alice rev-parse HEAD)"
+  run hub fetch bob,alice
+  assert_failure
+  assert_output_contains "'bob,alice' does not appear to be a git repository"
+  assert_equals "$(remotes)" 'origin '
+  assert_gh_not_called
+}
+
+@test "hub fetch refuses an option inside the list before any lookup" {
+  git remote add -- -p https://github.com/bob/dotfiles.git
+  git update-ref refs/remotes/origin/gone HEAD
+  run hub fetch origin,-p
+  assert_status 1
+  assert_output_equals 'hub fetch: not a remote name: -p (write options outside the list)'
+  run hub fetch alice,--prune
+  assert_status 1
+  assert_output_equals 'hub fetch: not a remote name: --prune (write options outside the list)'
+  assert_equals "$(git rev-parse --verify --quiet refs/remotes/origin/gone)" "$(git rev-parse HEAD)"
+  assert_equals "$(remotes)" '-p origin '
+  assert_gh_not_called
+}
+
 @test "hub fetch hands a list with a line break to git" {
   run hub fetch $'alice\n,bob'
   assert_failure

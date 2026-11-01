@@ -30,6 +30,7 @@ ghe_hosts() {
   assert_success
   assert_equals "$(url_of upstream)" https://github.com/github/hub.git
   run hub remote add mine me/dots
+  assert_success
   assert_equals "$(url_of mine)" https://github.com/me/dots.git
 }
 
@@ -62,11 +63,13 @@ ghe_hosts() {
   assert_equals "$(url_of bob)" https://github.com/bob/dotfiles.git
   assert_equals "$(url_of bob fetch)" +refs/heads/alice:refs/remotes/bob/alice
   run hub remote add --track carol dave
+  assert_success
   assert_equals "$(url_of dave fetch)" +refs/heads/carol:refs/remotes/dave/carol
   run hub remote add -m main erin
   assert_success
   assert_equals "$(git symbolic-ref refs/remotes/erin/HEAD)" refs/remotes/erin/main
   run hub remote add --master main frank
+  assert_success
   assert_equals "$(url_of frank)" https://github.com/frank/dotfiles.git
   run hub remote add --mirror=fetch gina
   assert_success
@@ -83,18 +86,21 @@ ghe_hosts() {
   assert_success
   assert_equals "$(url_of alice)" git@github.com:alice/dotfiles.git
   run hub remote add bob carol/tools -p
+  assert_success
   assert_equals "$(url_of bob)" git@github.com:carol/tools.git
   assert_gh_not_called
 }
 
 @test "remote add -p works inside a cluster of git's flags" {
-  serve_github mislav/dotfiles alice/dotfiles
+  serve_github mislav/dotfiles alice/dotfiles bob/dotfiles
   clone_served mislav/dotfiles
   run hub remote add -fp alice
   assert_success
   assert_equals "$(url_of alice)" git@github.com:alice/dotfiles.git
   run hub remote add -pf bob
+  assert_success
   assert_equals "$(url_of bob)" git@github.com:bob/dotfiles.git
+  assert_equals "$(git rev-parse refs/remotes/bob/main)" "$(server_ref bob/dotfiles main)"
   run hub remote add -pt main carol
   assert_success
   assert_equals "$(url_of carol)" git@github.com:carol/dotfiles.git
@@ -280,8 +286,10 @@ ghe_hosts() {
   assert_success
   assert_equals "$(url_of backup)" alice
   run hub remote add mirror tools
+  assert_success
   assert_equals "$(url_of mirror)" tools
   run hub remote add jot notes
+  assert_success
   assert_equals "$(url_of jot)" notes
   run hub remote add alice
   assert_success
@@ -300,6 +308,7 @@ ghe_hosts() {
   assert_success
   assert_equals "$(url_of other)" bob
   run hub remote add carol carol
+  assert_success
   assert_equals "$(url_of carol)" https://github.com/carol/dotfiles.git
 }
 
@@ -312,11 +321,25 @@ ghe_hosts() {
   assert_success
   assert_equals "$(url_of scp)" git@example.com:x/y.git
   run hub remote add rel ../x
+  assert_success
   assert_equals "$(url_of rel)" ../x
   run hub remote add dotted some.dir
+  assert_success
   assert_equals "$(url_of dotted)" some.dir
   run hub remote add three ghe.example.com/o/r
+  assert_success
   assert_equals "$(url_of three)" ghe.example.com/o/r
+  assert_gh_not_called
+}
+
+@test "remote add NAME OWNER/.git or OWNER/..git keeps the word as git's path" {
+  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
+  run hub remote add bob alice/.git
+  assert_success
+  assert_equals "$(url_of bob)" alice/.git
+  run hub remote add carol alice/..git
+  assert_success
+  assert_equals "$(url_of carol)" alice/..git
   assert_gh_not_called
 }
 
@@ -418,6 +441,7 @@ ghe_hosts() {
   assert_success
   assert_equals "$(url_of origin)" alice
   run hub remote set-url origin https://example.com/x.git
+  assert_success
   assert_equals "$(url_of origin)" https://example.com/x.git
   git init -q --bare tools.git
   run hub remote set-url origin tools
@@ -432,8 +456,10 @@ ghe_hosts() {
   assert_success
   assert_equals "$(url_of alice)" https://github.com/mislav/dotfiles.git
   run hub remote -v
+  assert_success
   assert_line_equals 0 $'alice\thttps://github.com/mislav/dotfiles.git (fetch)'
   run hub remote
+  assert_success
   assert_output_equals alice
   assert_gh_not_called
 }

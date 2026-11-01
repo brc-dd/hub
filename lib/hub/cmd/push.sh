@@ -23,7 +23,7 @@
 hub_cmd_push() {
   local valued='-o --push-option --repo --receive-pack --exec --recurse-submodules'
   local -a args=("$@") remotes=() heads=() flags=()
-  local list rest remote at head=0 i
+  local list rest remote at top head=0 i
   hub::scan "$valued" "$@"
   ((${#HUB_OPERANDS[@]})) || hub::exec_git push "$@"
   at=${HUB_OPERANDS[0]} list=${args[at]}
@@ -31,14 +31,20 @@ hub_cmd_push() {
   for i in "${HUB_OPTIONS[@]}"; do flags+=("${args[i]}"); done
   # Outside a repository git says so itself.
   hub::git_query rev-parse --git-dir >/dev/null || hub::exec_git push "$@"
-  if hub::remote_exists "$list" || hub::local_source "$list"; then hub::exec_git push "$@"; fi
+  # git reads a relative path from the top directory; one that exists here is a path too.
+  top=$(hub::toplevel) || top=$(hub::git_query rev-parse --absolute-git-dir)
+  if hub::remote_exists "$list" || hub::local_source "$list" \
+    || (cd "$top" && hub::local_source "$list"); then
+    hub::exec_git push "$@"
+  fi
   if ((${#HUB_OPERANDS[@]} == 1)) && ! _hub_push_chooses_refs "${flags[@]}"; then head=1; fi
   rest=$list,
   while [[ -n $rest ]]; do
     remote=${rest%%,*} rest=${rest#*,}
-    [[ -n $remote ]] || hub::die "empty name in the list: $list"
-    [[ $remote != -* ]] || hub::die "not a remote name: $remote (write options outside the list)"
-    hub::remote_exists "$remote" || hub::die "not a remote: $remote"
+    [[ -n $remote ]] || hub::die "empty name in the list: $(hub::shown "$list")"
+    [[ $remote != -* ]] \
+      || hub::die "not a remote name: $(hub::shown "$remote")" '(write options outside the list)'
+    hub::remote_exists "$remote" || hub::die "not a remote: $(hub::shown "$remote")"
     remotes+=("$remote")
     # git push REMOTE uses the remote's own refspecs, and refuses any refspec for a mirror.
     if ((head)) && [[ $(hub::git_query config --type=bool remote."$remote".mirror) != true ]] \
@@ -54,13 +60,13 @@ hub_cmd_push() {
   done
 }
 
-# _hub_push_chooses_refs FLAGS... : a flag pushes or deletes refs of its own choosing, so HEAD
-# must not be added; abbreviations and -d in a cluster count.
+# _hub_push_chooses_refs FLAGS... : a flag picks the refs itself, so HEAD is not added.
 _hub_push_chooses_refs() {
   local word long
   for word; do
     case $word in
       --?*)
+        # git expands abbreviations (--del).
         for long in --all --branches --mirror --tags --delete; do
           [[ $long != "${word%%=*}"* ]] || return 0
         done

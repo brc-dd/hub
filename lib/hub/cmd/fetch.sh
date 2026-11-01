@@ -24,27 +24,34 @@
 hub_cmd_fetch() {
   local valued='--depth --deepen --shallow-since --shallow-exclude --refmap -j --jobs -o'
   valued+=' --server-option --upload-pack --negotiation-tip --filter'
-  local op name user other project host repo protocol out
+  local op name user other project host repo protocol out top
   local -a args=("$@") members missing=()
   hub::scan "$valued" "$@"
   ((${#HUB_OPERANDS[@]})) || hub::exec_git fetch "$@"
   if _hub_fetch_git_only "$@"; then hub::exec_git fetch "$@"; fi
   op=${HUB_OPERANDS[0]} name=${args[op]}
   hub::git_query rev-parse --git-dir >/dev/null || hub::exec_git fetch "$@"
-  if _hub_fetch_remote "$name" || hub::local_source "$name"; then hub::exec_git fetch "$@"; fi
+  top=$(hub::toplevel) || top=$(hub::git_query rev-parse --absolute-git-dir)
+  if _hub_fetch_remote "$name" || _hub_fetch_local "$top" "$name"; then
+    hub::exec_git fetch "$@"
+  fi
   # read would stop at a newline and drop the rest of the list.
   [[ $name != *$'\n'* ]] || hub::exec_git fetch "$@"
   if [[ $name == *,* ]]; then
     [[ $name != ,* && $name != *, && $name != *,,* ]] \
-      || hub::die "empty name in the list: $name"
+      || hub::die "empty name in the list: $(hub::shown "$name")"
     IFS=, read -r -a members <<<"$name"
+    for user in "${members[@]}"; do
+      [[ $user != -* ]] \
+        || hub::die "not a remote name: $(hub::shown "$user")" '(write options outside the list)'
+    done
   else
     members=("$name")
   fi
   for user in "${members[@]}"; do
     _hub_fetch_remote "$user" && continue
     hub::is_owner "$user" || hub::exec_git fetch "$@"
-    ! hub::local_source "$user" || hub::exec_git fetch "$@"
+    ! _hub_fetch_local "$top" "$user" || hub::exec_git fetch "$@"
     # GitHub logins ignore case, git's remote names do not.
     while read -r other; do
       [[ ${other,,} != "${user,,}" ]] \
@@ -77,6 +84,12 @@ hub_cmd_fetch() {
 # _hub_fetch_remote NAME : NAME is a remote or a remote group.
 _hub_fetch_remote() {
   hub::remote_exists "$1" || hub::git_query config --get "remotes.$1" >/dev/null
+}
+
+# _hub_fetch_local TOP NAME : git would read NAME as a local repository, from here or from TOP
+# (git resolves a relative path from the top of the work tree).
+_hub_fetch_local() {
+  hub::local_source "$2" || (cd "$1" && hub::local_source "$2")
 }
 
 # _hub_fetch_git_only ARGS... : one of the option words (HUB_OPTIONS) makes the line git's.

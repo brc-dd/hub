@@ -217,6 +217,9 @@ setup_push() {
   run hub push origin,staging,two
   assert_status 1
   assert_output_equals 'hub push: not a remote: staging'
+  run hub push 'origin,x y'
+  assert_status 1
+  assert_output_equals 'hub push: not a remote: x\ y'
   assert_equals "$(server_branches mislav/one)" main
   assert_equals "$(server_branches mislav/two)" main
 }
@@ -247,6 +250,18 @@ setup_push() {
   assert_success
   assert_equals "$(git -C ../dest,backup.git rev-parse refs/heads/feature)" "$(tip feature)"
   assert_equals "$(server_branches mislav/one)" main
+}
+
+@test "hub push from a subdirectory takes a path at the top as one destination" {
+  setup_push
+  git init -q --bare origin,two
+  mkdir sub
+  cd sub
+  run hub push origin,two feature
+  assert_success
+  assert_equals "$(git -C ../origin,two rev-parse refs/heads/feature)" "$(tip feature)"
+  assert_equals "$(server_branches mislav/one)" main
+  assert_equals "$(server_branches mislav/two)" main
 }
 
 @test "hub push takes a URL with a comma as one destination" {
