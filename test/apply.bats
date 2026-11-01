@@ -227,6 +227,48 @@ assert_downloaded() {
   assert_tmp_empty
 }
 
+@test "hub apply leaves a URL that is an option's value to git" {
+  local url=https://github.com/octo/proj/pull/7 option expected tree
+  change a.txt two local
+  for option in --include --directory --exclude; do
+    run git apply "$option" "$url" "$HUB_TEST_TMP/local.diff"
+    expected=$status tree=$(git status --porcelain && cat a.txt)
+    git reset -q --hard
+    run hub apply "$option" "$url" "$HUB_TEST_TMP/local.diff"
+    assert_status "$expected"
+    assert_equals "$(git status --porcelain && cat a.txt)" "$tree"
+    git reset -q --hard
+  done
+  assert_gh_not_called
+  assert_tmp_empty
+}
+
+@test "hub apply downloads a URL that follows an option's value" {
+  change a.txt two pr
+  stub_patch repos/octo/proj/pulls/7 diff "$HUB_TEST_TMP/pr.diff"
+  run hub apply -p 1 --whitespace nowarn https://github.com/octo/proj/pull/7
+  assert_success
+  assert_equals "$(<a.txt)" two
+  assert_downloaded repos/octo/proj/pulls/7 diff --allow-escape-sequences
+  assert_tmp_empty
+}
+
+@test "hub apply hands a line it cannot read with certainty to git untouched" {
+  local url=https://github.com/octo/proj/pull/7
+  change a.txt two local
+  run hub apply --dir "$url" "$HUB_TEST_TMP/local.diff"
+  assert_failure
+  assert_output_contains "https:/github.com/octo/proj/pull/7/a.txt"
+  run hub apply "$url" -p
+  assert_status 129
+  assert_output_contains "switch \`p' requires a value"
+  run hub apply $'https://github.com/octo/proj/pull/7\nx'
+  assert_failure
+  assert_output_contains "can't open patch 'https://github.com/octo/proj/pull/7"
+  assert_gh_not_called
+  assert_equals "$(git status --porcelain)" ''
+}
+
 @test "hub apply leaves a page of one commit or a range within a pull request to git" {
   local url
   for url in https://github.com/octo/proj/pull/7/files/abc1234 \

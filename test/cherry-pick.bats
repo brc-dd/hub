@@ -35,6 +35,15 @@ assert_picked() {
   assert_equals "$(git status --porcelain)" ''
 }
 
+# assert_fetched_from SOURCE : the GIT_TRACE file $HUB_TEST_TMP/trace has hub's fetch from SOURCE.
+assert_fetched_from() {
+  local fetch='trace: built-in: git fetch --quiet --no-tags --refmap= --no-write-fetch-head --'
+  grep -q -F -- "$fetch $1 " "$HUB_TEST_TMP/trace" || {
+    printf 'expected a fetch from %s, trace:\n%s\n' "$1" "$(grep fetch "$HUB_TEST_TMP/trace")"
+    return 1
+  }
+}
+
 # assert_untouched : HEAD is still base and no cherry-pick is in progress.
 assert_untouched() {
   assert_equals "$(git rev-parse HEAD)" "$base"
@@ -100,44 +109,41 @@ assert_untouched() {
 @test "hub cherry-pick picks a pull request's commit from the pull request's repository" {
   setup_commit
   git -C "$(server_dir octo/app)" update-ref -d refs/heads/feature
-  run hub cherry-pick "https://github.com/octo/app/pull/12/commits/$pick"
+  rm -rf "$(server_dir jingweno/app)"
+  GIT_TRACE=$HUB_TEST_TMP/trace run hub cherry-pick \
+    "https://github.com/octo/app/pull/12/commits/$pick"
   assert_success
   assert_picked "$pick"
-  run cat .git/FETCH_HEAD
-  assert_output_contains "$pick"
-  assert_output_contains "of https://github.com/octo/app"
+  assert_fetched_from origin
 }
 
 @test "hub cherry-pick fetches from the URL in gh's protocol when no remote points at it" {
   setup_commit
   stub_gh 'config get git_protocol -h github.com' ssh
-  run hub cherry-pick "https://github.com/jingweno/app/commit/$next"
+  GIT_TRACE=$HUB_TEST_TMP/trace run hub cherry-pick "https://github.com/jingweno/app/commit/$next"
   assert_success
   assert_equals "$(git rev-parse HEAD^)" "$base"
   assert_equals "$(git log -1 --format=%s)" 'Fix more'
-  run cat .git/FETCH_HEAD
-  assert_output_contains "of github.com:jingweno/app"
+  assert_fetched_from git@github.com:jingweno/app.git
   assert_equals "$(git remote)" origin
 }
 
 @test "hub cherry-pick fetches through a remote whose URL names the repository in any case" {
   setup_commit
   git remote add fork git@github.com:JingWeno/App.git
-  run hub cherry-pick "https://github.com/jingweno/app/commit/$pick"
+  GIT_TRACE=$HUB_TEST_TMP/trace run hub cherry-pick "https://github.com/jingweno/app/commit/$pick"
   assert_success
   assert_picked "$pick"
-  run cat .git/FETCH_HEAD
-  assert_output_contains "of github.com:JingWeno/App"
+  assert_fetched_from fork
 }
 
 @test "hub cherry-pick fetches through a remote whose name starts with a dash" {
   setup_commit
   git remote add -- -x https://github.com/jingweno/app.git
-  run hub cherry-pick "https://github.com/jingweno/app/commit/$next"
+  GIT_TRACE=$HUB_TEST_TMP/trace run hub cherry-pick "https://github.com/jingweno/app/commit/$next"
   assert_success
   assert_equals "$(git log -1 --format=%s)" 'Fix more'
-  run cat .git/FETCH_HEAD
-  assert_output_contains "of https://github.com/jingweno/app"
+  assert_fetched_from -x
 }
 
 @test "hub cherry-pick brings no tags in, even from a remote that fetches all tags" {
@@ -288,6 +294,77 @@ assert_untouched() {
   assert_gh_not_called
 }
 
+@test "hub cherry-pick keeps a FETCH_HEAD operand's meaning next to a URL" {
+  local word
+  setup_commit
+  for word in FETCH_HEAD 'FETCH_HEAD^!'; do
+    git fetch -q origin refs/heads/feature
+    run hub cherry-pick "$word" "https://github.com/jingweno/app/commit/$next"
+    assert_success
+    assert_equals "$(git rev-parse HEAD~2)" "$base"
+    assert_equals "$(cat fix.txt more.txt)" $'fixed\nmore'
+    git reset -q --hard "$base"
+  done
+}
+
+@test "hub cherry-pick leaves FETCH_HEAD as it was, absent included" {
+  local before
+  setup_commit
+  run hub cherry-pick "https://github.com/jingweno/app/commit/$next"
+  assert_success
+  assert_equals "$(git rev-parse --verify --quiet FETCH_HEAD)" ''
+  git reset -q --hard "$base"
+  git fetch -q origin refs/heads/feature
+  before=$(cat .git/FETCH_HEAD)
+  run hub cherry-pick "https://github.com/jingweno/app/commit/$next"
+  assert_success
+  assert_equals "$(git log -1 --format=%s)" 'Fix more'
+  assert_equals "$(cat .git/FETCH_HEAD)" "$before"
+}
+
+@test "hub cherry-pick hands a word with a newline to git untouched" {
+  setup_commit
+  local word=https://github.com/octo/app/commit/$pick$'\nHEAD~5'
+  run hub cherry-pick "$word"
+  assert_status 128
+  assert_output_contains "bad revision 'https://github.com/octo/app/commit/$pick"
+  stub_gh 'api --hostname github.com repos/octo/app/commits/abc1234 --jq .sha' 'not-a-sha'
+  run hub cherry-pick $'https://github.com/octo/app/commit/abc1234\nx'
+  assert_status 128
+  assert_output_contains 'bad revision'
+  assert_gh_not_called
+  assert_untouched
+  assert_equals "$(git rev-parse --verify --quiet FETCH_HEAD)" ''
+}
+
+@test "hub cherry-pick reads option values as values: only operands are URLs" {
+  setup_commit
+  local url=https://github.com/octo/app/commit/$pick
+  run hub cherry-pick --cleanup verbatim --empty keep -X theirs "$url"
+  assert_success
+  assert_picked "$pick"
+  git reset -q --hard "$base"
+  run hub cherry-pick --cleanup "https://github.com/octo/app/commit/${pick:0:7}" main
+  assert_status 128
+  assert_output_equals "fatal: Invalid cleanup mode https://github.com/octo/app/commit/${pick:0:7}"
+  assert_gh_not_called
+  assert_untouched
+}
+
+@test "hub cherry-pick hands a line with an abbreviated valued option to git untouched" {
+  setup_commit
+  local url=https://github.com/octo/app/commit/${pick:0:7}
+  run hub cherry-pick --strat ort "$url"
+  assert_status 128
+  assert_output_equals "fatal: bad revision 'ort'"
+  run hub cherry-pick "$url" --cleanup
+  assert_status 129
+  assert_output_contains "option \`cleanup' requires a value"
+  assert_gh_not_called
+  assert_untouched
+  assert_equals "$(git rev-parse --verify --quiet FETCH_HEAD)" ''
+}
+
 @test "hub cherry-pick leaves URLs after -- or --end-of-options to git" {
   setup_commit
   local url=https://github.com/octo/app/commit/$pick
@@ -373,7 +450,7 @@ assert_untouched() {
   stub_gh "api --hostname github.com repos/octo/app/commits/${pick:0:7} --jq .sha" "$pick"
   run hub --noop cherry-pick -x "https://github.com/octo/app/commit/${pick:0:7}"
   assert_success
-  assert_output_equals "git fetch --quiet --no-tags --refmap= -- origin $pick
+  assert_output_equals "git fetch --quiet --no-tags --refmap= --no-write-fetch-head -- origin $pick
 git cherry-pick -x $pick"
   assert_untouched
   assert_equals "$(git rev-parse --verify --quiet FETCH_HEAD)" ''

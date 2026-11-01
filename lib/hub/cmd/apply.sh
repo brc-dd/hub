@@ -2,7 +2,7 @@
 # Summary: Apply the changes of a GitHub pull request, commit or comparison.
 # Usage: hub apply [GIT-APPLY-OPTIONS...] (URL | PATCH)...
 #
-# A git command hub extends: git apply's options apply. Every word before -- (or
+# A git command hub extends: git apply's options apply. Every operand before -- (or
 # --end-of-options) that is the URL of a pull request (.../pull/N or one page of it), a commit
 # (.../commit/SHA, .../pull/N/commits/SHA) or a comparison (.../compare/BASE...HEAD) is
 # downloaded through gh's API as one diff, with or without a .patch or .diff suffix, and git
@@ -21,19 +21,19 @@
 # git's own manual: git apply --help
 
 hub_cmd_apply() {
-  local word found=''
-  for word; do
-    case $word in
-      -- | --end-of-options) break ;;
-      --help | --help-all) hub::exec_git apply "$@" ;;
-      # -h alone or among git apply's one-letter flags (-Rh) asks for git's usage.
-      -*) [[ ! $word =~ ^-[3NRqvz]*h ]] || hub::exec_git apply "$@" ;;
-      *) ! hub::patch_url "$word" || found=1 ;;
-    esac
+  local valued='-p -C --exclude --include --directory --whitespace --build-fake-ancestor'
+  local i end=$# urls=''
+  local -a args=("$@")
+  hub::scan "$valued" "$@"
+  for i in "${HUB_OPTIONS[@]}"; do
+    case ${args[i]} in -- | --end-of-options) end=$i && break ;; esac
   done
-  [[ -n $found ]] || hub::exec_git apply "$@"
+  for i in "${HUB_OPERANDS[@]}"; do
+    ((i < end)) && hub::patch_url "${args[i]}" && urls+=" $i"
+  done
+  [[ -n $urls ]] || hub::exec_git apply "$@"
   # Always a diff: git apply reads a patch series as one input, and a file that the series
   # creates and later deletes would stay in the work tree.
-  hub::download_patches diff "$@"
+  hub::download_patches diff "$urls" "$@"
   hub::git apply "${HUB_ARGS[@]}"
 }

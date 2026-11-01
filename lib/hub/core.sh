@@ -446,16 +446,15 @@ hub::patch_url() {
   esac
 }
 
-# hub::download_patches FORMAT ARGS... : sets HUB_ARGS to ARGS, patch URLs as files; an EXIT trap.
+# hub::download_patches FORMAT INDEXES ARGS... : sets HUB_ARGS to ARGS, URLs at INDEXES as files.
 hub::download_patches() {
-  local format=$1 tmp i n=0 endpoint escape rc
-  shift
+  local format=$1 indexes=$2 tmp i n=0 endpoint escape rc
+  shift 2
   HUB_ARGS=("$@")
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/hub-$HUB_COMMAND.XXXXXX") || exit 1
   # shellcheck disable=SC2064  # the path is expanded now, quoted
   trap "rm -rf -- $(printf '%q' "$tmp")" EXIT
-  for ((i = 0; i < $#; i++)); do
-    [[ ${HUB_ARGS[i]} != -- && ${HUB_ARGS[i]} != --end-of-options ]] || break
+  for i in $indexes; do
     hub::patch_url "${HUB_ARGS[i]}" || continue
     endpoint=repos/${HUB_URL[owner]}/${HUB_URL[repo]}
     if [[ -n ${HUB_URL[sha]-} ]]; then
@@ -473,7 +472,7 @@ hub::download_patches() {
     gh api --hostname "${HUB_URL[host]}" "$endpoint" -H "Accept: application/vnd.github.$format" \
       ${escape:+"$escape"} >"$tmp/$n.$format" || {
       rc=$?
-      _hub_core_say "could not download: ${HUB_ARGS[i]}"
+      _hub_core_say "could not download: $(hub::shown "${HUB_ARGS[i]}")"
       exit "$rc"
     }
     HUB_ARGS[i]=$tmp/$n.$format

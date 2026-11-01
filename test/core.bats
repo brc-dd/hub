@@ -891,7 +891,7 @@ parses_to() {
   done
 }
 
-# downloads FORMAT ARGS... : hub::download_patches, then HUB_ARGS each in <>, a file as NAME:TEXT.
+# downloads FORMAT INDEXES ARGS... : hub::download_patches, then HUB_ARGS in <>, files as NAME:TEXT.
 downloads() {
   local word
   hub::download_patches "$@" || return
@@ -904,14 +904,15 @@ downloads() {
   done
 }
 
-@test "download_patches puts each patch URL's download in its place, up to --, and cleans up" {
+@test "download_patches puts each patch URL at the indexes in its place, and cleans up" {
   stub_gh 'api --help' 'FLAGS'
   stub_gh 'api --hostname github.com repos/o/r/pulls/12 *' 'From pull'
   stub_gh 'api --hostname github.com repos/o/r/commits/abc1234 *' 'From commit'
   stub_gh 'api --hostname github.com repos/o/r/compare/a...b *' 'From compare'
   mkdir tmp
   local deeper=https://github.com/o/r/pull/12/files/abc1234
-  TMPDIR=$HUB_TEST_TMP/tmp run downloads diff -3 https://github.com/o/r/pull/12 x "$deeper" \
+  TMPDIR=$HUB_TEST_TMP/tmp run downloads diff '1 2 3 4 5 6' -3 https://github.com/o/r/pull/12 x \
+    "$deeper" \
     https://github.com/o/r/commit/abc1234 https://github.com/o/r/compare/a...b \
     https://github.com/o/r/issues/3 -- https://github.com/o/r/pull/12
   assert_success
@@ -920,8 +921,8 @@ downloads() {
   assert_gh_called 'api --hostname github.com repos/o/r/pulls/12 -H Accept: *.github.diff'
   assert_equals "$(gh_calls | grep -c 'issues\|files')" 0
   assert_equals "$(ls tmp)" ''
-  TMPDIR=$HUB_TEST_TMP/tmp run downloads patch --end-of-options https://github.com/o/r/pull/12
-  assert_output_equals '<--end-of-options><https://github.com/o/r/pull/12>'
+  TMPDIR=$HUB_TEST_TMP/tmp run downloads patch '' https://github.com/o/r/pull/12
+  assert_output_equals '<https://github.com/o/r/pull/12>'
   assert_equals "$(gh_calls | grep -c pulls/12)" 1
 }
 
@@ -929,7 +930,7 @@ downloads() {
   stub_gh 'api --help' 'FLAGS'
   stub_gh 'api --hostname github.com repos/o/r/commits/abc1234 *' 'gh: Not Found' 4
   mkdir tmp
-  TMPDIR=$HUB_TEST_TMP/tmp run downloads patch https://github.com/o/r/commit/abc1234
+  TMPDIR=$HUB_TEST_TMP/tmp run downloads patch 0 https://github.com/o/r/commit/abc1234
   assert_status 4
   assert_output_equals 'hub test: could not download: https://github.com/o/r/commit/abc1234'
   assert_equals "$(ls tmp)" ''
@@ -940,13 +941,13 @@ downloads() {
   stub_gh 'api --help' 'FLAGS\n  --jq string'
   stub_gh 'api --hostname github.com repos/o/r/commits/abc1234 *' 'From commit'
   mkdir tmp
-  TMPDIR=$HUB_TEST_TMP/tmp run downloads patch "$url" "$url.patch"
+  TMPDIR=$HUB_TEST_TMP/tmp run downloads patch '0 1' "$url" "$url.patch"
   assert_output_equals '<1.patch:From commit><2.patch:From commit>'
   assert_equals "$(grep -c 'api --help' "$HUB_TEST_GH_LOG")" 1
   assert_equals "$(gh_calls | grep -c "repos/o/r/commits/abc1234 $accept.patch\$")" 2
   : >"$HUB_TEST_GH_LOG"
   stub_gh 'api --help' 'FLAGS\n  --allow-escape-sequences   Keep them'
-  TMPDIR=$HUB_TEST_TMP/tmp run downloads diff "$url"
+  TMPDIR=$HUB_TEST_TMP/tmp run downloads diff 0 "$url"
   assert_gh_called "api --hostname github.com repos/o/r/commits/abc1234 $accept.diff\
  --allow-escape-sequences"
 }
@@ -1058,6 +1059,10 @@ downloads() {
     'push|-o --push-option --repo --receive-pack --exec --recurse-submodules'
     'remote add|-t --track -m --master'
     'merge|-m --message -F --file -s --strategy -X --strategy-option --into-name --cleanup'
+    'am|-p -C --exclude --include --directory --whitespace --patch-format --resolvemsg
+      --quoted-cr --empty'
+    'apply|-p -C --exclude --include --directory --whitespace --build-fake-ancestor'
+    'cherry-pick|-m --mainline --strategy -X --strategy-option --cleanup --empty'
   )
   local spec cmd table entry word problems=''
   local -a longs

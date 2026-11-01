@@ -209,6 +209,49 @@ make_series() {
   assert_gh_not_called
 }
 
+@test "hub am leaves a URL that is an option's value to git" {
+  local url=https://github.com/o/r/pull/8 head option expected files
+  head=$(tip main)
+  for option in --directory --include --exclude; do
+    run git am "$option" "$url" "$HUB_TEST_TMP/add-f.patch"
+    expected=$status files=$(git ls-files)
+    git am --abort 2>/dev/null || true
+    git reset -q --hard "$head"
+    run hub am "$option" "$url" "$HUB_TEST_TMP/add-f.patch"
+    assert_status "$expected"
+    assert_equals "$(git ls-files)" "$files"
+    git am --abort 2>/dev/null || true
+    git reset -q --hard "$head"
+  done
+  assert_gh_not_called
+  assert_tmp_empty
+}
+
+@test "hub am downloads a URL that follows an option's value" {
+  stub_patch repos/o/r/pulls/8 patch "$HUB_TEST_TMP/add-f.patch"
+  run hub am -p 1 --patch-format mbox https://github.com/o/r/pull/8
+  assert_success
+  assert_equals "$(git log -1 --format=%s)" 'add f'
+  assert_gh_called 'api --hostname github.com repos/o/r/pulls/8 *'
+  assert_tmp_empty
+}
+
+@test "hub am hands a line it cannot read with certainty to git untouched" {
+  local head url=https://github.com/o/r/pull/8
+  head=$(tip main)
+  run hub am --dir "$url" "$HUB_TEST_TMP/add-f.patch"
+  assert_success
+  assert_equals "$(git ls-files)" https:/github.com/o/r/pull/8/f
+  git reset -q --hard "$head"
+  run hub am "$url" -C
+  assert_status 129
+  run hub am $'https://github.com/o/r/pull/8\nx'
+  assert_failure
+  assert_gh_not_called
+  assert_equals "$(tip main)" "$head"
+  assert_tmp_empty
+}
+
 @test "hub am leaves a page of one commit or a range within a pull request to git" {
   local url
   for url in https://github.com/o/r/pull/8/files/abc1234 \
