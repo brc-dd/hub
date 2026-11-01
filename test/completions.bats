@@ -85,7 +85,7 @@ if (( $# )); then
   _hub
   print -r -- "after: $CURRENT ${words[*]}"
 fi
-left=(${${(k)functions[(I)_git-*]}:#_git-version})
+left=(${${(k)functions[(I)_git[-_]*]}:#_git-version})
 (( ! $#left )) || print -l -- ${left/#/leftover }
 EOF
 }
@@ -375,6 +375,25 @@ fish_lines() {
   assert_line_equals 2 'mine'
   complete_zsh '' hub gist -
   assert_output_lacks '_describe option'
+}
+
+@test "zsh: the options of hub's own commands under git's own git-completion.zsh" {
+  need_zsh
+  # git-completion.zsh calls _git_CMD under emulate ksh, with its own __gitcomp and cur.
+  local options contrib='_git() { local cur=$PREFIX; emulate ksh -c _git_${words[CURRENT-1]//-/_}; }
+    __gitcomp() { print -r -- "__gitcomp $cur: $1"; }'
+  complete_zsh "$contrib" hub -C dir pull-request --dra
+  assert_success
+  options='-m --message -F --file -e --edit --no-edit -b --base -h --head -p --push -f --force'
+  options+=' -d --draft -r --reviewer -a --assign -M --milestone -l --labels'
+  assert_line_equals 1 "__gitcomp --dra: $options --no-maintainer-edits -o --browse -c --copy"
+  assert_output_lacks 'leftover'
+  complete_zsh "$contrib" hub browse --u
+  assert_line_equals 1 '__gitcomp --u: -u --url -c --copy'
+  complete_zsh "$contrib" hub browse ''
+  assert_output_lacks '__gitcomp'
+  complete_zsh "$contrib; _git_browse() { print mine; }" hub browse --u
+  assert_line_equals 1 'mine'
 }
 
 @test "zsh: the file autoloaded as _hub completes the first call" {

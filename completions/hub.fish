@@ -96,7 +96,8 @@ complete -c hub -n '__hub_using compare' -s c -l copy -d 'Copy the URL to the cl
 
 complete -c hub -n '__hub_using create' -s p -l private -d 'Make the repository private'
 complete -c hub -n '__hub_using create' -l public -d 'Make it public'
-complete -c hub -n '__hub_using create' -l internal -d 'Make it visible to its organization only'
+complete -c hub -n '__hub_using create' -l internal \
+    -d 'Make it readable by every member of the enterprise.'
 complete -c hub -n '__hub_using create' -s d -l description -r -d 'The description'
 complete -c hub -n '__hub_using create' -s h -l homepage -r -d 'The home page URL'
 complete -c hub -n '__hub_using create' -l remote-name -r -d 'Name the remote instead of origin'

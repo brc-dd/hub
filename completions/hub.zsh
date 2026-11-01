@@ -2,8 +2,9 @@
 # Summary: zsh completion for hub, and for git when git is an alias for hub.
 # Usage: install as _hub in a directory on $fpath, or source it after compinit
 #
-# The completion registered for git (normally _git), plus hub's commands where the command word
-# goes and the options of hub's own commands, when the command is hub or a shell alias for it.
+# The completion registered for git (normally _git: zsh's own, or git's git-completion.zsh), plus
+# hub's commands where the command word goes and the options of hub's own commands, when the
+# command is hub or a shell alias for it.
 # Plain git completes as before. It completes git too, for setopt complete_aliases, where zsh
 # completes git aliased to hub as git. make install links it as _hub into a site-functions
 # directory.
@@ -54,7 +55,7 @@ _hub_options() {
         {-c,--copy}':Copy the URL to the clipboard') ;;
     (create)
       reply=({-p,--private}':Make the repository private' '--public:Make it public'
-        '--internal:Make it visible to its organization only'
+        '--internal:Make it readable by every member of the enterprise.'
         {-d,--description}':The description' {-h,--homepage}':The home page URL'
         '--remote-name:Name the remote instead of origin'
         '--push:Push the current branch and track it'
@@ -129,13 +130,20 @@ _hub() {
   (( i <= CURRENT )) || at_command=0
   kept+=("${(@)words[i,-1]}")
   words=("${kept[@]}") CURRENT=$(( CURRENT - $#saved_words + $#kept ))
-  # _git completes the arguments of CMD with _git-CMD: hub's are defined for this completion
-  # only, so plain git and a _git-CMD of yours never see them.
+  # zsh's _git completes the arguments of CMD with _git-CMD, git's own git-completion.zsh with
+  # a bash-style _git_CMD, run under emulate ksh with its __gitcomp and cur. hub's are defined
+  # for this completion only, so plain git and functions of yours never see them.
   hub_only=(${_hub_commands:#(${(~j:|:)_hub_git_commands}):*})
   for cmd in ${hub_only%%:*}; do
-    (( ! $+functions[_git-$cmd] )) && _hub_options $cmd || continue
-    functions[_git-$cmd]="_hub_complete_options $cmd"
-    defined+=(_git-$cmd)
+    _hub_options $cmd || continue
+    if (( ! $+functions[_git-$cmd] )); then
+      functions[_git-$cmd]="_hub_complete_options $cmd"
+      defined+=(_git-$cmd)
+    fi
+    if (( ! $+functions[_git_${cmd//-/_}] )); then
+      functions[_git_${cmd//-/_}]="[[ \$cur != -* ]] || __gitcomp '${(@)reply%%:*}'"
+      defined+=(_git_${cmd//-/_})
+    fi
   done
   $_hub_git "$@" && ret=0
   (( $#defined )) && unfunction $defined
