@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# hub create: gh repo create from the work tree, the remote's URL, --push, -o and -c.
+# hub create: gh repo create, the remote git adds, --push, -o and -c.
 
 load test_helper
 
@@ -8,34 +8,14 @@ setup() {
   stub_gh 'repo create *' ''
 }
 
-# gh_adds_remote URL : gh repo create, as the real one does, adds its --remote at its --source.
-gh_adds_remote() {
-  mkdir -p "$HUB_TEST_TMP/bin" || return 1
-  cat >"$HUB_TEST_TMP/bin/gh" <<'EOF' || return 1
-#!/usr/bin/env bash
-"$HUB_TEST_ROOT/test/stubs/gh" "$@" || exit
-[[ $1 == repo && $2 == create ]] || exit 0
-for arg; do
-  case $arg in
-    --source=*) source=${arg#*=} ;;
-    --remote=*) remote=${arg#*=} ;;
-  esac
-done
-git -C "$source" remote add "$remote" "$HUB_TEST_CREATED_URL"
-EOF
-  chmod +x "$HUB_TEST_TMP/bin/gh" || return 1
-  export PATH=$HUB_TEST_TMP/bin:$PATH HUB_TEST_CREATED_URL=$1
-}
-
 @test "hub create makes a private repository of yours named after the top directory" {
   make_repo dotfiles
   mkdir sub
   cd sub
   run hub create
   assert_success
-  local source=$HUB_TEST_TMP/dotfiles
-  assert_gh_called \
-    "repo create github.com/mislav/dotfiles --source=$source --remote=origin --private"
+  assert_gh_called 'repo create github.com/mislav/dotfiles --private'
+  assert_equals "$(git remote get-url origin)" https://github.com/mislav/dotfiles.git
 }
 
 @test "hub create replaces characters a repository name cannot have" {
@@ -66,91 +46,137 @@ EOF
   stub_gh 'config get user -h example.com' octo
   run hub create tools.git
   assert_success
-  assert_gh_called "repo create github.com/mislav/tools --source=$HUB_TEST_TMP/work *"
+  assert_gh_called 'repo create github.com/mislav/tools --private'
+  assert_equals "$(git remote get-url origin)" https://github.com/mislav/tools.git
+  git remote remove origin
   run hub create myorg/tools
   assert_success
   assert_gh_called 'repo create github.com/myorg/tools *'
+  git remote remove origin
   run hub create Example.COM/myorg/kit.git
   assert_success
   assert_gh_called 'repo create example.com/myorg/kit *'
+  assert_equals "$(git remote get-url origin)" https://example.com/myorg/kit.git
+  git remote remove origin
   run hub create https://github.com/myorg/site.git
   assert_success
   assert_gh_called 'repo create github.com/myorg/site *'
+  git remote remove origin
   run hub create git@github.com:myorg/scp.git
   assert_success
   assert_gh_called 'repo create github.com/myorg/scp *'
+  git remote remove origin
   run hub create ssh://git@github.com/myorg/ssh.git
   assert_success
   assert_gh_called 'repo create github.com/myorg/ssh *'
+  git remote remove origin
   run hub create -- dash
   assert_success
   assert_gh_called 'repo create github.com/mislav/dash *'
+  git remote remove origin
   GH_HOST=example.com run hub create gadget
   assert_success
   assert_gh_called 'repo create example.com/octo/gadget *'
+}
+
+@test "hub create takes an owner's name that starts with a hyphen, in every form" {
+  make_repo work
+  local arg
+  for arg in octo/-app github.com/octo/-app https://github.com/octo/-app.git; do
+    run hub create "$arg"
+    assert_success
+    assert_gh_called 'repo create github.com/octo/-app --private'
+    assert_equals "$(git remote get-url origin)" https://github.com/octo/-app.git
+    git remote remove origin
+  done
+  local forms='NAME, OWNER/NAME, HOST/OWNER/NAME or a repository URL'
+  run hub create -- -app
+  assert_status 1
+  assert_output_equals "hub create: not a repository: -app (use $forms)"
+}
+
+@test "hub create --push pushes to a repository whose name starts with a hyphen" {
+  git init -q --bare "$(server_dir octo/-app)"
+  make_repo work
+  run hub create --push octo/-app
+  assert_success
+  assert_gh_called 'repo create github.com/octo/-app --private'
+  assert_equals "$(git remote get-url origin)" https://github.com/octo/-app.git
+  assert_equals "$(server_ref octo/-app refs/heads/main)" "$(tip main)"
+  assert_equals "$(git config branch.main.remote)" origin
 }
 
 @test "hub create passes the visibility, the last one given, and never gh's -p" {
   make_repo work
   run hub create --public
   assert_success
-  assert_gh_called 'repo create github.com/mislav/work --source=* --remote=origin --public'
+  assert_gh_called 'repo create github.com/mislav/work --public'
+  git remote remove origin
   run hub create --private --internal
   assert_success
-  assert_gh_called 'repo create github.com/mislav/work --source=* --remote=origin --internal'
+  assert_gh_called 'repo create github.com/mislav/work --internal'
+  git remote remove origin
   : >"$HUB_TEST_GH_LOG"
   run hub create --public -p
   assert_success
-  assert_gh_called 'repo create github.com/mislav/work --source=* --remote=origin --private'
+  assert_gh_called 'repo create github.com/mislav/work --private'
+  git remote remove origin
   : >"$HUB_TEST_GH_LOG"
   run hub create --public -pc
   assert_success
-  assert_gh_called 'repo create github.com/mislav/work --source=* --remote=origin --private'
+  assert_gh_called 'repo create github.com/mislav/work --private'
   assert_equals "$(copied)" https://github.com/mislav/work
 }
 
-@test "hub create passes the description, the home page and the remote's name" {
+@test "hub create passes the description and the home page, and names the remote" {
   make_repo work
   run hub create -d 'My tools' -h https://example.com --remote-name gh
   assert_success
   local rest='--description My tools --homepage https://example.com'
-  assert_gh_called "repo create github.com/mislav/work --source=* --remote=gh --private $rest"
+  assert_gh_called "repo create github.com/mislav/work --private $rest"
+  assert_equals "$(git remote)" gh
+  assert_equals "$(git remote get-url gh)" https://github.com/mislav/work.git
   run hub create --description=--public --homepage=x --remote-name=up
   assert_success
-  assert_gh_called '* --remote=up --private --description --public --homepage x'
+  rest='--description --public --homepage x'
+  assert_gh_called "repo create github.com/mislav/work --private $rest"
+  assert_equals "$(git remote get-url up)" https://github.com/mislav/work.git
   run hub create -dabc
   assert_success
-  assert_gh_called '* --remote=origin --private --description abc'
+  assert_gh_called 'repo create github.com/mislav/work --private --description abc'
 }
 
-@test "hub create sets gh's remote URL to the one gh's git_protocol gives" {
-  make_repo work
-  gh_adds_remote git@github.com:mislav/work.git
-  run hub create
-  assert_success
-  assert_equals "$(git remote get-url origin)" https://github.com/mislav/work.git
-}
-
-@test "hub create sets an ssh URL when gh's git_protocol is ssh and gh recorded https" {
+@test "hub create adds the remote with git, with the URL gh's git_protocol gives" {
   make_repo work
   stub_gh 'config get git_protocol -h github.com' ssh
-  gh_adds_remote https://github.com/mislav/work.git
-  run hub create
-  assert_success
-  assert_equals "$(git remote get-url origin)" git@github.com:mislav/work.git
-}
-
-@test "hub create keeps the remote URL gh recorded when it is the expected one" {
-  make_repo work
-  stub_gh 'config get git_protocol -h github.com' ssh
-  gh_adds_remote git@github.com:mislav/work.git
   GIT_TRACE=$HUB_TEST_TMP/trace.log run hub create
   assert_success
+  assert_gh_called 'repo create github.com/mislav/work --private'
   assert_equals "$(git remote get-url origin)" git@github.com:mislav/work.git
-  run grep -c 'remote add origin' "$HUB_TEST_TMP/trace.log"
+  run grep -c 'remote add -- origin git@github.com:mislav/work.git' "$HUB_TEST_TMP/trace.log"
   assert_output_equals 1
   run grep 'remote set-url' "$HUB_TEST_TMP/trace.log"
   assert_failure
+}
+
+@test "hub create works from a linked work tree" {
+  make_repo work
+  git worktree add -q -b topic ../topic
+  cd ../topic
+  run hub create
+  assert_success
+  assert_gh_called 'repo create github.com/mislav/topic --private'
+  assert_equals "$(git remote get-url origin)" https://github.com/mislav/topic.git
+}
+
+@test "hub create works from a work tree with a separate git directory" {
+  git init -q --separate-git-dir "$HUB_TEST_TMP/meta.git" tree
+  cd tree
+  git commit -q --allow-empty -m 'initial commit'
+  run hub create
+  assert_success
+  assert_gh_called 'repo create github.com/mislav/tree --private'
+  assert_equals "$(git remote get-url origin)" https://github.com/mislav/tree.git
 }
 
 @test "hub create reads gh's git_protocol before it creates the repository" {
@@ -159,17 +185,16 @@ EOF
   assert_success
   assert_equals "$(gh_calls)" "gh config get user -h github.com
 gh config get git_protocol -h github.com
-gh repo create github.com/mislav/work --source=$HUB_TEST_TMP/work --remote=origin --private"
+gh repo create github.com/mislav/work --private"
 }
 
 @test "hub create --push pushes the current branch with git and tracks it" {
   git init -q --bare "$(server_dir mislav/work)"
   make_repo work
   commit_on main 'second commit'
-  gh_adds_remote https://github.com/mislav/work.git
   run hub create --push
   assert_success
-  assert_gh_called 'repo create github.com/mislav/work --source=* --remote=origin --private'
+  assert_gh_called 'repo create github.com/mislav/work --private'
   assert_equals "$(server_ref mislav/work refs/heads/main)" "$(tip main)"
   assert_equals "$(server_branches mislav/work)" main
   assert_equals "$(git config branch.main.remote)" origin
@@ -178,7 +203,6 @@ gh repo create github.com/mislav/work --source=$HUB_TEST_TMP/work --remote=origi
 
 @test "hub create --push exits with git's status when the push fails, before the browser" {
   make_repo work
-  gh_adds_remote https://github.com/mislav/work.git
   run hub create --push -o
   assert_status 128
   assert_output_contains 'fatal:'
@@ -208,6 +232,7 @@ gh repo create github.com/mislav/work --source=$HUB_TEST_TMP/work --remote=origi
   assert_success
   assert_equals "$(copied)" https://github.com/myorg/tools
   assert_equals "$(opened)" https://github.com/myorg/tools
+  git remote remove origin
   run hub create --copy --browse
   assert_success
   assert_equals "$(copied)" https://github.com/mislav/work
@@ -359,6 +384,7 @@ gh repo create github.com/mislav/work --source=$HUB_TEST_TMP/work --remote=origi
   run hub create myorg/tools
   assert_success
   assert_gh_called 'repo create github.com/myorg/tools *'
+  assert_equals "$(git remote get-url origin)" https://github.com/myorg/tools.git
 }
 
 @test "hub create refuses a bare repository and a directory outside a repository" {
@@ -393,5 +419,8 @@ gh repo create github.com/mislav/work --source=$HUB_TEST_TMP/work --remote=origi
     'Summary: Create a GitHub repository for this repository and add it as a remote.'
   assert_line_equals 1 \
     'Usage: hub create [-p | --public | --internal] [-d DESCRIPTION] [-h HOMEPAGE]'
+  assert_output_contains \
+    '      --internal                  Make it readable by every member of the enterprise.'
+  assert_output_lacks 'organization only'
   assert_gh_not_called
 }

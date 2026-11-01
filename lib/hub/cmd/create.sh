@@ -3,19 +3,19 @@
 # Usage: hub create [-p | --public | --internal] [-d DESCRIPTION] [-h HOMEPAGE]
 #                   [--remote-name NAME] [--push] [-o] [-c] [[[HOST/]OWNER/]NAME]
 #
-# hub's own command: these are all of its options. Creates the repository on GitHub with gh repo
-# create from the top of the work tree and adds it as the remote origin. The repository is
-# private unless --public or --internal says otherwise, named after the project or the top
-# directory unless NAME is given (a .git suffix is dropped), owned by you unless OWNER/NAME names
-# an organization, and created on the default host (GH_HOST, else the one host gh is logged in
-# to, else github.com) unless HOST/OWNER/NAME or a repository URL names one. The remote's URL
-# follows gh's git_protocol. The name, the remote and, with --push, the current branch are
-# checked before gh runs.
+# hub's own command: these are all of its options. gh repo create creates the repository on
+# GitHub, and git adds it to this repository as the remote origin, from any work tree, a linked
+# one included. The repository is private unless --public or --internal says otherwise, named
+# after the project or the top directory unless NAME is given (a .git suffix is dropped), owned
+# by you unless OWNER/NAME names an organization, and created on the default host (GH_HOST, else
+# the one host gh is logged in to, else github.com) unless HOST/OWNER/NAME or a repository URL
+# names one. The remote's URL follows gh's git_protocol. The name, the remote and, with --push,
+# the current branch are checked before gh runs.
 #
 # Options:
 #   -p, --private                   Make the repository private (the default).
 #       --public                    Make it public.
-#       --internal                  Make it visible to its organization only.
+#       --internal                  Make it readable by every member of the enterprise.
 #   -d, --description DESCRIPTION   The repository's description.
 #   -h, --homepage HOMEPAGE         The repository's home page URL.
 #       --remote-name NAME          Name the remote NAME instead of origin.
@@ -26,12 +26,13 @@
 # Exit status: git's or gh's when one fails, else the browser's or the clipboard tool's.
 #
 #   $ hub create --public --push dotfiles
-#   > gh repo create github.com/LOGIN/dotfiles --source=TOP --remote=origin --public
+#   > gh repo create github.com/LOGIN/dotfiles --public
+#   > git remote add -- origin https://github.com/LOGIN/dotfiles.git
 #   > git push --set-upstream origin HEAD
 
 hub_cmd_create() {
   local visibility=--private description='' homepage='' remote=origin push=0 browse=0 copy=0
-  local top host owner='' repo url current branch rc=0
+  local host owner='' repo url branch rc=0
   local -a operands=() cmd
   hub::normalize_opts dh '--description --homepage --remote-name' "$@"
   set -- "${HUB_ARGS[@]}"
@@ -63,7 +64,6 @@ hub_cmd_create() {
 
   hub::require_gh
   hub::require_repo
-  top=$(hub::toplevel)
   if ((${#operands[@]} == 0)); then
     host=$(hub::host) && repo=$(hub::repo_name) || exit 1
   else
@@ -75,7 +75,7 @@ hub_cmd_create() {
       repo=${operands[0]%.git}
     fi
   fi
-  if ! hub::is_shorthand "$repo"; then
+  if ! hub::is_shorthand "${owner:+$owner/}$repo"; then
     hub::die "not a repository: $(hub::shown "${operands[0]-$repo}")" \
       '(use NAME, OWNER/NAME, HOST/OWNER/NAME or a repository URL)'
   fi
@@ -88,13 +88,12 @@ hub_cmd_create() {
   [[ -n $owner ]] || owner=$(hub::login "$host") || exit 1
   url=$(hub::clone_url "$host" "$owner" "$repo")
 
-  cmd=(repo create "$host/$owner/$repo" --source="$top" --remote="$remote" "$visibility")
+  # Not gh's --source and --remote: gh refuses a linked or separate git directory.
+  cmd=(repo create "$host/$owner/$repo" "$visibility")
   [[ -z $description ]] || cmd+=(--description "$description")
   [[ -z $homepage ]] || cmd+=(--homepage "$homepage")
   hub::gh "${cmd[@]}" || exit
-  if current=$(hub::git_query remote get-url -- "$remote") && [[ $current != "$url" ]]; then
-    hub::git remote set-url -- "$remote" "$url" || exit
-  fi
+  hub::git remote add -- "$remote" "$url" || exit
   # Not gh's --push: from some layouts it mirrors every ref.
   if ((push)); then hub::git push --set-upstream "$remote" HEAD || exit; fi
   url=https://$host/$owner/$repo
