@@ -101,7 +101,7 @@ stub_create() { stub_gh 'pr create *' 'https://github.com/mislav/dotfiles/pull/1
   git commit -q --allow-empty -m 'Fix it more'
   stub_create
   run hub --noop pull-request -p -m 'Fix the bug'
-  assert_line_equals 0 'git push origin HEAD:refs/heads/feature'
+  assert_line_equals 0 'git push -- origin HEAD:refs/heads/feature'
   run hub pull-request -p -m 'Fix the bug'
   assert_success
   assert_equals "$(server_ref mislav/dotfiles refs/heads/feature)" "$(tip feature)"
@@ -142,6 +142,44 @@ stub_create() { stub_gh 'pr create *' 'https://github.com/mislav/dotfiles/pull/1
   assert_equals "$(server_branches octocat/dotfiles)" main
   assert_equals "$(git config branch.feature.remote)" mislav
   assert_gh_called 'pr create --repo github.com/octocat/dotfiles --head mislav:feature --title *'
+}
+
+@test "hub pull-request -p replaces a start point on origin with the branch on your fork" {
+  fork_repo
+  git branch -q --set-upstream-to=origin/main feature
+  stub_create
+  run hub pull-request -p -m 'Fix the bug'
+  assert_success
+  assert_equals "$(server_ref mislav/dotfiles refs/heads/feature)" "$(tip feature)"
+  assert_equals "$(git config branch.feature.remote)" mislav
+  assert_equals "$(git config branch.feature.merge)" refs/heads/feature
+  git commit -q --allow-empty -m 'Fix it more'
+  run git push -q
+  assert_success
+  assert_equals "$(server_ref mislav/dotfiles refs/heads/feature)" "$(tip feature)"
+}
+
+@test "hub pull-request -p keeps a start point on origin when pushDefault names your fork" {
+  fork_repo
+  git branch -q --set-upstream-to=origin/main feature
+  git config remote.pushDefault mislav
+  stub_create
+  run hub pull-request -p -m 'Fix the bug'
+  assert_success
+  assert_equals "$(server_ref mislav/dotfiles refs/heads/feature)" "$(tip feature)"
+  assert_equals "$(git config branch.feature.remote)" origin
+  assert_equals "$(git config branch.feature.merge)" refs/heads/main
+}
+
+@test "hub pull-request -p pushes to a remote whose name starts with a dash" {
+  feature_repo
+  git remote add -- --all https://github.com/mislav/dotfiles.git
+  git config branch.feature.pushRemote --all
+  stub_create
+  run hub pull-request -p -m 'Fix the bug'
+  assert_success
+  assert_equals "$(server_ref mislav/dotfiles refs/heads/feature)" "$(tip feature)"
+  assert_equals "$(git config branch.feature.remote)" --all
 }
 
 @test "hub pull-request spells the head's owner as the push URL does" {
@@ -320,7 +358,7 @@ stub_create() { stub_gh 'pr create *' 'https://github.com/mislav/dotfiles/pull/1
   run hub pull-request -p -h feature -m 'Fix the bug'
   assert_status 1
   assert_output_equals \
-    'hub pull-request: -p pushes the current branch; push the head yourself and name it with -h'
+    'hub pull-request: -p pushes the current branch (push the head yourself, and name it with -h)'
   assert_equals "$(server_branches mislav/dotfiles)" main
   assert_gh_not_called
 }
@@ -349,6 +387,7 @@ stub_create() { stub_gh 'pr create *' 'https://github.com/mislav/dotfiles/pull/1
   assert_output_equals \
     'hub pull-request: origin does not push to a GitHub repository (name the head with -h)'
   git remote set-url origin https://ghe.example.com/mislav/dotfiles.git
+  stub_gh 'config get user -h ghe.example.com' mislav
   GH_HOST=ghe.example.com run hub pull-request -p -m 'Fix the bug'
   assert_status 1
   assert_output_equals \
@@ -487,8 +526,8 @@ stub_create() { stub_gh 'pr create *' 'https://github.com/mislav/dotfiles/pull/1
   feature_repo
   run hub pull-request -p </dev/null
   assert_status 1
-  local expected='hub pull-request: give the title and body with -m or -F'
-  expected+=' (gh prompts for them only in a terminal)'
+  local expected='hub pull-request: gh prompts for the title and body, which needs a terminal'
+  expected+=' (give the message with -m or -F)'
   assert_output_equals "$expected"
   run in_terminal "$HUB_BIN" pull-request -p </dev/null
   assert_status 1
@@ -688,7 +727,7 @@ stub_create() { stub_gh 'pr create *' 'https://github.com/mislav/dotfiles/pull/1
   feature_repo
   run hub --noop pull-request -p -m 'Fix the bug'
   assert_success
-  assert_line_equals 0 'git push --set-upstream origin HEAD:refs/heads/feature'
+  assert_line_equals 0 'git push --set-upstream -- origin HEAD:refs/heads/feature'
   assert_line_equals 1 \
     "gh $DOTFILES --head feature --title Fix\\ the\\ bug --body ''"
   assert_equals "$(server_branches mislav/dotfiles)" main
@@ -702,15 +741,20 @@ stub_create() { stub_gh 'pr create *' 'https://github.com/mislav/dotfiles/pull/1
   assert_line_equals 0 'hub pull-request: unknown option: --fill'
   assert_line_equals 1 "$USAGE"
   run hub pull-request -pw
+  assert_status 1
   assert_line_equals 0 'hub pull-request: unknown option: -w'
   run hub pull-request -p https://github.com/mislav/dotfiles/issues/1
+  assert_status 1
   assert_line_equals 0 \
     'hub pull-request: unexpected argument: https://github.com/mislav/dotfiles/issues/1'
   run hub pull-request -p -- extra
+  assert_status 1
   assert_line_equals 0 'hub pull-request: unexpected argument: extra'
   run hub pull-request -p -m
+  assert_status 1
   assert_line_equals 0 'hub pull-request: -m needs a value'
   run hub pull-request -p --head
+  assert_status 1
   assert_line_equals 0 'hub pull-request: --head needs a value'
   run hub pull-request -p -h
   assert_status 1

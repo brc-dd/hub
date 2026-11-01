@@ -1,8 +1,8 @@
 # shellcheck shell=bash
 # Summary: Open a pull request for the current branch.
 # Usage: hub pull-request [-fpdoc] [-b [OWNER[/REPO]:]BASE] [-h [OWNER:]HEAD] [-m MESSAGE]...
-#                         [-F FILE] [-e | --no-edit] [-r REVIEWERS] [-a ASSIGNEES] [-M MILESTONE]
-#                         [-l LABELS] [--no-maintainer-edits]
+#                         [-F FILE] [-e | --no-edit] [-r LIST] [-a LIST] [-M MILESTONE] [-l LIST]
+#                         [--no-maintainer-edits]
 #
 # hub's own command: these are all of its options. Runs gh pr create in the project, or in
 # OWNER's copy of it with -b OWNER:BASE. Without -h the head is the current branch, under its
@@ -14,26 +14,25 @@
 # --no-edit, gh asks for them, which needs a terminal, as -e does.
 #
 # Options:
-#   -m, --message MESSAGE   A paragraph of the message; repeat it for more.
-#   -F, --file FILE         Read the message from FILE (- is standard input).
-#   -e, --edit              Write the message in gh's editor (in a terminal), from -m or -F.
-#       --no-edit           Take the message from the first commit (gh's --fill-first).
-#   -b, --base BASE         The branch to merge into: BRANCH, OWNER:BRANCH or OWNER/REPO:BRANCH.
-#   -h, --head HEAD         The branch with the changes, BRANCH or OWNER:BRANCH; not checked.
-#   -p, --push              Push the current branch first (git push [-u] REMOTE HEAD:BRANCH).
-#   -f, --force             Skip the check that the current branch is pushed.
-#   -d, --draft             Open it as a draft.
-#   -r, --reviewer LIST     Request reviews from these users or ORG/TEAMs (comma-separated).
-#   -a, --assign LIST       Assign these users (comma-separated).
-#   -M, --milestone NAME    Add it to this milestone.
-#   -l, --labels LIST       Add these labels (comma-separated).
-#       --no-maintainer-edits
-#                           Do not let maintainers push to the head branch.
-#   -o, --browse            Open the pull request in the browser.
-#   -c, --copy              Copy the pull request's URL.
+#   -m, --message MESSAGE      A paragraph of the message; repeat it for more.
+#   -F, --file FILE            Read the message from FILE (- is standard input).
+#   -e, --edit                 Write the message in gh's editor (in a terminal), from -m or -F.
+#       --no-edit              Take the message from the first commit (gh's --fill-first).
+#   -b, --base BASE            The branch to merge into: BRANCH, OWNER:BRANCH or OWNER/REPO:BRANCH.
+#   -h, --head HEAD            The branch with the changes, BRANCH or OWNER:BRANCH; not checked.
+#   -p, --push                 Push the current branch first (git push [-u] REMOTE HEAD:BRANCH).
+#   -f, --force                Skip the check that the current branch is pushed.
+#   -d, --draft                Open it as a draft.
+#   -r, --reviewer LIST        Request reviews from these users or ORG/TEAMs (comma-separated).
+#   -a, --assign LIST          Assign these users (comma-separated).
+#   -M, --milestone MILESTONE  Add it to this milestone.
+#   -l, --labels LIST          Add these labels (comma-separated).
+#       --no-maintainer-edits  Do not let maintainers push to the head branch.
+#   -o, --browse               Open the pull request in the browser.
+#   -c, --copy                 Copy the pull request's URL.
 #
 #   $ hub pull-request -p -m 'Fix the bug'
-#   > git push --set-upstream origin HEAD:refs/heads/feature
+#   > git push --set-upstream -- origin HEAD:refs/heads/feature
 #   > gh pr create --repo github.com/mislav/dotfiles --head feature --title 'Fix the bug' --body ''
 #   $ hub pull-request -b alice:main -F message.txt -r bob
 #   > gh pr create --repo github.com/alice/dotfiles --base main --head mislav:feature ...
@@ -91,7 +90,7 @@ hub_cmd_pull_request() {
   [[ -z $head || $no_edit == 0 ]] \
     || hub::usage_error '--no-edit cannot be used with -h (give the message with -m or -F)'
   [[ -z $head || $push == 0 ]] \
-    || hub::die '-p pushes the current branch; push the head yourself and name it with -h'
+    || hub::die '-p pushes the current branch (push the head yourself, and name it with -h)'
   ((! have_file)) || [[ -n $file ]] || hub::usage_error '-F needs a file name'
 
   if ((have_file)); then
@@ -111,7 +110,8 @@ hub_cmd_pull_request() {
     ((! edit)) || hub::die "-e opens gh's editor, which needs a terminal (give the message with" \
       '-m or -F)'
     ((have_file || ${#messages[@]} || no_edit)) \
-      || hub::die 'give the title and body with -m or -F (gh prompts for them only in a terminal)'
+      || hub::die 'gh prompts for the title and body, which needs a terminal (give the message' \
+        'with -m or -F)'
   fi
   ((! edit)) || create+=(--editor)
   ((! no_edit)) || create+=(--fill-first)
@@ -219,14 +219,22 @@ _hub_pull_request_check_pushed() {
 
 # _hub_pull_request_push BRANCH REMOTE : push HEAD as BRANCH to REMOTE, -u unless it is tracked.
 _hub_pull_request_push() {
-  local up_remote up_ref
+  local up_remote up_ref set_upstream=1
   read -r up_remote up_ref < <(git for-each-ref \
     --format='%(upstream:remotename) %(upstream:remoteref)' "refs/heads/$1")
-  # A local upstream (remote .) is a start point; one on another remote is a triangular setup.
-  [[ $up_remote != . ]] || up_remote=''
-  if [[ -z $up_remote || ($up_remote == "$2" && $up_ref != "refs/heads/$1") ]]; then
-    hub::git push --set-upstream "$2" "HEAD:refs/heads/$1"
+  # An upstream of the branch's own name is where it is tracked (on another remote: a triangular
+  # setup). Another one is a start point (checkout -b fix origin/main) that git push refuses,
+  # unless pushRemote or pushDefault sends pushes elsewhere on purpose.
+  if [[ $up_remote != . && $up_ref == "refs/heads/$1" ]]; then
+    set_upstream=0
+  elif [[ -n $up_remote && $up_remote != . && $up_remote != "$2" ]] \
+    && { git config "branch.$1.pushRemote" || git config remote.pushDefault; } >/dev/null; then
+    set_upstream=0
+  fi
+  # -- keeps a remote whose name starts with a dash from being read as an option.
+  if ((set_upstream)); then
+    hub::git push --set-upstream -- "$2" "HEAD:refs/heads/$1"
   else
-    hub::git push "$2" "HEAD:refs/heads/$1"
+    hub::git push -- "$2" "HEAD:refs/heads/$1"
   fi
 }

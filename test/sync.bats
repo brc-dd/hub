@@ -150,7 +150,7 @@ $warning diverged seems to contain unpushed commits"
   run hub sync
   assert_success
   assert_output_equals \
-    "$warning topic is merged and deleted on origin; switch to another branch to delete it"
+    "$warning topic is merged and deleted on origin (switch to another branch to delete it)"
   assert_equals "$(git symbolic-ref HEAD)" refs/heads/topic
   assert_equals "$(tip topic)" "$was"
 }
@@ -223,6 +223,33 @@ Updated branch main (was $(short "$was_main"))."
   assert_equals "$(git config branch.main.remote)" origin
   assert_equals "$(git rev-parse --verify --quiet refs/remotes/origin/topic)" ''
   assert_gh_not_called
+}
+
+@test "hub sync in a fork's clone says nothing once main matches upstream's" {
+  serve_github octo/dotfiles mislav/dotfiles
+  clone_served mislav/dotfiles
+  git remote add upstream https://github.com/octo/dotfiles.git
+  was=$(tip main)
+  main=$(server_commit octo/dotfiles main 'new upstream')
+  run hub sync
+  assert_success
+  assert_output_equals "Updated branch main (was $(short "$was"))."
+  run hub sync
+  assert_success
+  assert_output_equals ''
+  assert_equals "$(tip main)" "$main"
+}
+
+@test "hub sync in a fork's clone warns about commits on main that upstream lacks" {
+  serve_github octo/dotfiles mislav/dotfiles
+  clone_served mislav/dotfiles
+  git remote add upstream https://github.com/octo/dotfiles.git
+  commit_on main 'mine'
+  was=$(tip main)
+  run hub sync
+  assert_success
+  assert_output_equals "$warning main seems to contain unpushed commits"
+  assert_equals "$(tip main)" "$was"
 }
 
 @test "hub sync REMOTE syncs that remote and the remotes its branches track, nothing else" {
@@ -489,6 +516,39 @@ Updated branch main (was $(short "$was_main"))."
   assert_equals "$(tip main)" "$was"
 }
 
+@test "hub sync fast-forwards a branch whose upstream is a local branch it updated first" {
+  serve_github mislav/dotfiles
+  clone_served mislav/dotfiles
+  was=$(tip main)
+  git branch -q -t localup refs/heads/main
+  git branch -q -t other refs/heads/main
+  git switch -q localup
+  main=$(server_commit mislav/dotfiles main 'new on main')
+  run hub sync
+  assert_success
+  assert_line_equals 0 "Updated branch main (was $(short "$was"))."
+  assert_equals "${#lines[@]}" 3
+  assert_equals "$(tip localup)" "$main"
+  assert_equals "$(tip other)" "$main"
+  git switch -q main
+  main=$(server_commit mislav/dotfiles main 'newer on main')
+  run hub sync
+  assert_success
+  assert_equals "$(tip localup)" "$main"
+  assert_equals "$(tip other)" "$main"
+}
+
+@test "hub sync fast-forwards the current branch when a tag has its name" {
+  serve_github mislav/dotfiles
+  clone_served mislav/dotfiles
+  git tag main
+  main=$(server_commit mislav/dotfiles main 'new on main')
+  run hub sync
+  assert_success
+  assert_equals "$(tip main)" "$main"
+  assert_equals "$(git rev-parse HEAD)" "$main"
+}
+
 @test "hub sync leaves a branch whose upstream is a deleted local branch alone" {
   serve_github mislav/dotfiles
   clone_served mislav/dotfiles
@@ -569,6 +629,12 @@ Updated branch main (was $(short "$was_main"))."
   run hub sync -- -x
   assert_status 1
   assert_output_equals 'hub sync: not a remote: -x'
+  run hub sync ''
+  assert_status 1
+  assert_output_equals "hub sync: not a remote: ''"
+  run hub sync $'a\nhub sync: done'
+  assert_status 1
+  assert_output_equals "hub sync: not a remote: \$'a\\nhub sync: done'"
   assert_equals "$(git rev-parse refs/remotes/origin/main)" "$was"
   assert_gh_not_called
 }
@@ -577,7 +643,7 @@ Updated branch main (was $(short "$was_main"))."
   make_repo work origin=https://gitlab.com/mislav/dotfiles.git
   run hub sync
   assert_status 1
-  assert_output_equals 'hub sync: no GitHub remote found; name the remote to sync'
+  assert_output_equals 'hub sync: no GitHub remote found (name the remote to sync)'
   assert_gh_not_called
 }
 
@@ -594,6 +660,7 @@ Updated branch main (was $(short "$was_main"))."
     'Summary: Fetch and fast-forward or delete local branches to match the remotes.'
   assert_line_equals 1 'Usage: hub sync [REMOTE]'
   run hub sync -h
+  assert_success
   assert_line_equals 1 'Usage: hub sync [REMOTE]'
   run hub help sync
   assert_success

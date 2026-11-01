@@ -5,7 +5,7 @@
 # hub's own command: these are all of its options. Fetches REMOTE (default: the project's
 # remote, upstream before github and origin) and every other remote a local branch tracks, with
 # git fetch --prune and your fetch settings, then goes through the local branches, the current
-# one last:
+# one after the others and those that track a local branch at the end:
 #
 #   the default branch, behind REMOTE's      fast-forwarded from REMOTE, whatever it tracks
 #   behind its upstream                      fast-forwarded
@@ -14,13 +14,14 @@
 #     default branch                           to the default branch, when that exists here)
 #   upstream deleted, not merged             left alone, with a warning
 #
-# Symbolic refs, branches without an upstream and branches whose upstream is a local branch or
-# on a remote that could not be fetched are left alone; a squash-merged branch counts as not
-# merged. Local commits are never discarded: git refuses non-fast-forwards and branches checked
-# out in another work tree, and its message is shown. The default branch is
-# refs/remotes/REMOTE/HEAD (git remote set-head REMOTE --auto corrects it), else gh's answer
-# for a GitHub remote; when neither knows it, no branch is deleted. sync tries every branch and
-# exits 1 when an update or a deletion failed.
+# Symbolic refs and branches without an upstream are left alone. A branch whose upstream is a
+# local branch, or on a remote that could not be fetched, is never deleted; a squash-merged
+# branch counts as not merged. The default branch is held against its own upstream only when it
+# has commits that REMOTE's lacks. Local commits are never discarded: git refuses
+# non-fast-forwards and branches checked out in another work tree, and its message is shown.
+# The default branch is refs/remotes/REMOTE/HEAD (git remote set-head REMOTE --auto corrects
+# it), else gh's answer for a GitHub remote; when neither knows it, no branch is deleted. sync
+# tries every branch and exits 1 when an update or a deletion failed.
 #
 #   $ hub sync
 #   > git fetch --prune --quiet -- upstream
@@ -29,10 +30,10 @@
 #   Updated branch main (was 1a2b3c4).
 
 hub_cmd_sync() {
-  local remote='' default='' current='' failed=0 line name oid symref tracked upstream track r
+  local remote='' default='' current='' failed=0 line name oid symref tracked upstream track r there
   local host owner repo
   local format='%(refname:lstrip=2)%1f%(objectname)%1f%(symref)%1f%(upstream:remotename)'
-  local -a operands=() lines=() last=() fetched=() others=()
+  local -a operands=() lines=() locals=() last=() fetched=() others=()
   format+='%1f%(upstream)%1f%(upstream:track,nobracket)'
   hub::normalize_opts '' '' "$@"
   set -- "${HUB_ARGS[@]}"
@@ -45,18 +46,18 @@ hub_cmd_sync() {
     esac
     shift
   done
-  ((${#operands[@]} <= 1)) || hub::usage_error "unexpected argument: ${operands[1]}"
+  ((${#operands[@]} <= 1)) || hub::usage_error "unexpected argument: $(hub::shown "${operands[1]}")"
   hub::require_repo
   if ((${#operands[@]})); then
     remote=${operands[0]}
-    hub::remote_exists "$remote" || hub::die "not a remote: $remote"
+    hub::remote_exists "$remote" || hub::die "not a remote: $(hub::shown "$remote")"
   elif [[ -n ${GH_REPO-} ]]; then
     # An invalid GH_REPO dies here with its own message.
     hub::project >/dev/null
     remote=$(hub::project_remote) \
       || hub::die "no remote points to GH_REPO: $GH_REPO (name the remote to sync)"
   else
-    remote=$(hub::project_remote) || hub::die 'no GitHub remote found; name the remote to sync'
+    remote=$(hub::project_remote) || hub::die 'no GitHub remote found (name the remote to sync)'
   fi
   # A branch's track is only right once the remote it tracks was fetched too. remotename is "."
   # for a local upstream, and empty for a URL and a remote without configuration.
@@ -73,19 +74,34 @@ hub_cmd_sync() {
   default=$(hub::default_branch "$host" "$owner" "$repo" "$remote") || default=''
   current=$(hub::current_branch) || current=''
   # The unit separator keeps empty fields: a run of spaces would merge them.
+  # Branches tracking a local branch come at the end, as the branch they track may move first.
   while IFS= read -r line; do
-    if [[ ${line%%$'\x1f'*} == "$current" ]]; then last=("$line"); else lines+=("$line"); fi
+    IFS=$'\x1f' read -r name _ _ tracked _ <<<"$line"
+    if [[ $name == "$current" ]]; then
+      last=("$line")
+    elif [[ $tracked == . ]]; then
+      locals+=("$line")
+    else
+      lines+=("$line")
+    fi
   done < <(git for-each-ref --format="$format" refs/heads)
-  for line in "${lines[@]}" "${last[@]}"; do
+  for line in "${lines[@]}" "${last[@]}" "${locals[@]}"; do
     IFS=$'\x1f' read -r name oid symref tracked upstream track <<<"$line"
     [[ -z $symref ]] || continue
-    # The project's copy is the source of truth for the default branch, even in a fork's clone.
+    # The project's copy is the source of truth for the default branch, even in a fork's clone:
+    # once it has every commit of the branch, what the branch tracks does not matter.
     if [[ -n $default && $name == "$default" ]] \
-      && _hub_sync_behind "$oid" "refs/remotes/$remote/$default"; then
-      _hub_sync_update "$name" "$oid" "refs/remotes/$remote/$default" "$current" || failed=1
+      && there=$(git rev-parse --verify --quiet "refs/remotes/$remote/$default") \
+      && git merge-base --is-ancestor "$oid" "$there"; then
+      if [[ $there != "$oid" ]]; then
+        _hub_sync_update "$name" "$oid" "refs/remotes/$remote/$default" "$current" || failed=1
+      fi
       continue
     fi
     [[ -n $tracked ]] || continue
+    if [[ $tracked == . ]]; then
+      track=$(git for-each-ref --format='%(upstream:track,nobracket)' "refs/heads/$name")
+    fi
     case $track in
       behind*) _hub_sync_update "$name" "$oid" "$upstream" "$current" || failed=1 ;;
       ahead*) hub::warn "$name seems to contain unpushed commits" ;;
@@ -110,13 +126,6 @@ hub_cmd_sync() {
   return "$failed"
 }
 
-# _hub_sync_behind OID REF : REF exists and is ahead of OID.
-_hub_sync_behind() {
-  local there
-  there=$(git rev-parse --verify --quiet "$2") || return 1
-  [[ $there != "$1" ]] && git merge-base --is-ancestor "$1" "$there"
-}
-
 # _hub_sync_update BRANCH OID REF CURRENT : fast-forward BRANCH, at OID, to REF.
 _hub_sync_update() {
   if [[ $1 == "$4" ]]; then
@@ -133,7 +142,7 @@ _hub_sync_update() {
 _hub_sync_delete() {
   if [[ $1 == "$3" ]]; then
     if ! git show-ref --verify --quiet "refs/heads/$2"; then
-      hub::warn "$1 is merged and deleted on $4; switch to another branch to delete it"
+      hub::warn "$1 is merged and deleted on $4 (switch to another branch to delete it)"
       return 0
     fi
     hub::git switch --quiet --no-guess "$2" || return
