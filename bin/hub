@@ -61,9 +61,10 @@ if [[ ${1-} == --run && -n ${HUB_REEXEC-} ]]; then
   # git exports the git directory it found; without GIT_WORK_TREE, git would then take the
   # current directory for the top of the work tree. From a bare repository or a .git directory
   # it also exports GIT_IMPLICIT_WORK_TREE=0, which would leave a clone's hooks and submodules
-  # without a work tree.
+  # without a work tree. GIT_CONFIG points git config, but no other git command, at another
+  # file, so hub would read the repository's settings from a file git push never reads.
   [[ ${HUB_KEEP_GIT_DIR-} == 1 ]] || unset GIT_DIR GIT_IMPLICIT_WORK_TREE
-  unset HUB_KEEP_GIT_DIR
+  unset HUB_KEEP_GIT_DIR GIT_CONFIG
   export HUB_COMMAND=${1-}
   shift
   if [[ ! $HUB_COMMAND =~ ^[a-z][a-z0-9-]*$ || ! -f $HUB_LIB/cmd/$HUB_COMMAND.sh ]]; then

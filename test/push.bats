@@ -173,6 +173,17 @@ setup_push() {
   assert_equals "$(server_ref mislav/three refs/heads/feature)" "$(tip feature)"
 }
 
+@test "hub push reads the remote's push refspec from the repository, not from GIT_CONFIG" {
+  setup_push
+  git config remote.two.push refs/heads/main:refs/heads/from-main
+  : >"$HUB_TEST_TMP/empty.cfg"
+  export GIT_CONFIG=$HUB_TEST_TMP/empty.cfg
+  run hub push origin,two
+  assert_success
+  assert_equals "$(server_ref mislav/one refs/heads/feature)" "$(tip feature)"
+  assert_equals "$(server_branches mislav/two)" "$(printf '%s\n' from-main main)"
+}
+
 @test "hub push --delete with a list alone deletes nothing" {
   setup_push
   git push -q origin feature
