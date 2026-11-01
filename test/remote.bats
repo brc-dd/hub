@@ -362,6 +362,36 @@ ghe_hosts() {
   assert_gh_not_called
 }
 
+@test "remote add and set-url keep a remote's name that git also rewrites through insteadOf" {
+  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git \
+    alice=https://github.com/alice/dotfiles.git
+  git config url."$HUB_TEST_TMP/team.git".insteadOf alice
+  run hub remote add target alice
+  assert_success
+  assert_equals "$(url_of target)" alice
+  run hub remote set-url origin alice
+  assert_success
+  assert_equals "$(url_of origin)" alice
+  assert_gh_not_called
+}
+
+@test "remote add expands a remote's name that only pushInsteadOf rewrites" {
+  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git \
+    alice=https://github.com/alice/dotfiles.git
+  git config url.git@corp.example.test:.pushInsteadOf alice
+  run hub remote add target alice
+  assert_success
+  assert_equals "$(url_of target)" https://github.com/alice/dotfiles.git
+}
+
+@test "remote add keeps a word that a -c insteadOf rewrites" {
+  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
+  run hub -c url.git@corp.example.test:.insteadOf=corp/ remote add up corp/proj
+  assert_success
+  assert_equals "$(url_of up)" corp/proj
+  assert_gh_not_called
+}
+
 @test "remote add NAME origin expands origin when origin is a remote" {
   make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
   run hub remote add work origin

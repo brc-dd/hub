@@ -122,6 +122,16 @@ hub::remote_exists() {
   git remote get-url -- "$1" >/dev/null 2>&1
 }
 
+# hub::rewritten WORD : git rewrites WORD through url.BASE.insteadOf (a value is a prefix of it).
+hub::rewritten() {
+  local entry
+  # -z ends the key at the first newline; pushInsteadOf is git's rule for push URLs only.
+  while IFS= read -r -d '' entry; do
+    [[ $1 != "${entry#*$'\n'}"* ]] || return 0
+  done < <(git config -z --get-regexp '^url\..*\.insteadof$' 2>/dev/null)
+  return 1
+}
+
 # hub::valid_remote_name NAME : NAME can name a remote.
 hub::valid_remote_name() { [[ $1 != -* ]] && git check-ref-format "refs/remotes/$1/HEAD"; }
 

@@ -190,6 +190,26 @@ parses_to() {
   done
 }
 
+@test "rewritten reads url.BASE.insteadOf as git does" {
+  make_repo r origin=https://github.com/o/r.git
+  git config url.git@corp.example.test:.insteadOf corp/
+  git config url.EXACT.INSTEADOF alice
+  git config url.MULTI.insteadOf m1
+  git config --add url.MULTI.insteadOf m2
+  git config url.PUSH.pushInsteadOf pushonly
+  hub::rewritten corp/proj
+  hub::rewritten alice
+  hub::rewritten alicex
+  hub::rewritten m1
+  hub::rewritten m2
+  GIT_CONFIG_PARAMETERS="'url.CC.insteadOf=cc'" hub::rewritten cc
+  local word
+  for word in corp xalice pushonly cc origin; do
+    run hub::rewritten "$word"
+    assert_failure
+  done
+}
+
 @test "require_new_remote refuses a name that cannot be a remote's, or is one" {
   make_repo r origin=https://github.com/o/r.git
   run hub::require_new_remote fresh

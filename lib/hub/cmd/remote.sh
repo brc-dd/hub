@@ -9,8 +9,9 @@
 # every other word as given. REPO defaults to the project's repository name, else the name of
 # the repository's directory. With one operand, USER names both the remote and the owner, and
 # origin alone means your own copy of the repository. With two operands, a word git can read
-# as a local path stays a path. URLs, paths, a word git rewrites through url.BASE.insteadOf,
-# set-url --delete, set-url with OLDURL and the other subcommands are plain git remote.
+# as a local path stays a path. URLs, paths, a word git rewrites through url.BASE.insteadOf
+# (a remote's name too), set-url --delete, set-url with OLDURL and the other subcommands are
+# plain git remote.
 #
 # Options:
 #   -p   Use an ssh URL. Otherwise gh's git_protocol decides (gh config set git_protocol ssh),
@@ -62,13 +63,10 @@ hub_cmd_remote() {
       spec=${args[slot]}
       # git resolves a relative path from the top of the work tree; one that exists here counts too.
       top=$(hub::toplevel) || top=$(hub::git_query rev-parse --absolute-git-dir)
-      # x/..git and .git stay git's, as for clone. git prints the word unchanged unless it is
-      # a remote or an insteadOf rewrite; a remote's name still reads as an owner.
+      # x/..git and .git stay git's, as for clone; a remote's name still reads as an owner.
       if ! hub::is_shorthand "${spec%.git}" || hub::local_source "$spec" \
         || (cd "$top" && hub::local_source "$spec") \
-        || { [[ $spec != */* ]] && ! hub::is_owner "$spec"; } \
-        || { ! hub::remote_exists "$spec" \
-          && [[ $(hub::git_query ls-remote --get-url -- "$spec") != "$spec" ]]; }; then
+        || { [[ $spec != */* ]] && ! hub::is_owner "$spec"; } || hub::rewritten "$spec"; then
         hub::exec_git remote "${args[@]}"
       fi
       ;;
