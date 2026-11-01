@@ -324,9 +324,10 @@ found ../deep/file"
   assert_output_equals "hub: git on PATH is hub itself: ./git ($fix)"
   local real
   real=$(command -v git)
-  run bounded 20 /usr/bin/env PATH="${real%/*}:$HUB_TEST_TMP/tools:" "$HUB_BIN" --version
+  # A plain git line: hub's own commands would need more than git and bash on PATH.
+  run bounded 20 /usr/bin/env PATH="${real%/*}:$HUB_TEST_TMP/tools:" "$HUB_BIN" --exec-path
   assert_success
-  assert_output_contains 'git version'
+  assert_output_contains git-core
 }
 
 @test "a hub command run from inside a .git directory gives git's commands a work tree" {
