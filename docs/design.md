@@ -106,6 +106,14 @@ examples (`$ hub ...` followed by `> git ...` or `> gh ...`). `hub help` lists
 the Summary lines, the completions use them as descriptions, and a test checks
 that the completions offer exactly each `Options:` block.
 
+**The website reads the same headers.** `script/site` renders each header as
+a page, so a header follows the rules the pages rely on: the Summary line,
+the Usage lines up to the first blank line, then blocks separated by blank
+lines. In a block, unindented lines are a paragraph that the browser reflows,
+lines indented by two or more spaces are preformatted, and an unindented line
+ending in a colon right before indented lines, such as `Options:`, is a
+heading.
+
 **Shared logic is `hub::*`.** Logic that two or more modules use lives in
 `core.sh` as `hub::name`, with a one-line contract
 (`# hub::name ARGS : what it gives.`). A helper prints its answer on stdout

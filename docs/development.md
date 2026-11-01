@@ -12,6 +12,7 @@ make lint         # shellcheck (--severity=warning on *.bats), 100 columns, acti
 make fmt          # shfmt -w (its settings live in .editorconfig)
 make fmt-check    # shfmt -d
 make selftest     # script/update-formula --self-test
+make site         # script/site site: the manuals as HTML in site/, which git ignores
 make install      # symlinks under PREFIX (/usr/local); make uninstall removes them
 ```
 
@@ -29,9 +30,9 @@ completions/            hub.bash, hub.zsh, hub.fish
 test/NAME.bats          one file per module, plus dispatch, core, harness, completions, script-*
 test/test_helper.bash   setup, fixtures and assertions
 test/stubs/             gh, ssh, git-remote-https, browser (open, xdg-open), pbcopy (xclip, wl-copy)
-script/                 bump, release, stable-tag, update-formula
+script/                 bump, release, site, stable-tag, update-formula
 Formula/hub.rb          Homebrew formula (this repository is its own tap)
-.github/                ci.yml, release.yml, actions.lock, dependabot.yml
+.github/                ci.yml, release.yml, pages.yml, actions.lock, dependabot.yml
 ```
 
 ## Tests
@@ -82,13 +83,37 @@ pre-release for a tag with a `-`), publishes a draft, or leaves a published
 release alone. For a stable tag, the `formula` job points `Formula/hub.rb` at
 the highest published stable tag, pushing `Formula: hub TAG` when it changes.
 
+## Manuals website
+
+`script/site DIR` renders the module headers as static HTML with no script or
+external resource: `DIR/index.html`, the manual of `bin/hub` with the list of
+commands, and `DIR/NAME.html` for every module. A page holds the Summary
+line, the Usage lines up to the first blank line, then the blocks: unindented
+lines are a paragraph that the browser reflows, lines indented by two or more
+spaces are preformatted, and an unindented line ending in a colon before
+indented lines is a heading. `test/script-site.bats` checks that the text of
+a command page is what `hub help NAME` prints and that the index holds
+`bin/hub`'s header, and that two runs on one commit write the same bytes.
+
+The Pages workflow (`.github/workflows/pages.yml`) builds the site and
+deploys it to https://brc-dd.github.io/hub/ on every push to `main` that
+changes `bin/hub`, a module, `script/site`, `VERSION`, `Formula/hub.rb` or the
+workflow, and on `gh workflow run pages.yml`. It skips forks, and a new run
+waits for a deployment in progress to finish. A repository admin enables Pages
+once with the GitHub Actions source, under Settings > Pages > Build and
+deployment > Source, or with the line below; until then the deploy job fails.
+
+```sh
+gh api -X POST repos/brc-dd/hub/pages -f build_type=workflow
+```
+
 ## Workflows
 
 `.github/workflows/actions.lock`, written by
 [`gh actions-lock`](https://github.com/github/gh-actions-lock), records the
-commits of the `uses:` tags. After changing a `uses:` line, run
-`gh actions-lock`; CI runs `gh actions-lock --verify`. Dependabot updates the
-actions weekly with a 7-day cooldown. zizmor before 1.32 does not read the
+commits of the `uses:` tags in every workflow. After changing a `uses:` line,
+run `gh actions-lock`; CI runs `gh actions-lock --verify`. Dependabot updates
+the actions weekly with a 7-day cooldown. zizmor before 1.32 does not read the
 lockfile and reports unpinned actions:
 
 ```sh

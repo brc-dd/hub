@@ -6,6 +6,13 @@ All notable changes to hub are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- A manuals website at https://brc-dd.github.io/hub/: `script/site DIR`
+  (`make site`) renders the manuals that `hub help` prints as static HTML,
+  and the Pages workflow publishes them on every push to `main` that changes
+  a manual.
+
 ## [0.3.0] - 2026-11-01
 
 ### Changed

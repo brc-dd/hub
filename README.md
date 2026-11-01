@@ -136,6 +136,8 @@ on GitHub.
 
 ## More
 
+- [Manuals](https://brc-dd.github.io/hub/): the manuals `hub help` prints,
+  as a website.
 - [docs/compatibility.md](docs/compatibility.md): hub 2.x's commands and
   options, and what this hub does with each.
 - [docs/design.md](docs/design.md): how hub works, and how to add a command.
