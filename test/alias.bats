@@ -77,3 +77,13 @@ load test_helper
   assert_line_equals 0 'Summary: Show how to make git run hub.'
   assert_line_equals 1 'Usage: hub alias [-s] [SHELL]'
 }
+
+@test "hub alias shows an unsupported shell with spaces or a newline quoted" {
+  local shells='bash, zsh, sh, ksh, dash, fish, csh, tcsh'
+  run hub alias 'fi sh'
+  assert_status 1
+  assert_output_equals "hub alias: unsupported shell: fi\\ sh (use one of $shells)"
+  run hub alias $'z\nsh'
+  assert_status 1
+  assert_output_equals "hub alias: unsupported shell: \$'z\\nsh' (use one of $shells)"
+}

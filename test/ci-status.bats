@@ -191,6 +191,10 @@ status() {
   run hub ci-status main:docs
   assert_status 1
   assert_output_equals "hub ci-status: main:docs is not a commit of $repo"
+  stub_object 'a b' null
+  run hub ci-status 'a b'
+  assert_status 1
+  assert_output_equals "hub ci-status: a\\ b is not a commit of $repo"
 }
 
 @test "hub ci-status refuses a HEAD name that does not resolve in the repository" {
@@ -200,6 +204,9 @@ status() {
   run hub ci-status '@{upstream}'
   assert_status 1
   assert_output_equals 'hub ci-status: @{upstream} is not a commit in this repository'
+  run hub ci-status $'HEAD~1\nx'
+  assert_status 1
+  assert_output_equals "hub ci-status: \$'HEAD~1\\nx' is not a commit in this repository"
   git checkout -q --orphan fresh
   run hub ci-status
   assert_status 1

@@ -48,7 +48,7 @@ hub_cmd_ci_status() {
   if ! expr=$(hub::git_query rev-parse --verify --quiet --end-of-options "$ref^{commit}"); then
     # GitHub would answer for its default branch: a name of the local HEAD must resolve here.
     if [[ $ref =~ ^(HEAD|@)([~^@{:]|$) ]] && hub::git_query rev-parse --git-dir >/dev/null; then
-      hub::die "$ref is not a commit in this repository"
+      hub::die "$(hub::shown "$ref") is not a commit in this repository"
     fi
     expr=$ref
   fi
@@ -71,7 +71,7 @@ hub_cmd_ci_status() {
   state=${contexts[0]}
   contexts=("${contexts[@]:1}")
   # GitHub answers a missing commit without an error, so the message is hub's.
-  [[ $state != MISSING ]] || hub::die "$ref is not a commit of $host/$owner/$repo"
+  [[ $state != MISSING ]] || hub::die "$(hub::shown "$ref") is not a commit of $host/$owner/$repo"
   case $state in
     SUCCESS) out=success rc=0 ;;
     PENDING | EXPECTED) out=pending rc=2 ;;

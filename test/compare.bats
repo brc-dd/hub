@@ -372,3 +372,24 @@ $page/feature"
   assert_status 1
   assert_output_contains 'not a git repository'
 }
+
+@test "hub compare shows an empty or multi-line word in its refusals quoted" {
+  make_repo work origin=https://github.com/mislav/dotfiles.git
+  run hub compare '' v1..v2
+  assert_status 1
+  assert_line_equals 0 "hub compare: not an owner: ''"
+  run hub compare $'al\nice' v1..v2
+  assert_status 1
+  assert_line_equals 0 "hub compare: not an owner: \$'al\\nice'"
+  run hub compare -b $'x\n..y'
+  assert_status 1
+  assert_line_equals 0 "hub compare: use either -b BASE or a range, not both: \$'x\\n..y'"
+  run hub compare -b develop $'a\n..b'
+  assert_status 1
+  assert_line_equals 0 "hub compare: use either -b BASE or a range, not both: \$'a\\n..b'"
+  run hub compare $'a\n..'
+  assert_status 1
+  assert_line_equals 0 "hub compare: not a range: \$'a\\n..'"
+  assert_line_equals 1 'Usage: hub compare [-u] [-c] [-b BASE] [OWNER] [[START...]END]'
+  assert_equals "$(opened)" ''
+}

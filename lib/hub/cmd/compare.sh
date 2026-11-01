@@ -54,18 +54,20 @@ hub_cmd_compare() {
   esac
   # The owner becomes a path segment of the URL.
   if ((${#operands[@]} == 2)) && ! hub::is_owner "$owner"; then
-    hub::usage_error "not an owner: $owner"
+    hub::usage_error "not an owner: $(hub::shown "$owner")"
   fi
   if ((${#operands[@]})) && [[ -z $range ]]; then hub::usage_error 'empty range'; fi
-  if [[ $base == *..* ]]; then hub::usage_error "use either -b BASE or a range, not both: $base"; fi
+  if [[ $base == *..* ]]; then
+    hub::usage_error "use either -b BASE or a range, not both: $(hub::shown "$base")"
+  fi
   if [[ -n $base && $range == *..* ]]; then
-    hub::usage_error "use either -b BASE or a range, not both: $range"
+    hub::usage_error "use either -b BASE or a range, not both: $(hub::shown "$range")"
   fi
   if [[ $range == *..* ]]; then
     end=${range#*..} && end=${end#.}
     # git reads START.. as START..HEAD; hub does not guess the head.
     if [[ $range == ..* || -z $end || $end == .* || $end == *..* ]]; then
-      hub::usage_error "not a range: $range"
+      hub::usage_error "not a range: $(hub::shown "$range")"
     fi
     # On GitHub A..B diffs the two tips; git's A..B, the commits B adds, is GitHub's A...B.
     range=${range%%..*}...$end

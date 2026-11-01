@@ -40,7 +40,10 @@ hub_cmd_alias() {
     sh | dash) rc='~/.profile' ;;
     fish) rc='~/.config/fish/config.fish' line='hub alias -s fish | source' ;;
     csh | tcsh) rc="~/.${1}rc" alias='alias git hub' line="eval \"\`hub alias -s $1\`\"" ;;
-    *) hub::die "unsupported shell: $1 (use one of bash, zsh, sh, ksh, dash, fish, csh, tcsh)" ;;
+    *)
+      local known='bash, zsh, sh, ksh, dash, fish, csh, tcsh'
+      hub::die "unsupported shell: $(hub::shown "$1") (use one of $known)"
+      ;;
   esac
   if ((script)); then
     printf '%s\n' "$alias"
