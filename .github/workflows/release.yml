@@ -1,0 +1,84 @@
+name: Release
+
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+', 'v[0-9]+.[0-9]+.[0-9]+-*']
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  publish:
+    name: GitHub release
+    if: ${{ !github.event.repository.fork }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    concurrency:
+      group: release-${{ github.ref }}
+      cancel-in-progress: false
+    env:
+      TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Publish
+        run: |
+          if ! out=$(gh release view "$TAG" --json isDraft -q .isDraft 2>&1); then
+            if [[ $out != *'release not found'* ]]; then
+              echo "$out" >&2
+              exit 1
+            fi
+            state=none
+          elif [[ $out == true ]]; then
+            state=draft
+          else
+            state=published
+          fi
+          case $state in
+            none)
+              flags=()
+              [[ $TAG == *-* ]] && flags+=(--prerelease)
+              gh release create "$TAG" --verify-tag --generate-notes \
+                --title "hub ${TAG#v}" "${flags[@]}"
+              ;;
+            draft) gh release edit "$TAG" --draft=false ;;
+            published) echo "$TAG is already published" ;;
+          esac
+
+  formula:
+    name: Homebrew formula
+    needs: publish
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    concurrency:
+      group: release-formula
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Update
+        run: |
+          gh auth setup-git
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          tag=$(script/stable-tag)
+          script/update-formula "$tag"
+          git diff --quiet -- Formula/hub.rb && exit 0
+          git commit -m "Formula: hub $tag" -- Formula/hub.rb
+          git push origin main || { git pull --rebase origin main && git push origin main; }

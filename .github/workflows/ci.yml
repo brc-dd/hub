@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  check:
+    name: make check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      BATS_VERSION: 1.14.0
+      SHELLCHECK_VERSION: 0.11.0
+      SHFMT_VERSION: 3.14.1
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Bash
+        if: runner.os == 'macOS'
+        run: |
+          brew install bash
+          echo "$(brew --prefix)/bin" >>"$GITHUB_PATH"
+
+      - name: Bats
+        run: |
+          git -c advice.detachedHead=false clone --quiet --depth 1 --branch "v$BATS_VERSION" \
+            https://github.com/bats-core/bats-core.git "$RUNNER_TEMP/bats"
+          "$RUNNER_TEMP/bats/install.sh" "$HOME/.local"
+          echo "$HOME/.local/bin" >>"$GITHUB_PATH"
+
+      - name: ShellCheck and shfmt
+        run: |
+          case "$RUNNER_OS-$RUNNER_ARCH" in
+            Linux-X64) sc=linux.x86_64 sf=linux_amd64 ;;
+            Linux-ARM64) sc=linux.aarch64 sf=linux_arm64 ;;
+            macOS-X64) sc=darwin.x86_64 sf=darwin_amd64 ;;
+            macOS-ARM64) sc=darwin.aarch64 sf=darwin_arm64 ;;
+            *)
+              echo "no builds for $RUNNER_OS-$RUNNER_ARCH" >&2
+              exit 1
+              ;;
+          esac
+          v=$SHELLCHECK_VERSION
+          url=https://github.com/koalaman/shellcheck/releases/download
+          curl -fsSL --retry 3 "$url/v$v/shellcheck-v$v.$sc.tar.xz" | tar -xJf - -C "$RUNNER_TEMP"
+          mkdir -p "$HOME/.local/bin"
+          install "$RUNNER_TEMP/shellcheck-v$v/shellcheck" "$HOME/.local/bin/"
+          v=$SHFMT_VERSION
+          url=https://github.com/mvdan/sh/releases/download
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/shfmt" "$url/v$v/shfmt_v${v}_$sf"
+          install "$RUNNER_TEMP/shfmt" "$HOME/.local/bin/shfmt"
+
+      - name: Versions
+        run: |
+          bash --version | head -n 1
+          git --version
+          bats --version
+          shellcheck --version | sed -n 2p
+          shfmt --version
+
+      - run: make check
+
+  lockfile:
+    name: actions.lock
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - run: gh extension install github/gh-actions-lock --pin v0.4.0
+      - run: gh actions-lock --verify
