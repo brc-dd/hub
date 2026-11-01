@@ -324,10 +324,10 @@ setup_push() {
 @test "hub push -h is git's usage even for a list naming a missing remote" {
   setup_push
   run hub push origin,nope -h
-  assert_status 129
+  assert_git_help push
   assert_line_equals 0 'usage: git push [<options>] [<repository> [<refspec>...]]'
   run hub push -qh origin,nope
-  assert_status 129
+  assert_git_help push
   assert_line_equals 0 'usage: git push [<options>] [<repository> [<refspec>...]]'
 }
 
@@ -337,7 +337,7 @@ setup_push() {
   assert_success
   assert_output_equals 'manual git-push'
   run hub push origin,two -h
-  assert_status 129
+  assert_git_help push
   assert_line_equals 0 'usage: git push [<options>] [<repository> [<refspec>...]]'
   assert_equals "$(server_branches mislav/one)" main
 }

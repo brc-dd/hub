@@ -264,7 +264,7 @@ assert_untouched() {
   done
   for word in -h -qh; do
     run hub merge "$word" "$url"
-    assert_status 129
+    assert_git_help merge
     assert_output_contains 'usage: git merge'
     assert_untouched
   done

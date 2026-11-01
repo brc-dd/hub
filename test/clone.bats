@@ -420,10 +420,10 @@ empty_dir() {
 
 @test "clone -h prints git's usage" {
   run hub clone -h
-  assert_status 129
+  assert_git_help clone
   assert_output_contains 'usage: git clone'
   run hub clone -qph alice/dotfiles
-  assert_status 129
+  assert_git_help clone
   assert_output_contains 'usage: git clone'
   assert_output_lacks 'unknown switch'
   assert_gh_not_called
@@ -435,7 +435,7 @@ empty_dir() {
   assert_success
   assert_output_equals 'git clone --help'
   run hub clone -p alice/dotfiles --help
-  assert_status 129
+  assert_git_help clone
   assert_output_contains 'usage: git clone'
   assert_output_lacks 'unknown switch'
   assert_gh_not_called

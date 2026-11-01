@@ -46,8 +46,8 @@ in [design.md](design.md#testing).
   `gh_calls`, `assert_gh_called`, `assert_gh_not_called`, `recording_gh`,
   `failing_gh`, `no_gh_path`. Records: `opened`, `copied`, `assert_tmp_empty`.
 - Assertions: `assert_success`, `assert_failure`, `assert_status`,
-  `assert_output_equals`, `assert_output_contains`, `assert_output_lacks`,
-  `assert_line_equals`, `assert_equals`.
+  `assert_git_help`, `assert_output_equals`, `assert_output_contains`,
+  `assert_output_lacks`, `assert_line_equals`, `assert_equals`.
 
 `test/harness.bats` tests the stubs.
 
@@ -94,8 +94,9 @@ uvx --from 'zizmor==1.32.0rc1' zizmor .github
 - fish: install as `hub.fish` in a `vendor_completions.d` directory.
 
 `test/completions.bats` runs the files in `bash --noprofile --norc` and
-`zsh -f` over stubbed git completion functions, and syntax-checks fish when it
-is installed. Each file's commands must equal the modules in `lib/hub/cmd`,
+`zsh -f` over stubbed git completion functions, and syntax-checks fish; the
+zsh and fish tests skip where that shell is not installed (CI installs zsh
+on Linux). Each file's commands must equal the modules in `lib/hub/cmd`,
 with their Summary lines, and its options each module's `# Options:` block.
 ShellCheck and shfmt read bash only, so `make lint` skips the zsh and fish
 files.

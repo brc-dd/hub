@@ -214,14 +214,14 @@ refs/remotes/origin/main'
 
 @test "hub checkout -h and --help are git's, even with a pull request URL" {
   run hub checkout -h "$pr"
-  assert_status 129
+  assert_git_help checkout
   assert_output_contains 'usage: git checkout'
   # git's manual opens a pager or a browser.
   run hub --noop checkout "$pr" --help
   assert_success
   assert_output_equals "git checkout $pr --help"
   run hub checkout --help-all "$pr"
-  assert_status 129
+  assert_git_help checkout
   assert_gh_not_called
 }
 
@@ -229,10 +229,10 @@ refs/remotes/origin/main'
   local word
   for word in -qh -dh -fh -2qh; do
     run hub checkout "$word" "$pr"
-    assert_status 129
+    assert_git_help checkout
     assert_output_contains 'usage: git checkout'
     run hub checkout "$pr" "$word"
-    assert_status 129
+    assert_git_help checkout
     assert_output_contains 'usage: git checkout'
   done
   assert_gh_not_called

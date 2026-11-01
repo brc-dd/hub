@@ -243,6 +243,13 @@ assert_status() {
   }
 }
 
+# assert_git_help CMD : the run exited as git CMD -h does (129 before git 2.56, 0 since).
+assert_git_help() {
+  local expected=0
+  git "$1" -h >/dev/null 2>&1 || expected=$?
+  assert_status "$expected"
+}
+
 assert_output_equals() {
   [[ $output == "$1" ]] || {
     printf 'expected output:\n%s\nactual output:\n%s\n' "$1" "$output"

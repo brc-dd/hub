@@ -105,6 +105,10 @@ complete_hub() {
 }
 
 complete_zsh() { run zsh -f "$HUB_TEST_TMP/complete.zsh" "$@"; }
+# has_zsh : zsh is on PATH.
+has_zsh() { command -v zsh >/dev/null; }
+# need_zsh : skip the test unless zsh is on PATH.
+need_zsh() { has_zsh || skip 'zsh is not installed'; }
 
 modules() {
   local f
@@ -301,6 +305,7 @@ fish_lines() {
 }
 
 @test "zsh: registers _hub for hub and git, sourced or found by compinit" {
+  need_zsh
   complete_zsh ''
   assert_success
   assert_output_equals 'compdef _hub hub git'
@@ -312,6 +317,7 @@ fish_lines() {
 }
 
 @test "zsh: wraps the completer git had, never itself, when sourced twice" {
+  need_zsh
   run zsh -f -c 'compdef() { local n; for n in ${@:2}; do _comps[$n]=$1; done; }
     typeset -A _comps; _comps[git]=_my_git
     source "$1"; source "$1"; print -r -- $_hub_git $_comps[git]' \
@@ -324,6 +330,7 @@ fish_lines() {
 }
 
 @test "zsh: hub's commands after global options, without the words _git cannot skip" {
+  need_zsh
   complete_zsh '' hub --noop -C dir --attr-source HEAD -c x=y pull-
   assert_success
   assert_line_equals 1 '_git git 6 hub -C dir -c x=y pull-'
@@ -333,6 +340,7 @@ fish_lines() {
 }
 
 @test "zsh: no hub command for a global option's value, after a command or for plain git" {
+  need_zsh
   complete_zsh '' hub -C ''
   assert_success
   assert_output_lacks '_describe'
@@ -346,6 +354,7 @@ fish_lines() {
 }
 
 @test "zsh: the commands git has too are left to git, with git's _git-CMD" {
+  need_zsh
   assert_equals "$(zsh -f -c 'source "$1"; print -l -- $_hub_git_commands' zsh \
     "$HUB_TEST_ROOT/completions/hub.zsh")" "$(git_modules)"
   complete_zsh 'zshexit() { print -r -- "kept: $+functions[_git-version]"; }' hub version -
@@ -355,6 +364,7 @@ fish_lines() {
 }
 
 @test "zsh: the options of hub's own commands, defined for one completion only" {
+  need_zsh
   complete_zsh '' hub browse -
   assert_success
   assert_line_equals 2 '_describe option: -u --url -c --copy'
@@ -368,6 +378,7 @@ fish_lines() {
 }
 
 @test "zsh: the file autoloaded as _hub completes the first call" {
+  need_zsh
   mkdir fn && cp "$HUB_TEST_ROOT/completions/hub.zsh" fn/_hub
   run zsh -f -c 'compdef() { :; }; _git() { print -r -- "_git $words"; }
     _describe() { print -r -- "_describe $3"; }
@@ -394,9 +405,12 @@ fish_lines() {
   assert_success
   bash_names=("${lines[@]}")
   assert_equals "${bash_names[*]}" "$(modules | tr '\n' ' ' | sed 's/ $//')"
-  run zsh -f -c 'source "$1"; print -l -- $_hub_commands' zsh "$HUB_TEST_ROOT/completions/hub.zsh"
-  assert_success
-  assert_equals "$(printf '%s\n' "${lines[@]}")" "$(printf '%s\n' "${expected[@]}")"
+  if has_zsh; then
+    run zsh -f -c 'source "$1"; print -l -- $_hub_commands' zsh \
+      "$HUB_TEST_ROOT/completions/hub.zsh"
+    assert_success
+    assert_equals "$(printf '%s\n' "${lines[@]}")" "$(printf '%s\n' "${expected[@]}")"
+  fi
   re="^complete -c hub -n __hub_needs_command -a ([a-z-]+) -d ['\"](.*)['\"]$"
   while IFS= read -r line; do
     [[ $line =~ $re ]] && names+=("${BASH_REMATCH[1]}:${BASH_REMATCH[2]}")
@@ -424,9 +438,11 @@ fish_lines() {
     run bash --noprofile --norc -c '__git_main() { :; }; __git_func_wrap() { :; }
       . "$1"; __hub_options "$2"' bash "$HUB_TEST_ROOT/completions/hub.bash" "$module"
     assert_equals "$module:$(echo $output)" "$module:$(echo $expected_bash)"
-    run zsh -f -c 'source "$1"; _hub_options "$2" && print -r -- ${reply%%:*}' \
-      zsh "$HUB_TEST_ROOT/completions/hub.zsh" "$module"
-    assert_equals "$module:$output" "$module:$(echo $expected_zsh)"
+    if has_zsh; then
+      run zsh -f -c 'source "$1"; _hub_options "$2" && print -r -- ${reply%%:*}' \
+        zsh "$HUB_TEST_ROOT/completions/hub.zsh" "$module"
+      assert_equals "$module:$output" "$module:$(echo $expected_zsh)"
+    fi
     fish=''
     while IFS= read -r line; do
       [[ $line =~ $re && ${BASH_REMATCH[1]} == "$module" ]] || continue

@@ -29,6 +29,10 @@ case ${1-} in
 esac
 path=${2-} path=${path#/} path=${path%/} path=${path%.git}.git
 dir=${HUB_TEST_SRV:?not set}/$host/$path
+# GitHub ignores the case of OWNER and REPO; a case-sensitive file system does not.
+for candidate in "$HUB_TEST_SRV/$host"/*/*.git; do
+  [[ ${candidate,,} != "${dir,,}" ]] || dir=$candidate
+done
 if [[ ! -d $dir ]]; then
   printf 'ssh stub: nothing is served at %s:%s (%s)\n' "$host" "${2-}" "$dir" >&2
   exit 255

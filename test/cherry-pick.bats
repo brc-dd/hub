@@ -327,7 +327,7 @@ assert_untouched() {
 @test "hub cherry-pick -h prints git cherry-pick's usage" {
   make_repo work
   run hub cherry-pick -h https://github.com/o/r/commit/abcdef1
-  assert_status 129
+  assert_git_help cherry-pick
   assert_output_contains 'usage: git cherry-pick'
   assert_gh_not_called
 }
@@ -337,10 +337,10 @@ assert_untouched() {
   local word
   for word in -xh -nh -esh; do
     run hub cherry-pick "$word" "https://github.com/octo/app/commit/$pick"
-    assert_status 129
+    assert_git_help cherry-pick
     assert_output_contains 'usage: git cherry-pick'
     run hub cherry-pick "$word" "https://github.com/octo/app/commit/${pick:0:7}"
-    assert_status 129
+    assert_git_help cherry-pick
   done
   assert_gh_not_called
   assert_untouched
@@ -357,7 +357,7 @@ assert_untouched() {
 @test "hub cherry-pick --help-all is git's usage, before gh is asked" {
   make_repo work
   run hub cherry-pick --help-all https://github.com/o/r/commit/abcdef1
-  assert_status 129
+  assert_git_help cherry-pick
   assert_gh_not_called
 }
 

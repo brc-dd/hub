@@ -270,10 +270,10 @@ remotes() { git remote | tr '\n' ' '; }
   assert_failure
   assert_output_contains 'fetch --all does not take a repository argument'
   run hub fetch -h alice
-  assert_status 129
+  assert_git_help fetch
   assert_output_contains 'usage: git fetch'
   run hub fetch -qh alice
-  assert_status 129
+  assert_git_help fetch
   assert_output_contains 'usage: git fetch'
   run hub fetch --multiple=yes alice
   assert_status 129
@@ -352,7 +352,7 @@ remotes() { git remote | tr '\n' ' '; }
 
 @test "hub fetch --help-all is git's usage, before any remote is added" {
   run hub fetch --help-all alice
-  assert_status 129
+  assert_git_help fetch
   assert_equals "$(remotes)" 'origin '
   assert_gh_not_called
 }

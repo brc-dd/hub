@@ -248,7 +248,7 @@ assert_downloaded() {
 
 @test "hub apply --help-all is git's usage, before anything is downloaded" {
   run hub apply --help-all https://github.com/octo/proj/pull/7
-  assert_status 129
+  assert_git_help apply
   assert_gh_not_called
   assert_tmp_empty
 }
@@ -257,7 +257,7 @@ assert_downloaded() {
   local word
   for word in -h -Rh; do
     run hub apply "$word" https://github.com/octo/proj/pull/7
-    assert_status 129
+    assert_git_help apply
     assert_line_equals 0 'usage: git apply [<options>] [<patch>...]'
   done
   assert_gh_not_called

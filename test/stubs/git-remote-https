@@ -8,6 +8,10 @@ host=${rest%%/*} path=${rest#*/}
 host=${host##*@} host=${host%%:*}
 path=${path%%[?#]*} path=${path%/} path=${path%.git}.git
 dir=${HUB_TEST_SRV:?not set}/${host,,}/$path
+# GitHub ignores the case of OWNER and REPO; a case-sensitive file system does not.
+for candidate in "$HUB_TEST_SRV/${host,,}"/*/*.git; do
+  [[ ${candidate,,} != "${dir,,}" ]] || dir=$candidate
+done
 while IFS= read -r line; do
   case $line in
     capabilities) printf 'connect\n\n' ;;

@@ -223,10 +223,10 @@ make_series() {
 
 @test "hub am -h, alone or among one-letter flags, prints git am's usage" {
   run hub am -h https://github.com/o/r/pull/8
-  assert_status 129
+  assert_git_help am
   assert_output_contains 'usage: git am'
   run hub am -3h https://github.com/o/r/pull/8
-  assert_status 129
+  assert_git_help am
   assert_output_contains 'usage: git am'
   assert_gh_not_called
 }
@@ -240,7 +240,7 @@ make_series() {
 
 @test "hub am --help-all is git's usage, before anything is downloaded" {
   run hub am --help-all https://github.com/o/r/pull/8
-  assert_status 129
+  assert_git_help am
   assert_gh_not_called
   assert_tmp_empty
 }
