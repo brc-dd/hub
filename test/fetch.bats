@@ -110,6 +110,14 @@ remotes() { git remote | tr '\n' ' '; }
   assert_equals "$(git rev-parse refs/remotes/alice/topic)" "$(server_ref alice/dotfiles topic)"
 }
 
+@test "hub fetch refuses a list naming one user in two cases before any lookup" {
+  run hub fetch bob,alice,Alice
+  assert_status 1
+  assert_output_equals 'hub fetch: alice is listed twice as Alice (use one spelling)'
+  assert_equals "$(remotes)" 'origin '
+  assert_gh_not_called
+}
+
 @test "hub fetch refuses a user without a copy before adding any remote" {
   run hub fetch alice,carol
   assert_status 1
@@ -205,6 +213,15 @@ remotes() { git remote | tr '\n' ' '; }
   run hub fetch bob,alice
   assert_failure
   assert_output_contains "'bob,alice' does not appear to be a git repository"
+  assert_equals "$(remotes)" 'origin '
+  assert_gh_not_called
+}
+
+@test "hub fetch hands a login that names an existing path to git" {
+  mkdir alice
+  run hub fetch alice
+  assert_failure
+  assert_output_contains "'alice' does not appear to be a git repository"
   assert_equals "$(remotes)" 'origin '
   assert_gh_not_called
 }

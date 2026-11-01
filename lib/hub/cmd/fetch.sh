@@ -4,14 +4,16 @@
 #        hub fetch [GIT-FETCH-OPTIONS...] USER,USER... [GIT-FETCH-ARGS...]
 #
 # A git command hub extends: git fetch's options apply. A first operand that is a GitHub login,
-# and not a remote, a remote group or a local repository, names that user's copy of the project
-# (the project's repository name, on the project's host). hub checks with gh that it exists,
-# adds it as the remote USER (https, or ssh when gh's git_protocol is ssh), then runs git fetch
-# with the command line as given. A user name that matches a remote except for case is refused;
-# use the remote's spelling. A comma-separated list adds every missing user the same way and
-# fetches all members with git fetch --multiple; members that are remotes or groups stay as they
-# are. The remote is added before git runs, with --dry-run too. With --multiple, --no-multiple or
-# --all, without an operand, or with any other operand, this is plain git fetch.
+# and not a remote or a remote group, names that user's copy of the project (the project's
+# repository name, on the project's host). hub checks with gh that it exists, adds it as the
+# remote USER (https, or ssh when gh's git_protocol is ssh), then runs git fetch with the command
+# line as given. A user name that matches a remote except for case is refused; use the remote's
+# spelling. A comma-separated list adds every missing user the same way and fetches all members
+# with git fetch --multiple; members that are remotes or groups stay as they are, and a list that
+# names one missing user in two cases is refused. The remote is added before git runs, with
+# --dry-run too. With --multiple, --no-multiple or --all, without an operand, with a word that
+# names an existing path or that git reads as a local repository, or with any other operand,
+# this is plain git fetch.
 #
 #   $ hub fetch alice
 #   > git remote add alice https://github.com/alice/REPO.git
@@ -58,6 +60,11 @@ hub_cmd_fetch() {
       [[ ${other,,} != "${user,,}" ]] \
         || hub::die "$user is not a remote, but $other is (use $other)"
     done < <(hub::remotes)
+    for other in "${missing[@]}"; do
+      [[ $other == "$user" || ${other,,} != "${user,,}" ]] \
+        || hub::die "$(hub::shown "$other") is listed twice as $(hub::shown "$user")" \
+          '(use one spelling)'
+    done
     [[ " ${missing[*]} " == *" $user "* ]] || missing+=("$user")
   done
   if ((${#missing[@]})); then
