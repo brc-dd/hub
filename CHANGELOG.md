@@ -78,7 +78,7 @@ All notable changes to hub are documented here. The format follows
   gh or adding a remote.
 - `remote add NAME WORD` and `remote set-url NAME WORD` keep a word git
   rewrites through `url.BASE.insteadOf` instead of replacing it with a
-  GitHub URL.
+  GitHub URL, also when the word names a remote.
 - Refusals of `ci-status`, `compare`, `alias`, `fork` and `pull-request`
   show the user's word quoted, so an empty word or a newline is visible.
 - hub refuses to run when the `git` on `PATH` is hub itself through a

@@ -25,7 +25,7 @@ Two rules decide what the flags mean:
 | hub 2.x | Status | This hub | Notes |
 |---|---|---|---|
 | `hub clone [-p] [OWNER/]REPO [DIR]` | Yes | `git clone URL` on the default host (`GH_HOST`, else the one host gh is logged in to, else github.com); `REPO` alone is yours; `REPO.wiki` is the wiki; every git option stays in place. | `HOST/OWNER/REPO` is plain git clone: use `GH_HOST`. The protocol is gh's `git_protocol`; `-p` is ssh once. |
-| `hub remote add [-p] [NAME] OWNER[/REPO]`, `hub remote set-url` | Yes | `git remote add NAME URL`; `USER` alone names the remote and the owner; `origin` alone is your own copy. | The protocol is gh's `git_protocol`. A word git rewrites through `url.BASE.insteadOf`, `OWNER/REPO` or a lone `OWNER`, is kept as typed and handed to plain git remote, as git does. |
+| `hub remote add [-p] [NAME] OWNER[/REPO]`, `hub remote set-url` | Partly | `git remote add NAME URL`; `USER` alone names the remote and the owner; `origin` alone is your own copy. | `OWNER/REPO` alone is not supported; name the remote: `remote add OWNER OWNER/REPO`. The protocol is gh's `git_protocol`. A word git rewrites through `url.BASE.insteadOf`, `OWNER/REPO` or a lone `OWNER`, is kept as typed and handed to plain git remote, as git does, even when it also names a remote; a rewrite set only through `url.BASE.pushInsteadOf` does not count. |
 | `hub fetch USER[,USER...]` | Yes | Adds each missing user's copy as a remote, then `git fetch`, or `git fetch --multiple` for a list. | A URL or host:path word, and a word git rewrites through `url.BASE.insteadOf`, are plain git fetch. A user name that matches a remote or a remote group except for case is refused; use its spelling. |
 | `hub push REMOTE1,REMOTE2 [ARGS...]` | Yes | `git push` once per remote, in order, stopping at the first failure. | Every name must be a remote before anything is pushed. A word git rewrites through `url.BASE.insteadOf` is one destination; a rewrite set only through `url.BASE.pushInsteadOf` is not read, and such a word is split as a list of remotes. |
 | `hub checkout PULL-REQUEST-URL [BRANCH]` | Yes | `gh pr checkout URL [-b BRANCH]`; `-b`, `--detach` and `--recurse-submodules` pass through. | `-f` is refused: gh's `--force` resets the branch. `--detach` with a branch name is refused. Other options are errors; a line with `--pathspec-from-file` or `--pathspec-file-nul` is plain git checkout. |
@@ -61,6 +61,8 @@ Two rules decide what the flags mean:
 - `hub init -g`: use `git init && gh repo create --source=.`.
 - `hub submodule add OWNER/REPO`: use
   `git submodule add https://github.com/OWNER/REPO.git DIR`.
+- `OWNER/REPO` alone in `remote add`: name the remote,
+  `hub remote add OWNER OWNER/REPO`.
 - Gist URLs in `am` and `apply`: use `gh gist clone ID`, then apply the file.
 - `USER@SHA` in `cherry-pick`: use the commit's URL.
 - `-i ISSUE` in `pull-request`: link the issue in the body, or use `gh api`.
