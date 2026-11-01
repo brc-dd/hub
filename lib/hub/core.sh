@@ -335,7 +335,8 @@ hub::parse_github_url() {
   local host path
   local -a part
   HUB_URL=()
-  [[ $1 =~ ^https?://([^/?#]+)/([^?#]*) ]] || return 1
+  # read keeps only a word's first line: a word with a newline is not one URL.
+  [[ $1 != *[[:space:][:cntrl:]]* && $1 =~ ^https?://([^/?#]+)/([^?#]*) ]] || return 1
   host=${BASH_REMATCH[1],,} path=${BASH_REMATCH[2]%/}
   host=${host%%:*}
   hub::known_host "$host" || return 1
@@ -392,8 +393,8 @@ hub::clone_url() {
   printf '%s@%s:%s/%s.git\n' "$user" "$1" "$2" "$3"
 }
 
-# hub::is_owner WORD : WORD reads as the name of a GitHub user or organization.
-hub::is_owner() { [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]]; }
+# hub::is_owner WORD : WORD reads as a GitHub user or organization (a managed user: NAME_SHORTCODE).
+hub::is_owner() { [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9-]*(_[A-Za-z0-9]+)?$ ]]; }
 
 # hub::is_shorthand WORD : WORD reads as OWNER/REPO or REPO.
 hub::is_shorthand() {

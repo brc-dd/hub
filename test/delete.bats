@@ -143,7 +143,7 @@ load test_helper
 
 @test "hub delete refuses what is not a repository before asking gh anything" {
   local name forms='NAME, OWNER/NAME, HOST/OWNER/NAME or a repository URL'
-  for name in . .. 'octo/' 'octo//site' 'octo/site/' 'a/b/c/d' -x/octo/site 'o_o/site' \
+  for name in . .. 'octo/' 'octo//site' 'octo/site/' 'a/b/c/d' -x/octo/site 'o__o/site' \
     'octo/../site' 'https://example.com/octo/site' 'octo/site/tree' -x .git 'octo/.git'; do
     run hub delete -y -- "$name"
     assert_status 1

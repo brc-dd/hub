@@ -524,6 +524,8 @@ parses_to() {
     parses_to "$url" 'github.com o r'
   done
   GH_HOST=ghe.example parses_to git@GHE.example:Org/Repo.git 'ghe.example Org Repo'
+  parses_to https://github.com/mona-cat_octo/app.git 'github.com mona-cat_octo app'
+  parses_to git@github.com:mona-cat_octo/app.git 'github.com mona-cat_octo app'
 }
 
 @test "parse_url refuses paths, other hosts and other shapes" {
@@ -532,7 +534,7 @@ parses_to() {
     file:///srv/o/r.git https://github.com/o/r/extra https://gitlab.com/o/r not-a-url \
     'git@-oProxyCommand=x:o/r' 'https://github.com/o/r x' https://github.com//r '' \
     'https://github.com/o/r?x=1' 'https://github.com/o/r#x' ssh://git@github.com/~o/r \
-    https://github.com/o/.. https://github.com/-o/r https://github.com/o_x/r \
+    https://github.com/o/.. https://github.com/-o/r https://github.com/o__x/r \
     https://ssh.github.com/o/r; do
     parses_to "$url" ''
   done
@@ -636,7 +638,7 @@ parses_to() {
 
 @test "parse_project checks the owner, repository and host it reads" {
   local str
-  for str in -o/r o_x/r o/. o/.. 'o/r!' o/r/ cli/cli/issues -x.example/o/r a_b.example/o/r \
+  for str in -o/r o__x/r o/. o/.. 'o/r!' o/r/ cli/cli/issues -x.example/o/r a_b.example/o/r \
     ghe.example/-o/r ghe.example/o/.. o/.git ghe.example/o/.git; do
     run hub::parse_project "$str"
     assert_failure
@@ -644,6 +646,10 @@ parses_to() {
   done
   run hub::parse_project my-org/some.repo_name
   assert_output_equals 'github.com my-org some.repo_name'
+  run hub::parse_project mona-cat_octo/app
+  assert_output_equals 'github.com mona-cat_octo app'
+  GH_REPO=mona-cat_octo/app run hub::project
+  assert_output_equals 'github.com mona-cat_octo app'
   GH_HOST=GHE.Example run hub::parse_project o/r
   assert_output_equals 'ghe.example o r'
   GH_HOST=ghe run hub::parse_project GHE/o/r
@@ -698,6 +704,17 @@ parses_to() {
     https://github.com/o/r/pull/1/commits/main not-a-url https://github.com/just-owner; do
     run url_fields "$url"
     assert_failure
+  done
+}
+
+@test "parse_github_url refuses a word with whitespace or a control character" {
+  local url
+  for url in $'https://github.com/o/r/commit/abc1234\nHEAD~5' $'https://github.com/o/r/pull/1\n' \
+    'https://github.com/o/r/pull/1 x' $'https://github.com/o/r/pull/1\tx' \
+    $'https://github.com/o/r/compare/a...b\x01'; do
+    run url_fields "$url"
+    assert_failure
+    assert_output_equals ''
   done
 }
 
@@ -786,10 +803,10 @@ parses_to() {
 
 @test "is_owner accepts the names of GitHub users and organizations" {
   local str
-  for str in mislav my-org 0x a; do
+  for str in mislav my-org 0x a o_r mona-cat_octo octo_admin 2abvd19d_admin; do
     hub::is_owner "$str"
   done
-  for str in -x o_r o.r o/r '' 'a b'; do
+  for str in -x o.r o/r '' 'a b' o_ _o o__x o_x_y 'o_x y' o_-x; do
     run hub::is_owner "$str"
     assert_failure
   done
@@ -800,7 +817,7 @@ parses_to() {
   for str in mislav/hub dotfiles .github my-org/some.repo_name _repo r.wiki; do
     hub::is_shorthand "$str"
   done
-  for str in https://github.com/o/r a/b/c . .. ./x ../x /abs 'a b' o/. o/.. '' -x/r o_r/x; do
+  for str in https://github.com/o/r a/b/c . .. ./x ../x /abs 'a b' o/. o/.. '' -x/r o__r/x; do
     run hub::is_shorthand "$str"
     assert_failure
   done

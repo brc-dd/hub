@@ -282,7 +282,7 @@ empty_dir() {
   serve_github alice/dotfiles
   empty_dir
   local word
-  for word in owner_x/r o/r/ x/..git .git; do
+  for word in owner__x/r o/r/ x/..git .git; do
     run hub clone "$word"
     assert_failure
     assert_output_contains "repository '$word' does not exist"
