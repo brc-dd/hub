@@ -343,6 +343,32 @@ ghe_hosts() {
   assert_gh_not_called
 }
 
+@test "remote add and set-url keep a word git rewrites through url.BASE.insteadOf" {
+  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
+  git config url.git@corp.example.test:.insteadOf corp/
+  git config url.git@corp.example.test:alice.insteadOf alice
+  run hub remote add up corp/proj
+  assert_success
+  assert_equals "$(url_of up)" corp/proj
+  run hub remote add solo alice
+  assert_success
+  assert_equals "$(url_of solo)" alice
+  run hub remote set-url origin corp/tools
+  assert_success
+  assert_equals "$(url_of origin)" corp/tools
+  run hub remote set-url up alice
+  assert_success
+  assert_equals "$(url_of up)" alice
+  assert_gh_not_called
+}
+
+@test "remote add NAME origin expands origin when origin is a remote" {
+  make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
+  run hub remote add work origin
+  assert_success
+  assert_equals "$(url_of work)" https://github.com/origin/dotfiles.git
+}
+
 @test "remote add with other operand counts is plain git" {
   make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
   run hub remote add alice/dots
