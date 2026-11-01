@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# hub fork: gh repo fork for the project, the remote hub adds, and hub's checks before gh.
+# hub fork: GitHub's fork API through gh, the remote hub adds, and hub's checks before gh.
 
 load test_helper
 
@@ -7,15 +7,24 @@ load test_helper
 dotfiles() {
   serve_github dotcom/dotfiles mislav/dotfiles
   clone_served dotcom/dotfiles
-  stub_gh 'repo fork *' https://github.com/mislav/dotfiles
+  stub_forks mislav/dotfiles
+}
+
+# stub_forks ANSWER [STATUS] [HOST] : the fork API's .full_name answer from gh api for HOST.
+stub_forks() {
+  stub_gh "api --hostname ${3:-github.com} --method POST repos/*/forks*" "$1" "${2:-0}"
+}
+
+# forks PROJECT [FIELDS] : the arguments of gh's fork API call for PROJECT on github.com.
+forks() {
+  printf 'api --hostname github.com --method POST repos/%s/forks %s--jq .full_name' "$1" "${2:+$2 }"
 }
 
 @test "hub fork names the project to gh and adds the fork as a remote named after you" {
   dotfiles
   run hub fork
   assert_success
-  local fork='gh repo fork github.com/dotcom/dotfiles --clone=false'
-  assert_equals "$(gh_calls | grep 'repo fork')" "$fork"
+  assert_equals "$(gh_calls | grep forks)" "gh $(forks dotcom/dotfiles)"
   assert_equals "$(git remote get-url mislav)" https://github.com/mislav/dotfiles.git
   assert_equals "$(git remote get-url origin)" https://github.com/dotcom/dotfiles.git
   assert_equals "$(git for-each-ref refs/remotes/mislav)" ''
@@ -26,16 +35,16 @@ dotfiles() {
 @test "hub fork forks the upstream remote's repository, and GH_REPO when it is set" {
   make_repo dotfiles origin=https://github.com/hubot/dotfiles.git \
     upstream=https://github.com/dotcom/dotfiles.git
-  stub_gh 'repo fork *' https://github.com/mislav/dotfiles
+  stub_forks mislav/dotfiles
   run hub fork
   assert_success
-  assert_gh_called 'repo fork github.com/dotcom/dotfiles --clone=false'
+  assert_gh_called "$(forks dotcom/dotfiles)"
   assert_equals "$(git remote get-url mislav)" https://github.com/mislav/dotfiles.git
   stub_gh 'config get user -h ghe.example.com' mona
-  stub_gh 'repo fork *' https://ghe.example.com/mona/app
+  stub_forks mona/app 0 ghe.example.com
   GH_REPO=ghe.example.com/corp/app run hub fork
   assert_success
-  local fork='repo fork ghe.example.com/corp/app --clone=false'
+  local fork='api --hostname ghe.example.com --method POST repos/corp/app/forks --jq .full_name'
   assert_gh_called "GH_REPO=ghe.example.com/corp/app gh $fork"
   assert_equals "$(git remote get-url mona)" https://ghe.example.com/mona/app.git
 }
@@ -51,28 +60,28 @@ dotfiles() {
 
 @test "hub fork ORG and --org fork into the organization, with a remote named after it" {
   dotfiles
-  stub_gh 'repo fork *' https://github.com/acme/dotfiles
+  stub_forks acme/dotfiles
   run hub fork acme
   assert_success
-  assert_gh_called 'repo fork github.com/dotcom/dotfiles --clone=false --org=acme'
+  assert_gh_called "$(forks dotcom/dotfiles '-f organization=acme')"
   assert_equals "$(git remote get-url acme)" https://github.com/acme/dotfiles.git
   git remote remove acme
   : >"$HUB_TEST_GH_LOG"
   run hub fork --org=acme ACME
   assert_success
-  assert_gh_called 'repo fork github.com/dotcom/dotfiles --clone=false --org=acme'
+  assert_gh_called "$(forks dotcom/dotfiles '-f organization=acme')"
   assert_equals "$(git remote get-url acme)" https://github.com/acme/dotfiles.git
   run gh_calls
   assert_output_lacks 'config get user'
 }
 
-@test "hub fork passes --remote-name, --fork-name and --default-branch-only to gh" {
+@test "hub fork sends --org, --fork-name and --default-branch-only as the API's fields" {
   dotfiles
-  stub_gh 'repo fork *' https://github.com/acme/dots
+  stub_forks acme/dots
   run hub fork --default-branch-only --fork-name=dots --remote-name mine --org acme
   assert_success
-  local opts='--org=acme --fork-name=dots --default-branch-only'
-  assert_gh_called "repo fork github.com/dotcom/dotfiles --clone=false $opts"
+  local fields='-f organization=acme -f name=dots -F default_branch_only=true'
+  assert_gh_called "$(forks dotcom/dotfiles "$fields")"
   assert_equals "$(git remote get-url mine)" https://github.com/acme/dots.git
   run git remote get-url acme
   assert_failure
@@ -80,27 +89,35 @@ dotfiles() {
 
 @test "hub fork leaves organization and fork names to gh, which judges them" {
   dotfiles
-  stub_gh 'repo fork *' 'HTTP 422: invalid organization' 1
+  stub_forks 'HTTP 422: invalid organization' 1
   run hub fork --remote-name mine --fork-name 'a/b' -- -acme
   assert_status 1
-  assert_gh_called 'repo fork github.com/dotcom/dotfiles --clone=false --org=-acme --fork-name=a/b'
+  assert_gh_called "$(forks dotcom/dotfiles '-f organization=-acme -f name=a/b')"
   assert_equals "$(git remote)" origin
 }
 
-@test "hub fork adds the fork gh names, an existing fork with another name too" {
+@test "hub fork adds the fork GitHub answers with, an existing fork with another name too" {
   dotfiles
-  stub_gh 'repo fork *' https://github.com/mislav/dotfiles-1
+  stub_forks mislav/dotfiles-1
   run hub fork
   assert_success
   assert_equals "$(git remote get-url mislav)" https://github.com/mislav/dotfiles-1.git
+  git remote remove mislav
+  # With --fork-name, an existing fork keeps its own name.
+  run hub fork --fork-name dots
+  assert_success
+  assert_gh_called "$(forks dotcom/dotfiles '-f name=dots')"
+  assert_equals "$(git remote get-url mislav)" https://github.com/mislav/dotfiles-1.git
 }
 
-@test "hub fork reads the fork's URL from the last line gh prints" {
+@test "hub fork does not read gh repo fork, which prints nothing for an existing fork" {
   dotfiles
-  stub_gh 'repo fork *' $'alice/dotfiles already exists\nhttps://github.com/alice/dotfiles'
-  run hub fork --remote-name alice
+  stub_gh 'repo fork *' ''
+  run hub fork
   assert_success
-  assert_equals "$(git remote get-url alice)" https://github.com/alice/dotfiles.git
+  assert_equals "$(git remote get-url mislav)" https://github.com/mislav/dotfiles.git
+  run gh_calls
+  assert_output_lacks 'repo fork'
 }
 
 @test "hub fork gives the remote gh's git_protocol for the fork's host" {
@@ -115,28 +132,38 @@ dotfiles() {
   make_repo app
   stub_gh 'config get user -h acme.ghe.com' mona
   stub_gh 'config get git_protocol -h acme.ghe.com' ssh
-  stub_gh 'repo fork *' https://acme.ghe.com/mona/app
+  stub_forks mona/app 0 acme.ghe.com
   GH_REPO=acme.ghe.com/corp/app run hub fork
   assert_success
-  assert_gh_called 'GH_REPO=acme.ghe.com/corp/app gh repo fork acme.ghe.com/corp/app --clone=false'
+  assert_gh_called 'GH_REPO=acme.ghe.com/corp/app gh api --hostname acme.ghe.com *corp/app/forks*'
   assert_equals "$(git remote get-url mona)" acme@acme.ghe.com:mona/app.git
 }
 
-@test "hub fork stops when gh prints no fork URL, and adds no remote" {
+@test "hub fork stops when GitHub names no fork, and adds no remote" {
   dotfiles
-  stub_gh 'repo fork *' ''
+  stub_forks ''
   run hub fork
   assert_status 1
   assert_output_equals \
-    "hub fork: gh did not print the fork's URL:  (add the remote with git remote add)"
+    "hub fork: GitHub did not name the fork: '' (add the remote with git remote add)"
+  assert_equals "$(git remote)" origin
+  for answer in null mislav 'mislav/dot files' '-x/dotfiles'; do
+    stub_forks "$answer"
+    run hub fork
+    assert_status 1
+    assert_output_contains 'hub fork: GitHub did not name the fork: '
+    assert_output_contains ' (add the remote with git remote add)'
+  done
   assert_equals "$(git remote)" origin
 }
 
 @test "hub fork fails as gh fails, and changes nothing after it" {
   dotfiles
-  stub_gh 'repo fork *' 'failed to fork' 4
+  PATH=$(failing_gh 'HTTP 403: forking is disabled'):$PATH
+  stub_forks '' 4
   run hub fork
   assert_status 4
+  assert_output_equals 'HTTP 403: forking is disabled'
   assert_equals "$(git remote)" origin
 }
 
@@ -144,19 +171,23 @@ dotfiles() {
   dotfiles
   run hub fork --no-remote --default-branch-only
   assert_success
-  assert_gh_called 'repo fork github.com/dotcom/dotfiles --clone=false --default-branch-only'
+  assert_output_equals mislav/dotfiles
+  assert_gh_called "$(forks dotcom/dotfiles '-F default_branch_only=true')"
   assert_equals "$(git remote)" origin
   cd "$HUB_TEST_TMP"
   : >"$HUB_TEST_GH_LOG"
+  stub_forks acme/app 0 ghe.example.com
   GH_REPO=ghe.example.com/corp/app run hub fork --no-remote acme
   assert_success
-  local fork='repo fork ghe.example.com/corp/app --clone=false --org=acme'
+  assert_output_equals acme/app
+  local fork='api --hostname ghe.example.com --method POST repos/corp/app/forks'
+  fork+=' -f organization=acme --jq .full_name'
   assert_equals "$(gh_calls)" "GH_REPO=ghe.example.com/corp/app gh $fork"
   : >"$HUB_TEST_GH_LOG"
   GH_REPO=dotcom/dotfiles run hub fork --no-remote --org acme --fork-name dots
   assert_success
-  fork='repo fork github.com/dotcom/dotfiles --clone=false --org=acme --fork-name=dots'
-  assert_gh_called "GH_REPO=dotcom/dotfiles gh $fork"
+  assert_gh_called "GH_REPO=dotcom/dotfiles gh $(forks dotcom/dotfiles \
+    '-f organization=acme -f name=dots')"
 }
 
 @test "hub fork --no-remote outside a repository without GH_REPO relays git's error" {
@@ -183,7 +214,7 @@ dotfiles() {
   assert_output_contains 'fatal: not a git repository'
   assert_gh_not_called
   make_repo local
-  stub_gh 'repo fork *' https://github.com/mislav/local
+  stub_forks mislav/local
   run hub fork
   assert_status 1
   assert_output_equals 'hub fork: no GitHub remote found (looked for upstream, github, origin)'
@@ -207,7 +238,7 @@ dotfiles() {
   assert_status 1
   assert_output_equals 'hub fork: not a remote name: -acme'
   run gh_calls
-  assert_output_lacks 'repo fork'
+  assert_output_lacks forks
   assert_equals "$(git remote get-url mislav)" https://example.com/elsewhere.git
 }
 
@@ -281,6 +312,12 @@ dotfiles() {
   assert_line_equals 0 'hub fork: two organizations: --org acme and other (name one)'
   assert_line_equals 1 "$usage"
   assert_line_equals 2 '                [--default-branch-only] [ORG]'
+  run hub fork --org a 'b c'
+  assert_status 1
+  assert_line_equals 0 "hub fork: two organizations: --org a and b\\ c (name one)"
+  run hub fork --org $'x\ny' acme
+  assert_status 1
+  assert_line_equals 0 "hub fork: two organizations: --org \$'x\\ny' and acme (name one)"
   assert_gh_not_called
   assert_equals "$(git remote)" origin
 }
@@ -290,13 +327,13 @@ dotfiles() {
   dotfiles
   run hub --noop fork --fork-name dots
   assert_success
-  assert_line_equals 0 'gh repo fork github.com/dotcom/dotfiles --clone=false --fork-name=dots'
+  assert_line_equals 0 "gh $(forks dotcom/dotfiles '-f name=dots')"
   assert_line_equals 1 'git remote add -- mislav https://github.com/mislav/dots.git'
   run hub --noop fork --no-remote --org acme
   assert_success
-  assert_output_equals 'gh repo fork github.com/dotcom/dotfiles --clone=false --org=acme'
+  assert_output_equals "gh $(forks dotcom/dotfiles '-f organization=acme')"
   run gh_calls
-  assert_output_lacks 'repo fork'
+  assert_output_lacks forks
   assert_equals "$(git remote)" origin
 }
 
@@ -304,7 +341,7 @@ dotfiles() {
   dotfiles
   run hub --noop fork --fork-name 'my fork'
   assert_success
-  assert_line_equals 0 "gh repo fork github.com/dotcom/dotfiles --clone=false --fork-name=my\\ fork"
+  assert_line_equals 0 "gh $(forks dotcom/dotfiles '-f name=my\ fork')"
   assert_line_equals 1 "git remote add -- mislav https://github.com/mislav/my\\ fork.git"
   run hub --noop fork --org 'Acme Corp' --remote-name y
   assert_success

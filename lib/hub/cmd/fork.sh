@@ -5,12 +5,14 @@
 #
 # hub's own command: these are all of its options. Forks the current project (GH_REPO, else the
 # first GitHub remote among upstream, github, origin and the rest) under your account, or under
-# the organization ORG, with gh repo fork, and adds the fork gh names as the remote NAME:
-# --remote-name, else ORG, else your login. The remote name must be valid and free before gh
-# runs. A fork that already exists is reused. The remote's URL follows gh's git_protocol for the
-# host. Nothing is fetched: run git fetch NAME once GitHub has made the fork.
+# the organization ORG, with GitHub's fork API through gh api, and adds the fork GitHub answers
+# with as the remote NAME: --remote-name, else ORG, else your login. The remote name must be
+# valid and free before gh runs. A fork that already exists is reused under its own name, even
+# with --fork-name. The remote's URL follows gh's git_protocol for the host. Nothing is fetched:
+# run git fetch NAME once GitHub has made the fork.
 #
-# --no-remote only forks; it works outside a repository when GH_REPO names the project.
+# --no-remote only forks and prints the fork's OWNER/NAME; it works outside a repository when
+# GH_REPO names the project.
 #
 # Options:
 #   --no-remote             Fork without adding a remote.
@@ -20,13 +22,14 @@
 #   --default-branch-only   Copy only the default branch into the fork.
 #
 #   $ hub fork
-#   > gh repo fork github.com/dotcom/dotfiles --clone=false
+#   > gh api --hostname github.com --method POST repos/dotcom/dotfiles/forks --jq .full_name
 #   > git remote add -- mislav https://github.com/mislav/dotfiles.git
 #   $ hub fork --no-remote acme
-#   > gh repo fork github.com/dotcom/dotfiles --clone=false --org=acme
+#   > gh api --hostname github.com --method POST repos/dotcom/dotfiles/forks \
+#   >   -f organization=acme --jq .full_name
 
 hub_cmd_fork() {
-  local no_remote=0 branch_only=0 remote='' org='' fork_name='' project host owner repo out fork
+  local no_remote=0 branch_only=0 remote='' org='' fork_name='' project host owner repo fork
   local -a opts=() operands=()
   hub::normalize_opts '' '--remote-name --org --fork-name' "$@"
   set -- "${HUB_ARGS[@]}"
@@ -55,38 +58,37 @@ hub_cmd_fork() {
   if ((${#operands[@]})); then
     [[ -n ${operands[0]} ]] || hub::usage_error 'empty organization'
     [[ -z $org || ${org,,} == "${operands[0],,}" ]] \
-      || hub::usage_error "two organizations: --org $org and ${operands[0]} (name one)"
+      || hub::usage_error "two organizations: --org $(hub::shown "$org") and $(hub::shown \
+        "${operands[0]}") (name one)"
     org=${org:-${operands[0]}}
   fi
   ((! no_remote)) || [[ -z $remote ]] \
     || hub::usage_error '--no-remote adds no remote to name (drop --remote-name)'
-  [[ -z $org ]] || opts+=("--org=$org")
-  [[ -z $fork_name ]] || opts+=("--fork-name=$fork_name")
-  ((! branch_only)) || opts+=(--default-branch-only)
+  [[ -z $org ]] || opts+=(-f "organization=$org")
+  [[ -z $fork_name ]] || opts+=(-f "name=$fork_name")
+  ((! branch_only)) || opts+=(-F default_branch_only=true)
 
   hub::require_gh
   if ((! no_remote)) || [[ -z ${GH_REPO-} ]]; then hub::require_repo; fi
   project=$(hub::project) || exit 1
   read -r host owner repo <<<"$project"
-  ((! no_remote)) || hub::exec_gh repo fork "$host/$owner/$repo" --clone=false "${opts[@]}"
+  # GitHub answers with the fork, new or existing, so its OWNER/NAME is read, never guessed.
+  set -- api --hostname "$host" --method POST "repos/$owner/$repo/forks" "${opts[@]}" \
+    --jq .full_name
+  ((! no_remote)) || hub::exec_gh "$@"
   [[ -n $remote ]] || remote=${org:-$(hub::login "$host")} || exit 1
   hub::require_new_remote "$remote"
 
-  # gh ignores GH_REPO here and refuses --remote with a repository argument, so hub adds the
-  # remote itself, for the fork whose web URL gh prints (an existing fork keeps its own name).
-  out=$(hub::gh repo fork "$host/$owner/$repo" --clone=false "${opts[@]}") || exit
+  fork=$(hub::gh "$@") || exit
   if [[ ${HUB_NOOP-} == 1 ]]; then
     # A prediction from the names as given: GitHub may normalize them, so nothing is checked.
-    printf '%s\n' "$out"
+    printf '%s\n' "$fork"
     fork=$org
     [[ -n $fork ]] || fork=$(hub::login "$host") || exit 1
     fork+=/${fork_name:-$repo}
-  else
-    fork=${out##*$'\n'}
-    fork=${fork#*://*/}
-    if [[ $fork != */* ]] || ! hub::is_shorthand "$fork"; then
-      hub::die "gh did not print the fork's URL: $out (add the remote with git remote add)"
-    fi
+  elif [[ $fork != */* ]] || ! hub::is_shorthand "$fork"; then
+    hub::die "GitHub did not name the fork: $(hub::shown "$fork")" \
+      '(add the remote with git remote add)'
   fi
   hub::git remote add -- "$remote" "$(hub::clone_url "$host" "${fork%%/*}" "${fork#*/}")"
 }
