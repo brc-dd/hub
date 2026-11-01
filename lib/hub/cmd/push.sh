@@ -9,7 +9,8 @@
 # only operand, hub pushes the current branch under its own name (HEAD), unless an option
 # chooses the refs itself (--all, --branches, --mirror, --tags, --delete) or the remote does
 # (remote.NAME.push or remote.NAME.mirror). A remote, path or URL whose name contains a comma
-# is one destination, and anything else is plain git push.
+# is one destination, and so is a word git rewrites through url.BASE.insteadOf (pushInsteadOf
+# is not read); anything else is plain git push.
 #
 #   $ hub push origin,staging
 #   > git push origin HEAD
@@ -33,8 +34,10 @@ hub_cmd_push() {
   hub::git_query rev-parse --git-dir >/dev/null || hub::exec_git push "$@"
   # git resolves a relative path from the top of the work tree; one that exists here counts too.
   top=$(hub::toplevel) || top=$(hub::git_query rev-parse --absolute-git-dir)
+  # git prints the word unchanged unless it is a remote or an insteadOf rewrite.
   if hub::remote_exists "$list" || hub::local_source "$list" \
-    || (cd "$top" && hub::local_source "$list"); then
+    || (cd "$top" && hub::local_source "$list") \
+    || [[ $(hub::git_query ls-remote --get-url -- "$list") != "$list" ]]; then
     hub::exec_git push "$@"
   fi
   if ((${#HUB_OPERANDS[@]} == 1)) && ! _hub_push_chooses_refs "${flags[@]}"; then head=1; fi
@@ -63,22 +66,24 @@ hub_cmd_push() {
 # _hub_push_chooses_refs FLAGS... : a flag picks the refs itself and no later --no-FLAG cancels
 # it, so HEAD is not added.
 _hub_push_chooses_refs() {
-  local word name long chosen=' '
+  local word name long mode chosen=' '
   for word; do
     case $word in
       --?*)
         # git expands abbreviations (--del, --no-al).
         name=${word%%=*}
         for long in --all --branches --mirror --tags --delete; do
+          # --branches is git's alias of --all: one mode.
+          mode=${long/#--branches/--all}
           if [[ $name == --no-?* && $long == "--${name#--no-}"* ]]; then
-            chosen=${chosen// $long / }
-          elif [[ $long == "$name"* && $chosen != *" $long "* ]]; then
-            chosen+="$long "
+            chosen=${chosen// $mode / }
+          elif [[ $long == "$name"* && $chosen != *" $mode "* ]]; then
+            chosen+="$mode "
           fi
         done
         ;;
       # -o takes the rest of the cluster as its value.
-      -*) [[ ${word%%o*} != -*d* ]] || chosen+='--delete ' ;;
+      -*) [[ ${word%%o*} != -*d* || $chosen == *' --delete '* ]] || chosen+='--delete ' ;;
     esac
   done
   [[ -n ${chosen// /} ]]

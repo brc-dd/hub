@@ -136,7 +136,8 @@ setup_push() {
   commit_on main 'unpushed on main'
   local flags
   for flags in '--all --no-all' '--tags --no-tags' '-d --no-delete' '--mirror --no-mirr' \
-    '--branches --no-br' '--all --all --no-al'; do
+    '--branches --no-br' '--all --all --no-al' '--all --no-branches' '--branches --no-all' \
+    '--br --no-al' '-d -d --no-delete' '--delete -d --no-delete' '--delete -qd --no-del'; do
     run hub push $flags origin,two
     assert_success
     assert_equals "$(server_ref mislav/one refs/heads/feature)" "$(tip feature)"
@@ -311,6 +312,27 @@ setup_push() {
   run hub push https://github.com/mislav/a,b.git feature
   assert_success
   assert_equals "$(server_ref 'mislav/a,b' refs/heads/feature)" "$(tip feature)"
+  assert_equals "$(server_branches mislav/one)" main
+}
+
+@test "hub push hands a list that git rewrites through insteadOf to git untouched" {
+  setup_push mislav/three
+  git config url.https://github.com/mislav/three.git.insteadOf origin,two
+  run hub push origin,two
+  assert_success
+  assert_equals "$(server_ref mislav/three refs/heads/feature)" "$(tip feature)"
+  assert_equals "$(server_branches mislav/one)" main
+  assert_equals "$(server_branches mislav/two)" main
+}
+
+@test "hub push hands a path with a comma that git rewrites through insteadOf to git" {
+  setup_push
+  git init -q --bare "$HUB_TEST_TMP/store/a,b.git"
+  git config url."$HUB_TEST_TMP/store/".insteadOf store/
+  run hub push store/a,b.git feature
+  assert_success
+  assert_equals "$(git -C "$HUB_TEST_TMP/store/a,b.git" rev-parse refs/heads/feature)" \
+    "$(tip feature)"
   assert_equals "$(server_branches mislav/one)" main
 }
 
