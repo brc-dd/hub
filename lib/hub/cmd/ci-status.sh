@@ -11,7 +11,8 @@
 # branch.
 #
 # Options:
-#   -v   Print STATE, NAME and URL of every check instead (the first 100), failures first,
+#   -v, --verbose
+#        Print STATE, NAME and URL of every check instead (the first 100), failures first,
 #        then pending ones, then the rest; nothing when there is no check.
 #
 # Exit status: 0 success, 1 failure or error (also when the lookup fails or GitHub has no
@@ -30,7 +31,7 @@ hub_cmd_ci_status() {
   set -- "${HUB_ARGS[@]}"
   while (($#)); do
     case $1 in
-      -v) verbose=1 ;;
+      -v | --verbose) verbose=1 ;;
       -h | --help) hub::usage ;;
       --) shift && operands+=("$@") && break ;;
       -?*) hub::usage_error "unknown option: $1" ;;

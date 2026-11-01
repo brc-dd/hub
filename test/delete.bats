@@ -145,12 +145,9 @@ load test_helper
 }
 
 @test "hub delete needs gh" {
-  mkdir nogh
-  ln -s "$(command -v git)" nogh/git
-  ln -s "$(command -v bash)" nogh/bash
   local name gh_url=https://cli.github.com
   for name in octo/site dotfiles; do
-    PATH=$HUB_TEST_TMP/nogh:/usr/bin:/bin run hub delete -y "$name"
+    PATH=$(no_gh_path) run hub delete -y "$name"
     assert_status 1
     assert_output_equals "hub delete: this command needs the GitHub CLI, gh ($gh_url)"
   done

@@ -24,21 +24,14 @@ change() {
   git reset -q --hard HEAD~
 }
 
-# stub_download ENDPOINT FORMAT FILE : gh api answers ENDPOINT in FORMAT with FILE.
-stub_download() {
-  stub_gh_file "api --hostname github.com $1 -H Accept: application/vnd.github.$2*" "$3"
-}
-
 # assert_downloaded ENDPOINT FORMAT [FLAG] : gh api downloaded ENDPOINT from github.com as FORMAT.
 assert_downloaded() {
   assert_gh_called "api --hostname github.com $1 -H Accept: application/vnd.github.$2${3:+ $3}"
 }
 
-assert_temp_removed() { assert_equals "$(ls -A "$TMPDIR")" ''; }
-
 @test "hub apply PULL-URL applies the pull request's diff to the work tree without a commit" {
   change a.txt two pr
-  stub_download repos/octo/proj/pulls/7 diff "$HUB_TEST_TMP/pr.diff"
+  stub_patch repos/octo/proj/pulls/7 diff "$HUB_TEST_TMP/pr.diff"
   local head
   head=$(tip main)
   run hub apply https://github.com/octo/proj/pull/7
@@ -47,13 +40,17 @@ assert_temp_removed() { assert_equals "$(ls -A "$TMPDIR")" ''; }
   assert_equals "$(tip main)" "$head"
   assert_equals "$(git diff --cached --name-only)" ''
   assert_downloaded repos/octo/proj/pulls/7 diff --allow-escape-sequences
-  assert_temp_removed
+  assert_tmp_empty
 }
 
 @test "hub apply takes any page of a pull request" {
   change a.txt two pr
-  stub_download repos/octo/proj/pulls/7 diff "$HUB_TEST_TMP/pr.diff"
+  stub_patch repos/octo/proj/pulls/7 diff "$HUB_TEST_TMP/pr.diff"
   run hub apply 'https://github.com/octo/proj/pull/7/files?w=1#diff'
+  assert_success
+  assert_equals "$(<a.txt)" two
+  git checkout -q a.txt
+  run hub apply https://github.com/octo/proj/pull/7/commits/
   assert_success
   assert_equals "$(<a.txt)" two
 }
@@ -61,8 +58,8 @@ assert_temp_removed() { assert_equals "$(ls -A "$TMPDIR")" ''; }
 @test "hub apply downloads a URL ending in .patch or .diff as one diff" {
   change a.txt two pr
   change b.txt two c
-  stub_download repos/octo/proj/pulls/7 diff "$HUB_TEST_TMP/pr.diff"
-  stub_download repos/octo/proj/commits/1a2b3c4 diff "$HUB_TEST_TMP/c.diff"
+  stub_patch repos/octo/proj/pulls/7 diff "$HUB_TEST_TMP/pr.diff"
+  stub_patch repos/octo/proj/commits/1a2b3c4 diff "$HUB_TEST_TMP/c.diff"
   local head
   head=$(tip main)
   run hub apply https://github.com/octo/proj/pull/7.patch \
@@ -84,7 +81,7 @@ assert_temp_removed() { assert_equals "$(ls -A "$TMPDIR")" ''; }
   git commit -q -a -m 'set a.txt to two'
   git diff HEAD~3 >"$HUB_TEST_TMP/pr.diff"
   git reset -q --hard HEAD~3
-  stub_download repos/octo/proj/pulls/7 diff "$HUB_TEST_TMP/pr.diff"
+  stub_patch repos/octo/proj/pulls/7 diff "$HUB_TEST_TMP/pr.diff"
   run hub apply https://github.com/octo/proj/pull/7.patch
   assert_success
   assert_equals "$(<a.txt)" two
@@ -94,15 +91,15 @@ assert_temp_removed() { assert_equals "$(ls -A "$TMPDIR")" ''; }
 @test "hub apply downloads commit, pull request commit and compare URLs from their endpoints" {
   change a.txt two c
   change b.txt two pc
-  stub_download repos/octo/proj/commits/1a2b3c4 diff "$HUB_TEST_TMP/c.diff"
-  stub_download repos/octo/proj/commits/abcdef0 diff "$HUB_TEST_TMP/pc.diff"
+  stub_patch repos/octo/proj/commits/1a2b3c4 diff "$HUB_TEST_TMP/c.diff"
+  stub_patch repos/octo/proj/commits/abcdef0 diff "$HUB_TEST_TMP/pc.diff"
   run hub apply https://github.com/octo/proj/commit/1a2b3c4 \
     https://github.com/octo/proj/pull/7/commits/abcdef0
   assert_success
   assert_equals "$(<a.txt)" two
   assert_equals "$(<b.txt)" two
   git checkout -q a.txt b.txt
-  stub_download 'repos/octo/proj/compare/v1.0...fork:feature' diff "$HUB_TEST_TMP/c.diff"
+  stub_patch 'repos/octo/proj/compare/v1.0...fork:feature' diff "$HUB_TEST_TMP/c.diff"
   run hub apply 'https://github.com/octo/proj/compare/v1.0...fork:feature'
   assert_success
   assert_equals "$(<a.txt)" two
@@ -116,8 +113,8 @@ assert_temp_removed() { assert_equals "$(ls -A "$TMPDIR")" ''; }
   change a.txt three pr
   git reset -q --hard HEAD~
   change b.txt two c
-  stub_download repos/octo/proj/pulls/7 diff "$HUB_TEST_TMP/pr.diff"
-  stub_download repos/octo/proj/commits/1a2b3c4 diff "$HUB_TEST_TMP/c.diff"
+  stub_patch repos/octo/proj/pulls/7 diff "$HUB_TEST_TMP/pr.diff"
+  stub_patch repos/octo/proj/commits/1a2b3c4 diff "$HUB_TEST_TMP/c.diff"
   run hub apply --index "$HUB_TEST_TMP/local.diff" https://github.com/octo/proj/pull/7 \
     https://github.com/octo/proj/commit/1a2b3c4
   assert_success
@@ -128,12 +125,12 @@ assert_temp_removed() { assert_equals "$(ls -A "$TMPDIR")" ''; }
   run hub apply https://github.com/octo/proj/pull/7 "$HUB_TEST_TMP/local.diff"
   assert_failure
   assert_equals "$(git status --porcelain)" ''
-  assert_temp_removed
+  assert_tmp_empty
 }
 
 @test "hub apply makes its temporary directory under TMPDIR" {
   change a.txt two pr
-  stub_download repos/octo/proj/pulls/7 diff "$HUB_TEST_TMP/pr.diff"
+  stub_patch repos/octo/proj/pulls/7 diff "$HUB_TEST_TMP/pr.diff"
   TMPDIR=$HUB_TEST_TMP/missing run hub apply https://github.com/octo/proj/pull/7
   assert_status 1
   assert_equals "$(<a.txt)" one
@@ -143,7 +140,7 @@ assert_temp_removed() { assert_equals "$(ls -A "$TMPDIR")" ''; }
 @test "hub apply leaves out --allow-escape-sequences when gh does not know it" {
   stub_gh 'api --help' 'Usage: gh api <endpoint> [flags]'
   change a.txt two pr
-  stub_download repos/octo/proj/pulls/7 diff "$HUB_TEST_TMP/pr.diff"
+  stub_patch repos/octo/proj/pulls/7 diff "$HUB_TEST_TMP/pr.diff"
   run hub apply https://github.com/octo/proj/pull/7
   assert_success
   assert_downloaded repos/octo/proj/pulls/7 diff
@@ -158,7 +155,7 @@ assert_temp_removed() { assert_equals "$(ls -A "$TMPDIR")" ''; }
   assert_success
   assert_equals "$(<a.txt)" two
   git checkout -q a.txt
-  stub_download repos/octo/proj/pulls/7 diff "$HUB_TEST_TMP/pr.diff"
+  stub_patch repos/octo/proj/pulls/7 diff "$HUB_TEST_TMP/pr.diff"
   run hub apply https://github.com/octo/proj/pull/7
   assert_success
   assert_gh_called 'api --hostname github.com repos/octo/proj/pulls/7 -H *'
@@ -167,31 +164,31 @@ assert_temp_removed() { assert_equals "$(ls -A "$TMPDIR")" ''; }
 @test "hub apply stops before git when a download fails" {
   change a.txt two pr
   change b.txt two other
-  stub_download repos/octo/proj/pulls/7 diff "$HUB_TEST_TMP/pr.diff"
+  stub_patch repos/octo/proj/pulls/7 diff "$HUB_TEST_TMP/pr.diff"
   stub_gh 'api --hostname github.com repos/octo/proj/pulls/8 -H *' 'HTTP 404: Not Found' 1
   run hub apply https://github.com/octo/proj/pull/7 https://github.com/octo/proj/pull/8
   assert_status 1
   assert_output_contains 'hub apply: could not download: https://github.com/octo/proj/pull/8'
   assert_equals "$(<a.txt)" one
   assert_equals "$(git status --porcelain)" ''
-  assert_temp_removed
+  assert_tmp_empty
 }
 
 @test "hub apply relays git apply's failure and status and removes the downloads" {
   printf 'diff --git a/c.txt b/c.txt\n--- a/c.txt\n+++ b/c.txt\n@@ -1 +1 @@\n-x\n+y\n' \
     >"$HUB_TEST_TMP/bad.diff"
-  stub_download repos/octo/proj/pulls/7 diff "$HUB_TEST_TMP/bad.diff"
+  stub_patch repos/octo/proj/pulls/7 diff "$HUB_TEST_TMP/bad.diff"
   run hub apply https://github.com/octo/proj/pull/7
   assert_status 1
   assert_output_contains 'c.txt'
   assert_equals "$(git status --porcelain)" ''
-  assert_temp_removed
+  assert_tmp_empty
   printf 'not a patch\n' >"$HUB_TEST_TMP/bad.diff"
-  stub_download repos/octo/proj/pulls/7 diff "$HUB_TEST_TMP/bad.diff"
+  stub_patch repos/octo/proj/pulls/7 diff "$HUB_TEST_TMP/bad.diff"
   run hub apply https://github.com/octo/proj/pull/7
   assert_status 128
   assert_equals "$(git status --porcelain)" ''
-  assert_temp_removed
+  assert_tmp_empty
 }
 
 @test "hub apply without a GitHub URL is plain git apply" {
@@ -201,7 +198,7 @@ assert_temp_removed() { assert_equals "$(ls -A "$TMPDIR")" ''; }
   assert_equals "$(<a.txt)" two
   for url in https://github.com/octo/proj https://github.com/octo/proj/issues/7 \
     https://github.com/octo/proj/commit/main https://github.com/octo/proj/compare \
-    https://github.com/octo/proj/pull/7/commits https://gitlab.com/octo/proj/pull/7 \
+    https://gitlab.com/octo/proj/pull/7 \
     https://github.com/octo/proj/pull https://github.com/octo/proj/pull/ \
     https://github.com/octo/proj/commit https://github.com/octo/proj/pull/x/commits/abcdef0; do
     run hub apply "$url"
@@ -221,13 +218,13 @@ assert_temp_removed() { assert_equals "$(ls -A "$TMPDIR")" ''; }
   assert_output_contains "can't open patch '$url'"
   assert_gh_not_called
   change a.txt two c
-  stub_download repos/octo/proj/commits/1a2b3c4 diff "$HUB_TEST_TMP/c.diff"
+  stub_patch repos/octo/proj/commits/1a2b3c4 diff "$HUB_TEST_TMP/c.diff"
   run hub apply https://github.com/octo/proj/commit/1a2b3c4 -- "$url"
   assert_failure
   assert_output_contains "can't open patch '$url'"
   assert_downloaded repos/octo/proj/commits/1a2b3c4 diff --allow-escape-sequences
   assert_equals "$(grep -c 'pulls/7' "$HUB_TEST_GH_LOG")" 0
-  assert_temp_removed
+  assert_tmp_empty
 }
 
 @test "hub apply leaves a page of one commit or a range within a pull request to git" {
@@ -249,6 +246,13 @@ assert_temp_removed() { assert_equals "$(ls -A "$TMPDIR")" ''; }
   assert_gh_not_called
 }
 
+@test "hub apply --help-all is git's usage, before anything is downloaded" {
+  run hub apply --help-all https://github.com/octo/proj/pull/7
+  assert_status 129
+  assert_gh_not_called
+  assert_tmp_empty
+}
+
 @test "hub apply -h is git's usage, with nothing downloaded" {
   local word
   for word in -h -Rh; do
@@ -260,13 +264,10 @@ assert_temp_removed() { assert_equals "$(ls -A "$TMPDIR")" ''; }
 }
 
 @test "hub apply refuses a URL without gh" {
-  mkdir "$HUB_TEST_TMP/nogh"
-  ln -s "$(command -v git)" "$HUB_TEST_TMP/nogh/git"
-  ln -s "$(command -v bash)" "$HUB_TEST_TMP/nogh/bash"
-  PATH=$HUB_TEST_TMP/nogh:/usr/bin:/bin run hub apply https://github.com/octo/proj/pull/7
+  PATH=$(no_gh_path mktemp rm) run hub apply https://github.com/octo/proj/pull/7
   assert_status 1
   assert_output_equals 'hub apply: this command needs the GitHub CLI, gh (https://cli.github.com)'
-  assert_temp_removed
+  assert_tmp_empty
 }
 
 @test "hub help apply prints hub's manual ending with git's" {

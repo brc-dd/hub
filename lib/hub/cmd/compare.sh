@@ -12,9 +12,9 @@
 # that repository has another owner. Without -b, GitHub compares it with the default branch.
 #
 # Options:
-#   -b BASE   Compare END, or the current branch, with BASE.
-#   -u        Print the URL instead of opening it.
-#   -c        Copy the URL to the clipboard instead of opening it; with -u, print and copy.
+#   -b, --base BASE  Compare END, or the current branch, with BASE.
+#   -u, --url        Print the URL instead of opening it.
+#   -c, --copy       Copy the URL to the clipboard instead of opening it; with -u, print and copy.
 #
 # The exit status is the browser's or the clipboard tool's.
 #
@@ -26,13 +26,13 @@
 hub_cmd_compare() {
   local print=0 copy=0 base='' owner='' range='' end project host project_owner repo url
   local -a operands=()
-  hub::normalize_opts b '' "$@"
+  hub::normalize_opts b --base "$@"
   set -- "${HUB_ARGS[@]}"
   while (($#)); do
     case $1 in
-      -u) print=1 ;;
-      -c) copy=1 ;;
-      -b)
+      -u | --url) print=1 ;;
+      -c | --copy) copy=1 ;;
+      -b | --base)
         (($# >= 2)) || hub::usage_error "$1 needs a value"
         [[ -n $2 ]] || hub::usage_error "$1 needs a branch name"
         base=$2
@@ -52,7 +52,7 @@ hub_cmd_compare() {
     *) hub::usage_error "unexpected argument: ${operands[2]}" ;;
   esac
   # The owner becomes a path segment of the URL.
-  if ((${#operands[@]} == 2)) && [[ ! $owner =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]]; then
+  if ((${#operands[@]} == 2)) && ! hub::is_owner "$owner"; then
     hub::usage_error "not an owner: $owner"
   fi
   if ((${#operands[@]})) && [[ -z $range ]]; then hub::usage_error 'empty range'; fi
@@ -75,12 +75,7 @@ hub_cmd_compare() {
   [[ -n $range ]] || range=$(_hub_compare_head "$host" "$owner") || exit 1
   [[ -z $base ]] || range=$base...$range
   url=https://$host/$owner/$repo/compare/$(hub::url_escape "$range")
-  if ((print)); then printf '%s\n' "$url"; fi
-  if ((copy)); then
-    hub::copy "$url"
-  elif ((! print)); then
-    hub::open_url "$url"
-  fi
+  hub::show_url "$print" "$copy" "$url"
 }
 
 # _hub_compare_head HOST OWNER : the current branch as a head of OWNER's repository on HOST.
@@ -103,7 +98,7 @@ _hub_compare_head() {
   found=$(hub::remote_project "$remote" push) \
     || hub::die "$remote does not push to a GitHub repository (name a range)"
   read -r fork_host fork_owner _ <<<"$found"
-  [[ $fork_host == "${1,,}" ]] || hub::die "$remote pushes to $fork_host, not to $1 (name a range)"
+  [[ $fork_host == "$1" ]] || hub::die "$remote pushes to $fork_host, not to $1 (name a range)"
   if [[ ${fork_owner,,} == "${2,,}" ]]; then
     printf '%s\n' "$branch"
   else

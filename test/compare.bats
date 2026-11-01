@@ -5,18 +5,6 @@ load test_helper
 
 page=https://github.com/mislav/dotfiles/compare
 
-# opened : the URLs the browser stub was given, one per line.
-opened() { cat "$HUB_TEST_TMP/browser.log" 2>/dev/null; }
-
-# pushed_feature : a clone of mislav/dotfiles on branch feature, pushed with -u.
-pushed_feature() {
-  serve_github mislav/dotfiles
-  clone_served mislav/dotfiles
-  git switch -q -c feature
-  git commit -q --allow-empty -m feature
-  git push -q -u origin refs/heads/feature:refs/heads/feature 2>/dev/null
-}
-
 @test "hub compare opens the page of a range, with A..B written A...B" {
   make_repo work origin=https://github.com/mislav/dotfiles.git
   run hub compare v1.0..v1.1
@@ -41,27 +29,42 @@ $page/feature"
   run hub compare -c v2..v3
   assert_success
   assert_output_equals ''
-  assert_equals "$(<"$HUB_TEST_TMP/clipboard")" "$page/v2...v3"
+  assert_equals "$(copied)" "$page/v2...v3"
   run hub compare -uc v3..v4
   assert_success
   assert_output_equals "$page/v3...v4"
-  assert_equals "$(<"$HUB_TEST_TMP/clipboard")" "$page/v3...v4"
+  assert_equals "$(copied)" "$page/v3...v4"
   run hub compare -u -c v4..v5
   assert_success
   assert_output_equals "$page/v4...v5"
-  assert_equals "$(<"$HUB_TEST_TMP/clipboard")" "$page/v4...v5"
+  assert_equals "$(copied)" "$page/v4...v5"
   assert_equals "$(opened)" ''
 }
 
-@test "hub compare does not take long option spellings" {
+@test "hub compare takes hub 2.x's long options --url, --copy and --base" {
   make_repo work origin=https://github.com/mislav/dotfiles.git
   run hub compare --url a..b
+  assert_success
+  assert_output_equals "$page/a...b"
+  run hub compare --copy b..c
+  assert_success
+  assert_output_equals ''
+  assert_equals "$(copied)" "$page/b...c"
+  run hub compare --url --base=develop feature
+  assert_success
+  assert_output_equals "$page/develop...feature"
+  run hub compare --url --base main alice feature
+  assert_success
+  assert_output_equals https://github.com/alice/dotfiles/compare/main...feature
+  run hub compare --base
   assert_status 1
-  assert_line_equals 0 'hub compare: unknown option: --url'
-  run hub compare --copy a..b
-  assert_line_equals 0 'hub compare: unknown option: --copy'
-  run hub compare --base=develop feature
-  assert_line_equals 0 'hub compare: unknown option: --base=develop'
+  assert_line_equals 0 'hub compare: --base needs a value'
+  run hub compare --base= feature
+  assert_status 1
+  assert_line_equals 0 'hub compare: --base needs a branch name'
+  run hub compare --base=a..b feature
+  assert_status 1
+  assert_line_equals 0 'hub compare: use either -b BASE or a range, not both: a..b'
   assert_equals "$(opened)" ''
 }
 
@@ -194,7 +197,7 @@ $page/feature"
   assert_success
   assert_output_equals "copy $page/a...b"
   assert_equals "$(opened)" ''
-  assert_equals "$(cat "$HUB_TEST_TMP/clipboard" 2>/dev/null)" ''
+  assert_equals "$(copied)" ''
 }
 
 @test "hub compare without a range opens the pushed current branch" {
@@ -212,7 +215,7 @@ $page/feature"
   pushed_feature
   GH_HOST=GitHub.com GH_REPO=mislav/dotfiles run hub compare -u
   assert_success
-  assert_output_equals https://GitHub.com/mislav/dotfiles/compare/feature
+  assert_output_equals "$page/feature"
 }
 
 @test "hub compare accepts a pushed branch with local commits on top" {
@@ -223,14 +226,18 @@ $page/feature"
   assert_output_equals "$page/feature"
 }
 
-@test "hub compare refuses a branch that is not pushed, and a detached HEAD" {
+@test "hub compare refuses a branch that is not pushed, an unborn branch and a detached HEAD" {
   serve_github mislav/dotfiles
   clone_served mislav/dotfiles
   git switch -q -c feature
   run hub compare
   assert_status 1
   assert_output_equals 'hub compare: feature is not pushed to origin; push it first or name a range'
-  git switch -q --detach
+  git switch -q --orphan unborn
+  run hub compare -u
+  assert_status 1
+  assert_output_equals 'hub compare: unborn is not pushed to origin; push it first or name a range'
+  git switch -q --detach feature
   run hub compare -u
   assert_status 1
   assert_output_equals 'hub compare: not on a branch (check out a branch, or name a range)'

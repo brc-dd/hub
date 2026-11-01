@@ -10,13 +10,6 @@ dotfiles() {
   stub_gh 'repo fork *' https://github.com/mislav/dotfiles
 }
 
-# no_gh : a directory holding git and bash but no gh, for PATH.
-no_gh() {
-  mkdir -p "$HUB_TEST_TMP/nogh"
-  ln -sf "$(command -v git)" "$HUB_TEST_TMP/nogh/git"
-  ln -sf "$(command -v bash)" "$HUB_TEST_TMP/nogh/bash"
-}
-
 @test "hub fork names the project to gh and adds the fork as a remote named after you" {
   dotfiles
   run hub fork
@@ -227,11 +220,10 @@ no_gh() {
 
 @test "hub fork without gh on PATH says so once and changes nothing" {
   dotfiles
-  no_gh
   local needs='hub fork: this command needs the GitHub CLI, gh (https://cli.github.com)'
   for args in '' --no-remote '--remote-name x'; do
     # shellcheck disable=SC2086  # the words of args are separate arguments
-    PATH=$HUB_TEST_TMP/nogh:/usr/bin:/bin run hub fork $args
+    PATH=$(no_gh_path) run hub fork $args
     assert_status 1
     assert_output_equals "$needs"
   done

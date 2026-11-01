@@ -16,7 +16,7 @@
 #   > gh repo delete github.com/octo-org/old-site
 
 hub_cmd_delete() {
-  local host owner repo
+  local host owner='' repo=''
   local -a operands=() yes=()
   hub::normalize_opts '' '' "$@"
   set -- "${HUB_ARGS[@]}"
@@ -34,17 +34,14 @@ hub_cmd_delete() {
   ((${#operands[@]} == 1)) || hub::usage_error "unexpected argument: ${operands[1]}"
   if [[ ${operands[0]} == */* ]]; then
     read -r host owner repo < <(hub::parse_project "${operands[0]}")
-  else
-    host=$(hub::host) owner='' repo=${operands[0]}
+  elif hub::is_shorthand "${operands[0]%.git}"; then
+    host=$(hub::host) || exit 1
+    repo=${operands[0]%.git}
   fi
-  host=${host,,} repo=${repo%.git}
-  # Each part goes to gh in one word: none may read as an option or add a path segment.
-  if ! [[ $host =~ ^[a-z0-9][a-z0-9.-]*$ ]] || ! hub::known_host "$host" \
-    || ! hub::is_shorthand "${owner:+$owner/}$repo"; then
+  if [[ -z $repo ]]; then
     hub::die "not a repository: ${operands[0]}" \
       '(use NAME, OWNER/NAME, HOST/OWNER/NAME or a repository URL)'
   fi
-  hub::require_gh
   [[ -n $owner ]] || owner=$(hub::login "$host") || exit 1
   hub::exec_gh repo delete "$host/$owner/$repo" "${yes[@]}"
 }

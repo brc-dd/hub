@@ -191,6 +191,20 @@ stub_create() { stub_gh 'pr create *' 'https://github.com/mislav/dotfiles/pull/1
   assert_equals "$(server_ref mislav/dotfiles refs/heads/feature)" "$(tip feature~2)"
 }
 
+@test "hub pull-request calls an unborn branch not pushed, also when the remote has its name" {
+  feature_repo
+  git push -q origin feature
+  git checkout -q main
+  git branch -q -D feature
+  git checkout -q --orphan feature
+  stub_create
+  run hub pull-request -m 'Fix the bug'
+  assert_status 1
+  assert_output_equals \
+    'hub pull-request: feature is not pushed to origin (use -p to push it, or -f to skip the check)'
+  assert_gh_not_called
+}
+
 @test "hub pull-request opens the pull request for a pushed branch, and -f skips the check" {
   feature_repo
   git push -q -u origin feature
@@ -579,8 +593,8 @@ stub_create() { stub_gh 'pr create *' 'https://github.com/mislav/dotfiles/pull/1
     'https://github.com/mislav/dotfiles/pull/1'
   run hub pull-request -o -c -m 'Fix the bug'
   assert_success
-  assert_equals "$(<"$HUB_TEST_TMP/browser.log")" 'https://github.com/mislav/dotfiles/pull/1'
-  assert_equals "$(<"$HUB_TEST_TMP/clipboard")" 'https://github.com/mislav/dotfiles/pull/1'
+  assert_equals "$(opened)" 'https://github.com/mislav/dotfiles/pull/1'
+  assert_equals "$(copied)" 'https://github.com/mislav/dotfiles/pull/1'
 }
 
 @test "hub pull-request -o still opens the browser when -c finds no clipboard tool" {
@@ -599,7 +613,7 @@ stub_create() { stub_gh 'pr create *' 'https://github.com/mislav/dotfiles/pull/1
   PATH=$bin run hub pull-request -o -c -m 'Fix the bug'
   assert_status 1
   assert_output_contains 'hub pull-request: no clipboard tool found'
-  assert_equals "$(<"$HUB_TEST_TMP/browser.log")" 'https://github.com/mislav/dotfiles/pull/1'
+  assert_equals "$(opened)" 'https://github.com/mislav/dotfiles/pull/1'
 }
 
 @test "hub pull-request --noop -o -c prints the lookup, the copy and the open" {
@@ -610,8 +624,8 @@ stub_create() { stub_gh 'pr create *' 'https://github.com/mislav/dotfiles/pull/1
   assert_line_equals 2 'copy URL'
   assert_line_equals 3 'open URL'
   assert_gh_not_called
-  assert_equals "$(cat "$HUB_TEST_TMP/browser.log" 2>/dev/null)" ''
-  assert_equals "$(cat "$HUB_TEST_TMP/clipboard" 2>/dev/null)" ''
+  assert_equals "$(opened)" ''
+  assert_equals "$(copied)" ''
 }
 
 @test "hub pull-request returns the browser's or clipboard's failure after the URL was shown" {
@@ -625,7 +639,7 @@ stub_create() { stub_gh 'pr create *' 'https://github.com/mislav/dotfiles/pull/1
   rm "$HUB_TEST_TMP/browser.log"
   HUB_TEST_CLIPBOARD_STATUS=17 run hub pull-request -o -c -m 'Fix the bug'
   assert_status 17
-  assert_equals "$(<"$HUB_TEST_TMP/browser.log")" 'https://github.com/mislav/dotfiles/pull/1'
+  assert_equals "$(opened)" 'https://github.com/mislav/dotfiles/pull/1'
 }
 
 @test "hub pull-request stops with gh's status when gh pr create fails, and opens nothing" {
@@ -635,7 +649,7 @@ stub_create() { stub_gh 'pr create *' 'https://github.com/mislav/dotfiles/pull/1
   run hub pull-request -o -m 'Fix the bug'
   assert_status 4
   assert_equals "$(gh_calls | grep -c 'pr view')" 0
-  assert_equals "$(cat "$HUB_TEST_TMP/browser.log" 2>/dev/null)" ''
+  assert_equals "$(opened)" ''
 }
 
 @test "hub pull-request says so when the new pull request's URL cannot be looked up" {
@@ -663,10 +677,7 @@ stub_create() { stub_gh 'pr create *' 'https://github.com/mislav/dotfiles/pull/1
 
 @test "hub pull-request without gh refuses before pushing" {
   feature_repo
-  mkdir "$HUB_TEST_TMP/nogh"
-  ln -s "$(command -v git)" "$HUB_TEST_TMP/nogh/git"
-  ln -s "$(command -v bash)" "$HUB_TEST_TMP/nogh/bash"
-  PATH=$HUB_TEST_TMP/nogh:/usr/bin:/bin run hub pull-request -p -m 'Fix the bug'
+  PATH=$(no_gh_path) run hub pull-request -p -m 'Fix the bug'
   assert_status 1
   assert_output_equals \
     'hub pull-request: this command needs the GitHub CLI, gh (https://cli.github.com)'
@@ -701,6 +712,10 @@ stub_create() { stub_gh 'pr create *' 'https://github.com/mislav/dotfiles/pull/1
   assert_line_equals 0 'hub pull-request: -m needs a value'
   run hub pull-request -p --head
   assert_line_equals 0 'hub pull-request: --head needs a value'
+  run hub pull-request -p -h
+  assert_status 1
+  assert_line_equals 0 'hub pull-request: -h needs a value'
+  assert_line_equals 1 "$USAGE"
   run hub pull-request -p -i 12
   assert_status 1
   local expected='hub pull-request: -i is not supported (use gh api to attach a pull request'
@@ -709,10 +724,7 @@ stub_create() { stub_gh 'pr create *' 'https://github.com/mislav/dotfiles/pull/1
   assert_gh_not_called
 }
 
-@test "hub pull-request -h alone and --help print the manual" {
-  run hub pull-request -h
-  assert_success
-  assert_line_equals 0 'Summary: Open a pull request for the current branch.'
+@test "hub pull-request --help prints the manual" {
   run hub pull-request --help
   assert_success
   assert_line_equals 0 'Summary: Open a pull request for the current branch.'

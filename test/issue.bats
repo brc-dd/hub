@@ -3,28 +3,6 @@
 
 load test_helper
 
-# A gh that records what the stub's log does not show: one argument per line in args, its
-# standard input in stdin, GH_HOST and GH_REPO in env, and its parent program's name in parent.
-make_recording_gh() {
-  mkdir -p "$HUB_TEST_TMP/bin"
-  cat >"$HUB_TEST_TMP/bin/gh" <<'EOF'
-#!/usr/bin/env bash
-printf '%s\n' "$@" >"$HUB_TEST_TMP/args"
-cat >"$HUB_TEST_TMP/stdin"
-printf 'GH_HOST=%s GH_REPO=%s\n' "${GH_HOST-unset}" "${GH_REPO-unset}" >"$HUB_TEST_TMP/env"
-ps -o comm= -p "$PPID" >"$HUB_TEST_TMP/parent"
-EOF
-  chmod +x "$HUB_TEST_TMP/bin/gh"
-}
-
-# A PATH holding git and bash only (no gh, not even the system's).
-no_gh_path() {
-  mkdir -p nogh
-  ln -sf "$(command -v git)" nogh/git
-  ln -sf "$(command -v bash)" nogh/bash
-  printf '%s\n' "$HUB_TEST_TMP/nogh"
-}
-
 @test "hub issue without arguments runs gh issue list" {
   make_repo work origin=https://github.com/mislav/hub.git
   stub_gh 'issue list' '#7  Crash on start  bug'
@@ -105,20 +83,20 @@ no_gh_path() {
 }
 
 @test "hub issue keeps every argument whole and an empty word as the subcommand" {
-  make_recording_gh
-  PATH=$HUB_TEST_TMP/bin:$PATH run hub issue create --title 'two words' --body '' -l 'a,b c' \
-    </dev/null
+  stub_gh 'issue*' ''
+  bin=$(recording_gh)
+  PATH=$bin:$PATH run hub issue create --title 'two words' --body '' -l 'a,b c'
   assert_success
   assert_equals "$(<args)" "$(printf '%s\n' issue create --title 'two words' --body '' \
     -l 'a,b c')"
-  PATH=$HUB_TEST_TMP/bin:$PATH run hub issue '' show 12 </dev/null
+  PATH=$bin:$PATH run hub issue '' show 12
   assert_success
   assert_equals "$(<args)" "$(printf '%s\n' issue '' show 12)"
 }
 
 @test "hub issue gives gh its standard input" {
-  make_recording_gh
-  PATH=$HUB_TEST_TMP/bin:$PATH run hub issue create -t Crash -F - <<<'It crashes on start.'
+  stub_gh 'issue create *' ''
+  PATH=$(recording_gh stdin):$PATH run hub issue create -t Crash -F - <<<'It crashes on start.'
   assert_success
   assert_equals "$(<args)" "$(printf '%s\n' issue create -t Crash -F -)"
   assert_equals "$(<stdin)" 'It crashes on start.'
@@ -126,32 +104,33 @@ no_gh_path() {
 
 @test "hub issue adds no repository or host and keeps the user's GH_REPO and GH_HOST" {
   make_repo work origin=https://github.com/mislav/hub.git
-  make_recording_gh
-  PATH=$HUB_TEST_TMP/bin:$PATH run hub issue show 12 </dev/null
+  stub_gh 'issue*' ''
+  bin=$(recording_gh)
+  PATH=$bin:$PATH run hub issue show 12
   assert_success
   assert_equals "$(<"$HUB_TEST_TMP/args")" "$(printf '%s\n' issue view 12)"
   assert_equals "$(<"$HUB_TEST_TMP/env")" 'GH_HOST=unset GH_REPO=unset'
-  GH_REPO=cli/cli GH_HOST=ghe.example.com PATH=$HUB_TEST_TMP/bin:$PATH run hub issue \
-    </dev/null
+  GH_REPO=cli/cli GH_HOST=ghe.example.com PATH=$bin:$PATH run hub issue
   assert_success
   assert_equals "$(<"$HUB_TEST_TMP/env")" 'GH_HOST=ghe.example.com GH_REPO=cli/cli'
 }
 
 @test "hub issue passes hub 2.x's GITHUB_HOST to gh as GH_HOST unless GH_HOST is set" {
-  make_recording_gh
-  GITHUB_HOST=ghe.example.com PATH=$HUB_TEST_TMP/bin:$PATH run hub issue </dev/null
+  stub_gh 'issue*' ''
+  bin=$(recording_gh)
+  GITHUB_HOST=ghe.example.com PATH=$bin:$PATH run hub issue
   assert_success
   assert_equals "$(<"$HUB_TEST_TMP/env")" 'GH_HOST=ghe.example.com GH_REPO=unset'
-  GITHUB_HOST=ghe.example.com GH_HOST=github.com PATH=$HUB_TEST_TMP/bin:$PATH run hub issue \
-    </dev/null
+  GITHUB_HOST=ghe.example.com GH_HOST=github.com PATH=$bin:$PATH run hub issue
   assert_success
   assert_equals "$(<"$HUB_TEST_TMP/env")" 'GH_HOST=github.com GH_REPO=unset'
 }
 
 # gh's parent is git (hub's re-entry through git's alias) only when hub's process became gh.
 @test "hub issue hands its process over to gh" {
-  make_recording_gh
-  PATH=$HUB_TEST_TMP/bin:$PATH run hub issue </dev/null
+  stub_gh 'issue*' ''
+  bin=$(recording_gh)
+  PATH=$bin:$PATH run hub issue
   assert_success
   assert_equals "$(basename "$(<"$HUB_TEST_TMP/parent")")" git
 }
@@ -196,6 +175,23 @@ no_gh_path() {
   assert_success
   assert_line_equals 0 'Summary: List, view, create and edit issues (gh issue).'
   assert_gh_not_called
+}
+
+@test "hub issue -R or --repo with -h or --help as the value prints hub's manual" {
+  run hub issue -R --help
+  assert_success
+  assert_line_equals 0 'Summary: List, view, create and edit issues (gh issue).'
+  run hub issue --repo -h
+  assert_success
+  assert_line_equals 0 'Summary: List, view, create and edit issues (gh issue).'
+  assert_gh_not_called
+}
+
+@test "hub issue -R --help before a subcommand goes to gh, which refuses the value" {
+  stub_gh 'issue *' ''
+  run hub issue -R --help list
+  assert_success
+  assert_equals "$(gh_calls)" 'gh issue -R --help list'
 }
 
 @test "hub issue --help and -h after the subcommand are gh's" {

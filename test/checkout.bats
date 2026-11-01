@@ -12,15 +12,6 @@ setup() {
   stub_gh 'pr checkout *' ''
 }
 
-# gh_host_log : a gh in front of the stub that records the GH_HOST it was given.
-gh_host_log() {
-  mkdir -p "$HUB_TEST_TMP/bin"
-  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "${GH_HOST-unset}" >>"%s"\nexec "%s" "$@"\n' \
-    "$HUB_TEST_TMP/gh-host.log" "$HUB_TEST_ROOT/test/stubs/gh" >"$HUB_TEST_TMP/bin/gh"
-  chmod +x "$HUB_TEST_TMP/bin/gh"
-  PATH=$HUB_TEST_TMP/bin:$PATH
-}
-
 @test "hub checkout with a pull request URL runs gh pr checkout on it" {
   run hub checkout "$pr"
   assert_success
@@ -73,18 +64,18 @@ gh pr checkout $pr/commits/abc1234"
 }
 
 @test "hub checkout gives gh the host of the URL" {
-  gh_host_log
+  PATH=$(recording_gh):$PATH
   GH_HOST=ghe.example.test run hub checkout https://ghe.example.test/acme/app/pull/3
   assert_success
+  assert_equals "$(<"$HUB_TEST_TMP/env")" 'GH_HOST=ghe.example.test GH_REPO=unset'
   GH_HOST=ghe.example.test run hub checkout "$pr"
   assert_success
+  assert_equals "$(<"$HUB_TEST_TMP/env")" 'GH_HOST=github.com GH_REPO=unset'
   GH_HOST=ghe.example.test run hub checkout https://ghe.example.test/acme/app/pull/3 review
   assert_success
+  assert_equals "$(<"$HUB_TEST_TMP/env")" 'GH_HOST=ghe.example.test GH_REPO=unset'
   assert_gh_called 'pr checkout https://ghe.example.test/acme/app/pull/3'
   assert_gh_called 'pr checkout https://ghe.example.test/acme/app/pull/3 -b review'
-  assert_equals "$(cat "$HUB_TEST_TMP/gh-host.log")" "ghe.example.test
-github.com
-ghe.example.test"
 }
 
 @test "hub checkout relays gh's exit status" {
@@ -154,10 +145,7 @@ refs/remotes/origin/main'
 }
 
 @test "hub checkout refuses a pull request URL without gh" {
-  mkdir "$HUB_TEST_TMP/nogh"
-  ln -s "$(command -v git)" "$HUB_TEST_TMP/nogh/git"
-  ln -s "$(command -v bash)" "$HUB_TEST_TMP/nogh/bash"
-  PATH=$HUB_TEST_TMP/nogh:/usr/bin:/bin run hub checkout "$pr" review
+  PATH=$(no_gh_path) run hub checkout "$pr" review
   assert_status 1
   assert_output_equals \
     'hub checkout: this command needs the GitHub CLI, gh (https://cli.github.com)'
@@ -229,6 +217,8 @@ refs/remotes/origin/main'
   run hub --noop checkout "$pr" --help
   assert_success
   assert_output_equals "git checkout $pr --help"
+  run hub checkout --help-all "$pr"
+  assert_status 129
   assert_gh_not_called
 }
 

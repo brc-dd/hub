@@ -117,6 +117,9 @@ empty_dir() {
   run hub clone -pomine alice/dotfiles second
   assert_success
   assert_equals "$(git -C second remote get-url mine)" git@github.com:alice/dotfiles.git
+  run hub clone -po mine alice/dotfiles third
+  assert_success
+  assert_equals "$(git -C third remote get-url mine)" git@github.com:alice/dotfiles.git
   assert_gh_not_called
 }
 
@@ -138,19 +141,17 @@ empty_dir() {
 
 @test "clone without gh uses https for OWNER/REPO and refuses REPO" {
   serve_github alice/dotfiles
-  mkdir nogh
-  ln -s "$(command -v git)" nogh/git
-  ln -s "$(command -v bash)" nogh/bash
-  ln -s "$HUB_TEST_ROOT/test/stubs/ssh" nogh/ssh
-  PATH=$HUB_TEST_TMP/nogh:/usr/bin:/bin run hub clone alice/dotfiles
+  local nogh
+  nogh=$(no_gh_path ssh)
+  PATH=$nogh run hub clone alice/dotfiles
   assert_success
   assert_output_lacks 'hub clone'
   assert_equals "$(git -C dotfiles remote get-url origin)" https://github.com/alice/dotfiles.git
-  PATH=$HUB_TEST_TMP/nogh:/usr/bin:/bin run hub clone -p alice/dotfiles dots
+  PATH=$nogh run hub clone -p alice/dotfiles dots
   assert_success
   assert_equals "$(git -C dots remote get-url origin)" git@github.com:alice/dotfiles.git
   empty_dir
-  PATH=$HUB_TEST_TMP/nogh:/usr/bin:/bin run hub clone dotfiles
+  PATH=$nogh run hub clone dotfiles
   assert_status 1
   assert_output_equals 'hub clone: this command needs the GitHub CLI, gh (https://cli.github.com)'
   assert_equals "$(ls -A)" ''
@@ -174,6 +175,19 @@ empty_dir() {
   assert_equals "$(git -C tool remote get-url origin)" https://ghe.example.com/kim/tool.git
   assert_gh_called 'config get user -h ghe.example.com'
   assert_gh_called 'config get git_protocol -h ghe.example.com'
+}
+
+@test "clone writes a mixed-case GH_HOST in lowercase and refuses one that is no host name" {
+  serve_github ghe.example.com/kim/tool
+  stub_gh 'config get git_protocol -h ghe.example.com' https
+  GH_HOST=GHE.Example.com run hub clone kim/tool
+  assert_success
+  assert_equals "$(git -C tool remote get-url origin)" https://ghe.example.com/kim/tool.git
+  GH_HOST=-oProxyCommand=x run hub clone kim/lib
+  assert_status 1
+  assert_output_equals 'hub clone: not a host name: -oProxyCommand=x'
+  run ls lib
+  assert_failure
 }
 
 @test "clone takes the default host from gh's only host, or from GITHUB_HOST" {
@@ -408,6 +422,10 @@ empty_dir() {
   run hub clone -h
   assert_status 129
   assert_output_contains 'usage: git clone'
+  run hub clone -qph alice/dotfiles
+  assert_status 129
+  assert_output_contains 'usage: git clone'
+  assert_output_lacks 'unknown switch'
   assert_gh_not_called
 }
 

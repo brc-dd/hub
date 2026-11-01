@@ -30,6 +30,7 @@
 
 hub_cmd_sync() {
   local remote='' default='' current='' failed=0 line name oid symref tracked upstream track r
+  local host owner repo
   local format='%(refname:lstrip=2)%1f%(objectname)%1f%(symref)%1f%(upstream:remotename)'
   local -a operands=() lines=() last=() fetched=() others=()
   format+='%1f%(upstream)%1f%(upstream:track,nobracket)'
@@ -68,7 +69,8 @@ hub_cmd_sync() {
     if hub::git fetch --prune --quiet -- "$r"; then fetched+=("$r"); else failed=1; fi
   done
   # Read after the fetch, which creates a missing refs/remotes/REMOTE/HEAD (it never moves one).
-  default=$(_hub_sync_default_branch "$remote") || default=''
+  read -r host owner repo < <(hub::remote_project "$remote")
+  default=$(hub::default_branch "$host" "$owner" "$repo" "$remote") || default=''
   current=$(hub::current_branch) || current=''
   # The unit separator keeps empty fields: a run of spaces would merge them.
   while IFS= read -r line; do
@@ -106,22 +108,6 @@ hub_cmd_sync() {
     esac
   done
   return "$failed"
-}
-
-# _hub_sync_default_branch REMOTE : the default branch of REMOTE's repository; fails when unknown.
-_hub_sync_default_branch() {
-  local host owner repo
-  _hub_sync_remote_head "$1" && return 0
-  read -r host owner repo < <(hub::remote_project "$1") || return 1
-  # Without gh the default branch is only unknown: sync still updates branches.
-  command -v gh >/dev/null && hub::default_branch "$host" "$owner" "$repo"
-}
-
-# _hub_sync_remote_head REMOTE : the branch refs/remotes/REMOTE/HEAD points at, when both exist.
-_hub_sync_remote_head() {
-  local ref head=refs/remotes/$1/
-  ref=$(git symbolic-ref --quiet "${head}HEAD" 2>/dev/null) && [[ $ref == "$head"?* ]] \
-    && git show-ref --verify --quiet "$ref" && printf '%s\n' "${ref#"$head"}"
 }
 
 # _hub_sync_behind OID REF : REF exists and is ahead of OID.

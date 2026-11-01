@@ -95,7 +95,17 @@ ghe_hosts() {
   assert_equals "$(url_of alice)" git@github.com:alice/dotfiles.git
   run hub remote add -pf bob
   assert_equals "$(url_of bob)" git@github.com:bob/dotfiles.git
+  run hub remote add -pt main carol
+  assert_success
+  assert_equals "$(url_of carol)" git@github.com:carol/dotfiles.git
+  assert_equals "$(url_of carol fetch)" +refs/heads/main:refs/remotes/carol/main
+  run hub --noop remote add -ph erin
+  assert_output_equals 'git remote add -h erin'
   assert_gh_not_called
+  run hub remote add -tp dave
+  assert_success
+  assert_equals "$(url_of dave)" https://github.com/dave/dotfiles.git
+  assert_equals "$(url_of dave fetch)" +refs/heads/p:refs/remotes/dave/p
 }
 
 @test "remote -v add, with git's verbose flag before the subcommand, is expanded too" {
@@ -114,29 +124,26 @@ ghe_hosts() {
 
 @test "remote add and set-url without gh use https, and origin alone refuses" {
   make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
-  mkdir "$HUB_TEST_TMP/nogh"
-  ln -s "$(command -v git)" "$HUB_TEST_TMP/nogh/git"
-  ln -s "$(command -v bash)" "$HUB_TEST_TMP/nogh/bash"
   local needs='this command needs the GitHub CLI, gh (https://cli.github.com)'
-  PATH=$HUB_TEST_TMP/nogh:/usr/bin:/bin run hub remote add alice
+  PATH=$(no_gh_path) run hub remote add alice
   assert_success
   assert_output_equals ''
   assert_equals "$(url_of alice)" https://github.com/alice/dotfiles.git
-  PATH=$HUB_TEST_TMP/nogh:/usr/bin:/bin run hub remote set-url origin bob
+  PATH=$(no_gh_path) run hub remote set-url origin bob
   assert_success
   assert_equals "$(url_of origin)" https://github.com/bob/dotfiles.git
   git remote remove origin
-  PATH=$HUB_TEST_TMP/nogh:/usr/bin:/bin run hub remote add origin
+  PATH=$(no_gh_path) run hub remote add origin
   assert_status 1
   assert_output_equals "hub remote: $needs"
   run url_of origin
   assert_failure
-  PATH=$HUB_TEST_TMP/nogh:/usr/bin:/bin run hub remote add -p origin
+  PATH=$(no_gh_path) run hub remote add -p origin
   assert_status 1
   assert_output_equals "hub remote: $needs"
   run url_of origin
   assert_failure
-  PATH=$HUB_TEST_TMP/nogh:/usr/bin:/bin run hub remote add -p carol
+  PATH=$(no_gh_path) run hub remote add -p carol
   assert_success
   assert_equals "$(url_of carol)" git@github.com:carol/dotfiles.git
   assert_gh_not_called
@@ -268,11 +275,14 @@ ghe_hosts() {
   make_repo dotfiles origin=https://github.com/mislav/dotfiles.git
   mkdir alice
   git init -q --bare tools.git
+  git init -q notes.git
   run hub remote add backup alice
   assert_success
   assert_equals "$(url_of backup)" alice
   run hub remote add mirror tools
   assert_equals "$(url_of mirror)" tools
+  run hub remote add jot notes
+  assert_equals "$(url_of jot)" notes
   run hub remote add alice
   assert_success
   assert_equals "$(url_of alice)" https://github.com/alice/dotfiles.git

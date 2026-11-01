@@ -285,14 +285,18 @@ assert_untouched() {
   assert_output_equals "git merge --help $url"
 }
 
+@test "hub merge --help-all is git's usage, before the lookup and the fetch" {
+  setup_pull
+  run hub merge --help-all "$url"
+  assert_status 129
+  assert_gh_not_called
+  assert_equals "$(git rev-parse --verify --quiet FETCH_HEAD)" ''
+}
+
 @test "hub merge stops when gh cannot look the pull request up, and fetches nothing" {
   setup_pull
-  mkdir "$HUB_TEST_TMP/bin"
-  # gh writes its errors to stderr, which the stub cannot.
-  printf '%s\n' '#!/bin/sh' 'echo "GraphQL: Could not resolve to a PullRequest" >&2' 'exit 1' \
-    >"$HUB_TEST_TMP/bin/gh"
-  chmod +x "$HUB_TEST_TMP/bin/gh"
-  PATH=$HUB_TEST_TMP/bin:$PATH run hub merge "$url"
+  stub_gh 'pr view *' '' 1
+  PATH=$(failing_gh 'GraphQL: Could not resolve to a PullRequest'):$PATH run hub merge "$url"
   assert_status 1
   assert_output_equals 'GraphQL: Could not resolve to a PullRequest'
   assert_equals "$(git rev-parse HEAD)" "$base"
@@ -301,10 +305,7 @@ assert_untouched() {
 
 @test "hub merge refuses without gh before fetching" {
   setup_pull
-  mkdir "$HUB_TEST_TMP/nogh"
-  ln -s "$(command -v git)" "$HUB_TEST_TMP/nogh/git"
-  ln -s "$(command -v bash)" "$HUB_TEST_TMP/nogh/bash"
-  PATH=$HUB_TEST_TMP/nogh:/usr/bin:/bin run hub merge "$url"
+  PATH=$(no_gh_path) run hub merge "$url"
   assert_status 1
   assert_output_equals 'hub merge: this command needs the GitHub CLI, gh (https://cli.github.com)'
   assert_untouched

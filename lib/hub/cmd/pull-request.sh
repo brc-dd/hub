@@ -57,8 +57,6 @@ hub_cmd_pull_request() {
       --no-edit) no_edit=1 ;;
       --no-maintainer-edits) no_maintainer=1 ;;
       --help) hub::usage ;;
-      # A bare -h asks for the manual; with a value it names the head.
-      -h) if (($# == 1)); then hub::usage; fi ;;&
       -b | --base | -h | --head | -m | --message | -F | --file | -r | --reviewer | -a | --assign | \
         -M | --milestone | -l | --labels)
         (($# >= 2)) || hub::usage_error "$1 needs a value"
@@ -144,7 +142,7 @@ hub_cmd_pull_request() {
         'the head with -h)'
     read -r -a head_project < <(hub::remote_project "$remote" push) \
       || hub::die "$remote does not push to a GitHub repository (name the head with -h)"
-    [[ ${head_project[0],,} == "${host,,}" ]] \
+    [[ ${head_project[0]} == "$host" ]] \
       || hub::die "$remote pushes to ${head_project[0]}, not to $host (name the head with -h)"
     label=$branch
     [[ "${head_project[1],,}/${head_project[2],,}" == "${owner,,}/${repo,,}" ]] \

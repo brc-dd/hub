@@ -23,15 +23,12 @@
 hub_cmd_push() {
   local valued='-o --push-option --repo --receive-pack --exec --recurse-submodules'
   local -a args=("$@") remotes=() heads=() flags=()
-  local list rest remote at head=0 i flag
+  local list rest remote at head=0 i
   hub::scan "$valued" "$@"
   ((${#HUB_OPERANDS[@]})) || hub::exec_git push "$@"
   at=${HUB_OPERANDS[0]} list=${args[at]}
   [[ $list == *,* && $list != *:* ]] || hub::exec_git push "$@"
-  _hub_push_flags "$valued" "$@"
-  for flag in "${flags[@]}"; do
-    [[ $flag != -h ]] || hub::exec_git push "$@"
-  done
+  for i in "${HUB_OPTIONS[@]}"; do flags+=("${args[i]}"); done
   # Outside a repository git says so itself.
   hub::git_query rev-parse --git-dir >/dev/null || hub::exec_git push "$@"
   if hub::remote_exists "$list" || hub::local_source "$list"; then hub::exec_git push "$@"; fi
@@ -54,24 +51,6 @@ hub_cmd_push() {
   for i in "${!remotes[@]}"; do
     args[at]=${remotes[i]}
     hub::git push "${args[@]}" ${heads[i]:+"${heads[i]}"} || return
-  done
-}
-
-# _hub_push_flags VALUED ARGS... : the caller's array flags, the option words of ARGS without
-# the values of VALUED options, up to -- or --end-of-options.
-_hub_push_flags() {
-  local valued=" $1 " word value=0
-  shift
-  for word; do
-    if ((value)); then
-      value=0
-    elif [[ $word == -- || $word == --end-of-options ]]; then
-      return 0
-    elif [[ $valued == *" $word "* ]]; then
-      value=1
-    elif [[ $word == -?* ]]; then
-      flags+=("$word")
-    fi
   done
 }
 

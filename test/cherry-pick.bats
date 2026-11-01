@@ -229,10 +229,7 @@ assert_untouched() {
 
 @test "hub cherry-pick with a short id refuses without gh, before git runs" {
   setup_commit
-  mkdir "$HUB_TEST_TMP/nogh"
-  ln -s "$(command -v git)" "$HUB_TEST_TMP/nogh/git"
-  ln -s "$(command -v bash)" "$HUB_TEST_TMP/nogh/bash"
-  PATH=$HUB_TEST_TMP/nogh:/usr/bin:/bin run hub cherry-pick \
+  PATH=$(no_gh_path) run hub cherry-pick \
     "https://github.com/octo/app/commit/${pick:0:7}"
   assert_status 1
   assert_output_equals \
@@ -330,6 +327,13 @@ assert_untouched() {
   run hub --noop cherry-pick --help https://github.com/o/r/commit/abcdef1
   assert_success
   assert_output_equals 'git cherry-pick --help https://github.com/o/r/commit/abcdef1'
+  assert_gh_not_called
+}
+
+@test "hub cherry-pick --help-all is git's usage, before gh is asked" {
+  make_repo work
+  run hub cherry-pick --help-all https://github.com/o/r/commit/abcdef1
+  assert_status 129
   assert_gh_not_called
 }
 

@@ -43,7 +43,7 @@ hub_cmd_fetch() {
   fi
   for user in "${members[@]}"; do
     _hub_fetch_remote "$user" && continue
-    [[ $user =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]] || hub::exec_git fetch "$@"
+    hub::is_owner "$user" || hub::exec_git fetch "$@"
     ! hub::local_source "$user" || hub::exec_git fetch "$@"
     # GitHub logins ignore case, git's remote names do not.
     while read -r other; do
@@ -57,7 +57,7 @@ hub_cmd_fetch() {
     if project=$(hub::project 2>/dev/null); then
       host=${project%% *} repo=${project##* }
     else
-      host=$(hub::host) repo=$(hub::repo_name) || exit 1
+      host=$(hub::host) && repo=$(hub::repo_name) || exit 1
     fi
     for user in "${missing[@]}"; do
       out=$(gh repo view "$host/$user/$repo" --json name 2>&1) && continue
@@ -79,16 +79,14 @@ _hub_fetch_remote() {
   hub::remote_exists "$1" || hub::git_query config --get "remotes.$1" >/dev/null
 }
 
-# _hub_fetch_git_only ARGS... : an option outside HUB_OPERANDS makes the line git's.
+# _hub_fetch_git_only ARGS... : one of the option words (HUB_OPTIONS) makes the line git's.
 _hub_fetch_git_only() {
   local i word name
-  local -a args=("$@") operand=()
-  for i in "${HUB_OPERANDS[@]}"; do operand[i]=1; done
-  for i in "${!args[@]}"; do
-    [[ -z ${operand[i]-} ]] || continue
+  local -a args=("$@")
+  for i in "${HUB_OPTIONS[@]}"; do
     word=${args[i]%%=*}
     case $word in
-      -- | --recurse-submodules) ;;
+      --recurse-submodules) ;;
       --?*)
         # git expands abbreviations (--mul); the last two are hidden and take a separate value.
         for name in --multiple --no-multiple --all --submodule-prefix \
@@ -96,8 +94,8 @@ _hub_fetch_git_only() {
           [[ $name != "$word"* ]] || return 0
         done
         ;;
-      # -qm is --multiple; -vh is -h. A value spelled like these also sends the line to git.
-      -?*) [[ $word != *[mh]* ]] || return 0 ;;
+      # -qm is --multiple. An attached value spelled with m also sends the line to git.
+      -?*) [[ $word != *m* ]] || return 0 ;;
     esac
   done
   return 1

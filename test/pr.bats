@@ -54,20 +54,16 @@ load test_helper
 }
 
 @test "hub pr -R or --repo without a value leaves the arguments to gh" {
-  mkdir bin
-  # A gh that writes its complaint on stderr, as gh does.
-  printf '#!/usr/bin/env bash\nprintf "gh %%s\\n" "$*" >>"%s/calls"\n%s\nexit 1\n' \
-    "$HUB_TEST_TMP" 'printf "flag needs an argument: %s\n" "${@: -1}" >&2' >bin/gh
-  chmod +x bin/gh
-  PATH=$HUB_TEST_TMP/bin:$PATH run --separate-stderr hub pr -R
+  stub_gh 'pr *' '' 1
+  PATH=$(failing_gh 'flag needs an argument: -R'):$PATH run --separate-stderr hub pr -R
   assert_status 1
   assert_equals "$stderr" 'flag needs an argument: -R'
-  PATH=$HUB_TEST_TMP/bin:$PATH run --separate-stderr hub pr --repo
+  PATH=$(failing_gh 'flag needs an argument: --repo'):$PATH run --separate-stderr hub pr --repo
   assert_status 1
   assert_equals "$stderr" 'flag needs an argument: --repo'
-  PATH=$HUB_TEST_TMP/bin:$PATH run hub pr -R cli/cli -R
+  run hub pr -R cli/cli -R
   assert_status 1
-  assert_equals "$(<calls)" "$(printf '%s\n' 'gh pr -R' 'gh pr --repo' 'gh pr -R cli/cli -R')"
+  assert_equals "$(gh_calls)" "$(printf '%s\n' 'gh pr -R' 'gh pr --repo' 'gh pr -R cli/cli -R')"
 }
 
 @test "hub pr hands other subcommands and options to gh unchanged" {
@@ -82,11 +78,8 @@ load test_helper
 }
 
 @test "hub pr keeps every argument whole" {
-  mkdir bin
-  # A gh that records one argument per line, to see the word boundaries the stub's log joins.
-  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" >"%s/args"\n' "$HUB_TEST_TMP" >bin/gh
-  chmod +x bin/gh
-  PATH=$HUB_TEST_TMP/bin:$PATH run hub pr create --title 'two words' --body '' -l 'a,b c'
+  stub_gh 'pr create *' ''
+  PATH=$(recording_gh):$PATH run hub pr create --title 'two words' --body '' -l 'a,b c'
   assert_success
   assert_equals "$(<args)" "$(printf '%s\n' pr create --title 'two words' --body '' -l 'a,b c')"
 }
@@ -107,16 +100,13 @@ load test_helper
 }
 
 @test "hub pr exits with gh's status and relays its messages" {
-  mkdir bin
-  # A gh that fails the way gh does: the message on stderr.
-  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >"%s/args"\n%s\nexit 4\n' \
-    "$HUB_TEST_TMP" 'echo "no pull requests found for branch \"main\"" >&2' >bin/gh
-  chmod +x bin/gh
-  PATH=$HUB_TEST_TMP/bin:$PATH run --separate-stderr hub pr show
+  stub_gh 'pr view' '' 4
+  PATH=$(failing_gh 'no pull requests found for branch "main"'):$PATH \
+    run --separate-stderr hub pr show
   assert_status 4
   assert_equals "$stderr" 'no pull requests found for branch "main"'
   assert_output_equals ''
-  assert_equals "$(<args)" 'pr view'
+  assert_equals "$(gh_calls)" 'gh pr view'
 }
 
 @test "hub --noop pr prints the gh command without running it" {
@@ -147,6 +137,18 @@ load test_helper
   assert_gh_not_called
 }
 
+@test "hub pr -R --help and --repo -h print hub's manual" {
+  run hub pr --help
+  local manual=$output
+  run hub pr -R --help
+  assert_success
+  assert_output_equals "$manual"
+  run hub pr --repo -h
+  assert_success
+  assert_output_equals "$manual"
+  assert_gh_not_called
+}
+
 @test "hub pr --help and -h after the subcommand are gh's" {
   stub_gh 'pr *' 'Display the title, body, and other information about a pull request.'
   run hub pr show --help
@@ -167,10 +169,7 @@ load test_helper
 }
 
 @test "hub pr without gh says gh is needed" {
-  mkdir nogh
-  ln -s "$(command -v git)" nogh/git
-  ln -s "$(command -v bash)" nogh/bash
-  PATH=$HUB_TEST_TMP/nogh:/usr/bin:/bin run hub pr
+  PATH=$(no_gh_path) run hub pr
   assert_status 1
   assert_output_equals 'hub pr: this command needs the GitHub CLI, gh (https://cli.github.com)'
 }

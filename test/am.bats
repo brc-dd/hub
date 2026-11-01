@@ -24,16 +24,8 @@ make_series() {
   )
 }
 
-# stub_patch ENDPOINT FILE [HOST] : gh api serves FILE as ENDPOINT's patch.
-stub_patch() {
-  stub_gh_file "api --hostname ${3:-github.com} $1 -H Accept: application/vnd.github.patch" \
-    "$HUB_TEST_TMP/$2"
-}
-
-assert_tmp_empty() { assert_equals "$(ls -A "$TMPDIR")" ''; }
-
 @test "hub am URL applies a pull request's commits with their authors and messages" {
-  stub_patch repos/jingweno/gh/pulls/55 add-f.patch
+  stub_patch repos/jingweno/gh/pulls/55 patch "$HUB_TEST_TMP/add-f.patch"
   run hub am -3 https://github.com/jingweno/gh/pull/55
   assert_success
   assert_equals "$(git log -1 --format='%an <%ae>|%s|%b')" \
@@ -45,7 +37,7 @@ assert_tmp_empty() { assert_equals "$(ls -A "$TMPDIR")" ''; }
 }
 
 @test "hub am downloads a commit URL as a patch even with a .diff suffix" {
-  stub_patch repos/jingweno/gh/commits/fdb9921 add-f.patch
+  stub_patch repos/jingweno/gh/commits/fdb9921 patch "$HUB_TEST_TMP/add-f.patch"
   run hub am https://github.com/jingweno/gh/commit/fdb9921.diff
   assert_success
   assert_equals "$(git log -1 --format=%s)" 'add f'
@@ -53,7 +45,7 @@ assert_tmp_empty() { assert_equals "$(ls -A "$TMPDIR")" ''; }
 }
 
 @test "hub am downloads a pull request's commit URL from the commits endpoint" {
-  stub_patch repos/jingweno/gh/commits/fdb99210 add-f.patch
+  stub_patch repos/jingweno/gh/commits/fdb99210 patch "$HUB_TEST_TMP/add-f.patch"
   run hub am https://github.com/jingweno/gh/pull/55/commits/fdb99210
   assert_success
   assert_equals "$(git log -1 --format=%s)" 'add f'
@@ -63,7 +55,7 @@ assert_tmp_empty() { assert_equals "$(ls -A "$TMPDIR")" ''; }
 @test "hub am reads a pull request URL with a suffix, a query, a fragment or a tab as the pull" {
   local head url
   head=$(tip main)
-  stub_patch repos/o/r/pulls/8 add-f.patch
+  stub_patch repos/o/r/pulls/8 patch "$HUB_TEST_TMP/add-f.patch"
   for url in https://github.com/o/r/pull/8.patch 'https://github.com/o/r/pull/8?w=1#diff' \
     https://github.com/o/r/pull/8/ https://github.com/o/r/pull/8/files; do
     git reset -q --hard "$head"
@@ -76,14 +68,15 @@ assert_tmp_empty() { assert_equals "$(ls -A "$TMPDIR")" ''; }
 }
 
 @test "hub am downloads a comparison URL with its range kept verbatim" {
-  stub_patch 'repos/jingweno/gh/compare/v1.0...jingweno:feature' add-f.patch
+  stub_patch 'repos/jingweno/gh/compare/v1.0...jingweno:feature' patch \
+    "$HUB_TEST_TMP/add-f.patch"
   run hub am 'https://github.com/jingweno/gh/compare/v1.0...jingweno:feature.patch'
   assert_success
   assert_equals "$(git log -1 --format=%s)" 'add f'
 }
 
 @test "hub am keeps local mailboxes, options and URLs in their order" {
-  stub_patch repos/jingweno/gh/pulls/56 change-f.patch
+  stub_patch repos/jingweno/gh/pulls/56 patch "$HUB_TEST_TMP/change-f.patch"
   run hub am --signoff "$HUB_TEST_TMP/add-f.patch" https://github.com/jingweno/gh/pull/56
   assert_success
   assert_equals "$(git log -2 --format=%s)" $'change f\nadd f'
@@ -93,8 +86,8 @@ assert_tmp_empty() { assert_equals "$(ls -A "$TMPDIR")" ''; }
 }
 
 @test "hub am applies every URL's patches in command-line order" {
-  stub_patch repos/jingweno/gh/commits/aaaa1111 add-f.patch
-  stub_patch repos/jingweno/gh/commits/bbbb2222 change-f.patch
+  stub_patch repos/jingweno/gh/commits/aaaa1111 patch "$HUB_TEST_TMP/add-f.patch"
+  stub_patch repos/jingweno/gh/commits/bbbb2222 patch "$HUB_TEST_TMP/change-f.patch"
   run hub am https://github.com/jingweno/gh/commit/aaaa1111 \
     https://github.com/jingweno/gh/commit/bbbb2222
   assert_success
@@ -118,7 +111,7 @@ assert_tmp_empty() { assert_equals "$(ls -A "$TMPDIR")" ''; }
 
 @test "hub am asks the URL's host" {
   export GH_HOST=ghe.example.test
-  stub_patch repos/o/r/pulls/7 add-f.patch ghe.example.test
+  stub_patch repos/o/r/pulls/7 patch "$HUB_TEST_TMP/add-f.patch" ghe.example.test
   run hub am https://GHE.example.test/o/r/pull/7
   assert_success
   assert_equals "$(git log -1 --format=%s)" 'add f'
@@ -127,19 +120,9 @@ assert_tmp_empty() { assert_equals "$(ls -A "$TMPDIR")" ''; }
 @test "hub am stops before git am when a download fails" {
   local head
   head=$(tip main)
-  # gh's own error goes to stderr, which the test stub cannot write.
-  mkdir "$HUB_TEST_TMP/bin"
-  cat >"$HUB_TEST_TMP/bin/gh" <<EOF
-#!/usr/bin/env bash
-"$HUB_TEST_ROOT/test/stubs/gh" "\$@" && exit
-rc=\$?
-echo 'gh: Not Found (HTTP 404)' >&2
-exit "\$rc"
-EOF
-  chmod +x "$HUB_TEST_TMP/bin/gh"
   stub_gh 'api --hostname github.com repos/o/r/pulls/9 *' '' 1
-  stub_patch repos/o/r/pulls/8 add-f.patch
-  PATH=$HUB_TEST_TMP/bin:$PATH run hub am https://github.com/o/r/pull/8 \
+  stub_patch repos/o/r/pulls/8 patch "$HUB_TEST_TMP/add-f.patch"
+  PATH=$(failing_gh 'gh: Not Found (HTTP 404)'):$PATH run hub am https://github.com/o/r/pull/8 \
     https://github.com/o/r/pull/9
   assert_status 1
   assert_output_contains 'gh: Not Found (HTTP 404)'
@@ -151,7 +134,7 @@ EOF
 
 @test "hub am returns git am's status and leaves a resumable session when a patch fails" {
   echo local >f && git add f && git commit -q -m 'local f'
-  stub_patch repos/o/r/pulls/8 add-f.patch
+  stub_patch repos/o/r/pulls/8 patch "$HUB_TEST_TMP/add-f.patch"
   run hub am https://github.com/o/r/pull/8
   assert_status 128
   assert_output_contains 'Patch failed at 0001 add f'
@@ -163,7 +146,7 @@ EOF
 
 @test "hub am downloads nothing while an am session is in progress, and git am refuses" {
   echo local >f && git add f && git commit -q -m 'local f'
-  stub_patch repos/o/r/pulls/8 add-f.patch
+  stub_patch repos/o/r/pulls/8 patch "$HUB_TEST_TMP/add-f.patch"
   run hub am https://github.com/o/r/pull/8
   assert_status 128
   : >"$HUB_TEST_GH_LOG"
@@ -186,10 +169,7 @@ EOF
 @test "hub am with a URL refuses without gh, before git runs" {
   local head
   head=$(tip main)
-  mkdir "$HUB_TEST_TMP/nogh"
-  ln -s "$(command -v git)" "$HUB_TEST_TMP/nogh/git"
-  ln -s "$(command -v bash)" "$HUB_TEST_TMP/nogh/bash"
-  PATH=$HUB_TEST_TMP/nogh:/usr/bin:/bin run hub am https://github.com/o/r/pull/8
+  PATH=$(no_gh_path mktemp rm) run hub am https://github.com/o/r/pull/8
   assert_status 1
   assert_output_equals 'hub am: this command needs the GitHub CLI, gh (https://cli.github.com)'
   assert_equals "$(tip main)" "$head"
@@ -258,6 +238,13 @@ EOF
   assert_gh_not_called
 }
 
+@test "hub am --help-all is git's usage, before anything is downloaded" {
+  run hub am --help-all https://github.com/o/r/pull/8
+  assert_status 129
+  assert_gh_not_called
+  assert_tmp_empty
+}
+
 @test "hub help am prints hub's manual, ending with the pointer to git's" {
   run hub help am
   assert_success
@@ -269,7 +256,7 @@ EOF
 @test "hub --noop am downloads the patch and prints git am instead of running it" {
   local head
   head=$(tip main)
-  stub_patch repos/o/r/pulls/8 add-f.patch
+  stub_patch repos/o/r/pulls/8 patch "$HUB_TEST_TMP/add-f.patch"
   run hub --noop am -3 https://github.com/o/r/pull/8
   assert_success
   assert_output_contains "git am -3 $TMPDIR/hub-am."

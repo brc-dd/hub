@@ -18,43 +18,22 @@
 # git's own manual: git am --help
 
 hub_cmd_am() {
-  local i n=0 tmp
-  local -a args=("$@") urls=()
+  local i found=0
+  local -a args=("$@")
   for ((i = 0; i < $#; i++)); do
     case ${args[i]} in
       -- | --end-of-options) break ;;
-      --help) hub::exec_git am "$@" ;;
+      --help | --help-all) hub::exec_git am "$@" ;;
       # -h alone or among git am's one-letter flags (-3h) asks for git's usage.
       -*) [[ ! ${args[i]} =~ ^-[3ciknmqrsu]*h ]] || hub::exec_git am "$@" ;;
-      *) if _hub_am_patch_url "${args[i]}"; then urls+=("$i"); fi ;;
+      *) ! hub::patch_url "${args[i]}" || found=1 ;;
     esac
   done
-  ((${#urls[@]})) || hub::exec_git am "$@"
+  ((found)) || hub::exec_git am "$@"
   hub::require_repo
   # git am refuses new mailboxes during a session: let it say so before anything is fetched.
   [[ ! -d $(hub::git_query rev-parse --git-path rebase-apply) ]] || hub::exec_git am "$@"
-  tmp=$(mktemp -d "${TMPDIR:-/tmp}/hub-am.XXXXXX") || exit 1
   # git am copies the patches into .git/rebase-apply, so the files can go when hub ends.
-  # shellcheck disable=SC2064  # the path is expanded now, quoted
-  trap "rm -rf -- $(printf '%q' "$tmp")" EXIT
-  for i in "${urls[@]}"; do
-    hub::fetch_patch "${args[i]}" patch "$tmp/$((++n)).patch" \
-      || hub::die "could not download: ${args[i]}"
-    args[i]=$tmp/$n.patch
-  done
-  hub::git am "${args[@]}"
-}
-
-# _hub_am_patch_url WORD : WORD is a pull, pull-commit, commit or compare URL GitHub serves.
-_hub_am_patch_url() {
-  local page='^https?://[^/?#]+/[^/?#]+/[^/?#]+/pull/[0-9]+(\.(patch|diff)|/[^/?#]*)?/?([?#]|$)'
-  hub::parse_github_url "$1" || return 1
-  case ${HUB_URL[kind]} in
-    # A deeper page, such as pull/N/files/SHA, shows only some of the pull request's changes.
-    pull) [[ -n ${HUB_URL[number]-} ]] && [[ -n ${HUB_URL[sha]-} || $1 =~ $page ]] ;;
-    commit) ;;
-    # A bare .../compare names no range.
-    compare) [[ $1 =~ ^https?://[^/?#]+/[^/?#]+/[^/?#]+/compare/[^/?#] ]] ;;
-    *) return 1 ;;
-  esac
+  hub::download_patches patch "$@"
+  hub::git am "${HUB_ARGS[@]}"
 }

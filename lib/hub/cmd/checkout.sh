@@ -28,9 +28,9 @@ hub_cmd_checkout() {
     case $word in
       -- | --end-of-options) break ;;
       # git's manual and usage, whatever else is on the line.
-      -h | --help) hub::exec_git checkout "$@" ;;
+      -h | --help | --help-all) hub::exec_git checkout "$@" ;;
     esac
-    if ((! found)) && _hub_checkout_is_pull "$word"; then found=1; fi
+    if ((! found)) && hub::pull_url "$word"; then found=1; fi
   done
   ((found)) || hub::exec_git checkout "$@"
   while (($#)); do
@@ -49,7 +49,7 @@ hub_cmd_checkout() {
       -?*) hub::die 'gh pr checkout takes -b BRANCH, --detach and --recurse-submodules only' ;;
       '') hub::die 'the branch name is empty' ;;
       *)
-        if _hub_checkout_is_pull "$1"; then
+        if hub::pull_url "$1"; then
           [[ -z $url ]] || hub::usage_error "unexpected argument: $1"
           url=$1 host=${HUB_URL[host]}
         elif [[ -n $url && -z ${operand+set} ]]; then
@@ -76,11 +76,6 @@ hub_cmd_checkout() {
   ((! recurse)) || gh_args+=(--recurse-submodules)
   # gh considers only the local remotes on GH_HOST when it is set.
   GH_HOST=$host hub::exec_gh pr checkout "$url" "${gh_args[@]}"
-}
-
-# _hub_checkout_is_pull WORD : WORD is the URL of a pull request (any page of it).
-_hub_checkout_is_pull() {
-  hub::parse_github_url "$1" && [[ ${HUB_URL[kind]} == pull && -n ${HUB_URL[number]-} ]]
 }
 
 # _hub_checkout_valid_branch NAME : gh's git fetch REMOTE SRC:NAME and git checkout NAME make

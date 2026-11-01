@@ -3,21 +3,6 @@
 
 load test_helper
 
-# opened : the URLs the browser stub was asked to open, one per line.
-opened() { cat "$HUB_TEST_TMP/browser.log" 2>/dev/null; }
-
-# copied : what the clipboard stub holds.
-copied() { cat "$HUB_TEST_TMP/clipboard" 2>/dev/null; }
-
-# a clone of mislav/dotfiles on a branch feature, pushed with -u.
-pushed_feature() {
-  serve_github mislav/dotfiles
-  clone_served mislav/dotfiles
-  git switch -q -c feature
-  git commit -q --allow-empty -m feature
-  git push -q -u origin refs/heads/feature
-}
-
 @test "hub browse opens the project's front page on the default branch" {
   serve_github mislav/dotfiles
   clone_served mislav/dotfiles
@@ -340,6 +325,10 @@ pushed_to_other() {
   GH_REPO=ghe.example.com/octo/proj run hub browse -u -- commits
   assert_success
   assert_output_equals https://ghe.example.com/octo/proj/commits
+  GH_REPO=cli/cli.git run hub browse -u
+  assert_output_equals https://github.com/cli/cli
+  run hub browse -u ghe.example.com/octo/proj.git
+  assert_output_equals https://ghe.example.com/octo/proj
 }
 
 @test "hub browse -c copies the URL instead of opening it" {
@@ -415,10 +404,22 @@ pushed_to_other() {
   assert_gh_not_called
 }
 
+@test "hub browse takes --url and --copy for -u and -c" {
+  run hub browse --url cli/cli issues
+  assert_success
+  assert_output_equals https://github.com/cli/cli/issues
+  assert_equals "$(opened)" ''
+  run hub browse --copy cli/cli
+  assert_success
+  assert_output_equals ''
+  assert_equals "$(copied)" https://github.com/cli/cli
+  assert_equals "$(opened)" ''
+}
+
 @test "hub browse refuses unknown options and extra arguments" {
-  run hub browse --url cli/cli
+  run hub browse --urls cli/cli
   assert_status 1
-  assert_line_equals 0 'hub browse: unknown option: --url'
+  assert_line_equals 0 'hub browse: unknown option: --urls'
   assert_line_equals 1 'Usage: hub browse [-u] [-c] [[[HOST/]OWNER/]REPO | --] [SUBPAGE]'
   run hub browse -ux cli/cli
   assert_line_equals 0 'hub browse: unknown option: -x'

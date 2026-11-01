@@ -438,10 +438,7 @@ not known; leaving it alone"
   was=$(tip topic) was_feature=$(tip feature) was_main=$(tip main)
   feature=$(server_commit mislav/dotfiles feature 'new on feature')
   server_merge_and_delete mislav/dotfiles topic
-  mkdir "$HUB_TEST_TMP/nogh"
-  ln -s "$(command -v git)" "$HUB_TEST_TMP/nogh/git"
-  ln -s "$(command -v bash)" "$HUB_TEST_TMP/nogh/bash"
-  PATH=$HUB_TEST_TMP/nogh:/usr/bin:/bin run hub sync
+  PATH=$(no_gh_path) run hub sync
   assert_success
   assert_output_equals "Updated branch feature (was $(short "$was_feature")).
 $warning topic was deleted on origin, but the default branch of origin is not known; leaving \
@@ -544,7 +541,7 @@ Updated branch main (was $(short "$was_main"))."
   was=$(tip main)
   server_commit octo/dotfiles main 'new upstream' >/dev/null
   main=$(server_commit mislav/dotfiles main 'new on the fork')
-  GH_REPO=mislav/dotfiles run hub sync
+  GH_REPO=mislav/dotfiles.git run hub sync
   assert_success
   assert_output_equals "Updated branch main (was $(short "$was"))."
   assert_equals "$(tip main)" "$main"

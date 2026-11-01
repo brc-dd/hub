@@ -104,7 +104,7 @@ EOF
   run hub create --public -pc
   assert_success
   assert_gh_called 'repo create github.com/mislav/work --source=* --remote=origin --private'
-  assert_equals "$(<"$HUB_TEST_TMP/clipboard")" https://github.com/mislav/work
+  assert_equals "$(copied)" https://github.com/mislav/work
 }
 
 @test "hub create passes the description, the home page and the remote's name" {
@@ -203,19 +203,19 @@ gh repo create github.com/mislav/work --source=$HUB_TEST_TMP/work --remote=origi
   make_repo work
   run hub create -c -o myorg/tools
   assert_success
-  assert_equals "$(<"$HUB_TEST_TMP/clipboard")" https://github.com/myorg/tools
-  assert_equals "$(<"$HUB_TEST_TMP/browser.log")" https://github.com/myorg/tools
+  assert_equals "$(copied)" https://github.com/myorg/tools
+  assert_equals "$(opened)" https://github.com/myorg/tools
   run hub create --copy --browse
   assert_success
-  assert_equals "$(<"$HUB_TEST_TMP/clipboard")" https://github.com/mislav/work
-  assert_equals "$(tail -n 1 "$HUB_TEST_TMP/browser.log")" https://github.com/mislav/work
+  assert_equals "$(copied)" https://github.com/mislav/work
+  assert_equals "$(opened | tail -n 1)" https://github.com/mislav/work
 }
 
 @test "hub create exits with the browser's status when it fails" {
   make_repo work
   HUB_TEST_BROWSER_STATUS=3 run hub create -o
   assert_status 3
-  assert_equals "$(<"$HUB_TEST_TMP/browser.log")" https://github.com/mislav/work
+  assert_equals "$(opened)" https://github.com/mislav/work
 }
 
 @test "hub create exits with the clipboard's status when it fails" {
@@ -244,8 +244,6 @@ gh repo create github.com/mislav/work --source=$HUB_TEST_TMP/work --remote=origi
   assert_status 1
   assert_output_equals \
     'hub create: not a repository name: my repo (use letters, digits, -, _ and .)'
-  run hub create myorg/..
-  assert_output_equals 'hub create: not a repository name: .. (use letters, digits, -, _ and .)'
   run hub create .git
   assert_output_equals "hub create: not a repository name: '' (use letters, digits, -, _ and .)"
   run hub create a/b/c/d
@@ -258,6 +256,9 @@ gh repo create github.com/mislav/work --source=$HUB_TEST_TMP/work --remote=origi
     assert_status 1
     assert_output_equals "hub create: not a repository: $owner/tools (use $forms)"
   done
+  run hub create myorg/..
+  assert_status 1
+  assert_output_equals "hub create: not a repository: myorg/.. (use $forms)"
   run hub create --remote-name ''
   assert_status 1
   assert_output_equals "hub create: not a remote name: ''"

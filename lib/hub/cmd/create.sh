@@ -62,30 +62,26 @@ hub_cmd_create() {
   hub::require_repo
   top=$(hub::toplevel)
   if ((${#operands[@]} == 0)); then
-    host=$(hub::host)
-    repo=$(hub::repo_name) || exit 1
+    host=$(hub::host) && repo=$(hub::repo_name) || exit 1
   elif [[ ${operands[0]} == */* ]]; then
-    if ! read -r host owner repo < <(hub::parse_project "${operands[0]}") \
-      || [[ ! $owner =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]]; then
+    if ! read -r host owner repo < <(hub::parse_project "${operands[0]}"); then
       hub::die "not a repository: ${operands[0]}" \
         '(use NAME, OWNER/NAME, HOST/OWNER/NAME or a repository URL)'
     fi
   else
-    host=$(hub::host) repo=${operands[0]}
+    host=$(hub::host) || exit 1
+    repo=${operands[0]%.git}
   fi
-  repo=${repo%.git}
-  [[ $repo =~ ^[A-Za-z0-9_.-]+$ && $repo != . && $repo != .. ]] \
+  hub::is_shorthand "$repo" \
     || hub::die "not a repository name: ${repo:-"''"} (use letters, digits, -, _ and .)"
-  hub::valid_remote_name "$remote" || hub::die "not a remote name: ${remote:-"''"}"
-  ! hub::remote_exists "$remote" \
-    || hub::die "remote already exists: $remote (name another with --remote-name NAME)"
+  hub::require_new_remote "$remote"
   if ((push)); then
     branch=$(hub::current_branch) || hub::die 'not on a branch (--push pushes the current branch)'
     git rev-parse --verify --quiet HEAD >/dev/null \
       || hub::die "$branch has no commits to push (commit first, or leave out --push)"
   fi
   [[ -n $owner ]] || owner=$(hub::login "$host") || exit 1
-  url=$(hub::clone_url "$host" "$owner" "$repo" "$(hub::protocol "$host")")
+  url=$(hub::clone_url "$host" "$owner" "$repo")
 
   cmd=(repo create "$host/$owner/$repo" --source="$top" --remote="$remote" "$visibility")
   [[ -z $description ]] || cmd+=(--description "$description")

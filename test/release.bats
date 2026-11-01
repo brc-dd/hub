@@ -100,12 +100,8 @@ summary='Summary: List, view, create, edit, upload and download releases (gh rel
 }
 
 @test "hub release keeps every argument whole and gives gh the standard input" {
-  mkdir bin
-  # A gh that records one argument per line and its standard input.
-  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" >"%s/args"\ncat >"%s/stdin"\n' \
-    "$HUB_TEST_TMP" "$HUB_TEST_TMP" >bin/gh
-  chmod +x bin/gh
-  PATH=$HUB_TEST_TMP/bin:$PATH run hub release create v1.0.0 'my app.tgz#Linux build' \
+  stub_gh 'release create *' ''
+  PATH=$(recording_gh stdin):$PATH run hub release create v1.0.0 'my app.tgz#Linux build' \
     --title 'Version 1' --notes-file - <<<'The notes'
   assert_success
   assert_equals "$(<args)" "$(printf '%s\n' release create v1.0.0 'my app.tgz#Linux build' \
@@ -129,15 +125,11 @@ summary='Summary: List, view, create, edit, upload and download releases (gh rel
 }
 
 @test "hub release exits with gh's status and relays its messages" {
-  mkdir bin
-  # A gh that records its arguments, then fails on standard error with status 4.
-  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" >"%s/args"\n%s\n' \
-    "$HUB_TEST_TMP" "echo 'release not found' >&2; exit 4" >bin/gh
-  chmod +x bin/gh
-  PATH=$HUB_TEST_TMP/bin:$PATH run hub release show v9.9.9
+  stub_gh 'release view v9.9.9' '' 4
+  PATH=$(failing_gh 'release not found'):$PATH run --separate-stderr hub release show v9.9.9
   assert_status 4
-  assert_output_equals 'release not found'
-  assert_equals "$(<args)" "$(printf '%s\n' release view v9.9.9)"
+  assert_equals "$stderr" 'release not found'
+  assert_equals "$(gh_calls)" 'gh release view v9.9.9'
 }
 
 @test "hub --noop release prints the gh command instead of running it" {
@@ -156,6 +148,16 @@ summary='Summary: List, view, create, edit, upload and download releases (gh rel
   assert_success
   assert_line_equals 0 "$summary"
   run hub release -R cli/cli --help
+  assert_success
+  assert_line_equals 0 "$summary"
+  assert_gh_not_called
+}
+
+@test "hub release -R or --repo with -h or --help as the value prints hub's manual" {
+  run hub release -R --help
+  assert_success
+  assert_line_equals 0 "$summary"
+  run hub release --repo -h
   assert_success
   assert_line_equals 0 "$summary"
   assert_gh_not_called
@@ -184,11 +186,7 @@ summary='Summary: List, view, create, edit, upload and download releases (gh rel
 }
 
 @test "hub release without gh says gh is needed" {
-  # Only git and bash: a gh in /usr/bin or /bin (as on CI runners) must not be found.
-  mkdir nogh
-  ln -s "$(command -v git)" nogh/git
-  ln -s "$(command -v bash)" nogh/bash
-  PATH=$HUB_TEST_TMP/nogh run hub release
+  PATH=$(no_gh_path) run hub release
   assert_status 1
   assert_output_equals 'hub release: this command needs the GitHub CLI, gh (https://cli.github.com)'
 }

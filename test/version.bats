@@ -14,10 +14,7 @@ load test_helper
 }
 
 @test "hub version without gh prints hub's and git's versions" {
-  mkdir nogh
-  ln -s "$(command -v git)" nogh/git
-  ln -s "$(command -v bash)" nogh/bash
-  PATH=$HUB_TEST_TMP/nogh:/usr/bin:/bin run hub version
+  PATH=$(no_gh_path) run hub version
   assert_success
   assert_equals "${#lines[@]}" 2
   assert_line_equals 1 "$(git --version)"

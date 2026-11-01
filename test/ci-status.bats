@@ -170,6 +170,13 @@ status() {
   assert_output_equals ''
 }
 
+@test "hub ci-status takes --verbose as -v" {
+  stub_rollup "$(tip main)" FAILURE "$(check lint COMPLETED '"FAILURE"' '"https://ci.test/1"')"
+  run hub ci-status --verbose main
+  assert_status 1
+  assert_output_equals $'failure\tlint\thttps://ci.test/1'
+}
+
 @test "hub ci-status refuses a commit GitHub does not have" {
   stub_object "$(tip main)" null
   run hub ci-status
@@ -208,12 +215,9 @@ status() {
 }
 
 @test "hub ci-status relays gh's error and exits 1" {
-  mkdir failing
-  printf '%s\n' '#!/usr/bin/env bash' 'echo "{\"data\": null}"' \
-    'echo "gh: Could not resolve to a Repository with the name mislav/dotfiles." >&2' 'exit 4' \
-    >failing/gh
-  chmod +x failing/gh
-  PATH=$PWD/failing:$PATH run hub ci-status
+  stub_gh 'api graphql *' '{"data": null}' 4
+  local message='gh: Could not resolve to a Repository with the name mislav/dotfiles.'
+  PATH=$(failing_gh "$message"):$PATH run hub ci-status
   assert_status 1
   assert_output_equals 'gh: Could not resolve to a Repository with the name mislav/dotfiles.'
 }
@@ -248,9 +252,9 @@ status() {
 }
 
 @test "hub ci-status refuses unknown options and a second commit" {
-  run hub ci-status --verbose
+  run hub ci-status --verbose=1
   assert_status 1
-  assert_line_equals 0 'hub ci-status: unknown option: --verbose'
+  assert_line_equals 0 'hub ci-status: unknown option: --verbose=1'
   assert_line_equals 1 'Usage: hub ci-status [-v] [COMMIT]'
   run hub ci-status main topic
   assert_status 1
@@ -262,10 +266,7 @@ status() {
 }
 
 @test "hub ci-status needs gh" {
-  mkdir nogh
-  ln -s "$(command -v git)" nogh/git
-  ln -s "$(command -v bash)" nogh/bash
-  PATH=$PWD/nogh run hub ci-status
+  PATH=$(no_gh_path) run hub ci-status
   assert_status 1
   assert_output_equals \
     'hub ci-status: this command needs the GitHub CLI, gh (https://cli.github.com)'

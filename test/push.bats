@@ -311,6 +311,9 @@ setup_push() {
   run hub push origin,nope -h
   assert_status 129
   assert_line_equals 0 'usage: git push [<options>] [<repository> [<refspec>...]]'
+  run hub push -qh origin,nope
+  assert_status 129
+  assert_line_equals 0 'usage: git push [<options>] [<repository> [<refspec>...]]'
 }
 
 @test "hub push --help and -h are git's" {

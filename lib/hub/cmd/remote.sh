@@ -27,7 +27,7 @@
 
 hub_cmd_remote() {
   local valued='' proto='' delete=0 sub=0 cmd slot name='' spec owner repo project host top w i
-  local -a words=("$@") args=() ops=() operand=()
+  local -a words=("$@") args=() ops=()
   # git remote takes -v before its subcommand.
   for w in "$@"; do
     [[ $w =~ ^-v+$ || (${#w} -ge 3 && --verbose == "$w"*) ]] \
@@ -40,34 +40,22 @@ hub_cmd_remote() {
     set-url) ;;
     *) hub::exec_git remote "$@" ;;
   esac
-  hub::scan "$valued" "$@"
-  for i in "${HUB_OPERANDS[@]}"; do operand[i]=1; done
-  args=("${words[@]:0:sub+1}")
-  # The same walk as hub::scan's, to drop hub's -p where it is an option and not a value.
-  for ((i = sub + 1; i < $#; i++)); do
-    w=${words[i]}
-    if [[ -n ${operand[i]-} ]]; then
-      ops+=("${#args[@]}")
-    elif [[ " $valued " == *" $w "* ]]; then
-      args+=("$w")
-      ((i += 1))
-    elif [[ $w =~ ^-[A-Za-z]*p[A-Za-z]*$ && " $valued " != *" ${w:0:2} "* ]]; then
-      proto=ssh
-      w=${w//p/}
-      if [[ $w != - ]]; then args+=("$w"); fi
-      continue
-    elif [[ $cmd == set-url && ${#w} -ge 3 && --delete == "$w"* ]]; then
-      delete=1
-    fi
-    args+=("${words[i]}")
+  # Drop hub's -p before hub::scan can hand the line to git.
+  ! hub::drop_flag p "$valued" "${words[@]:sub+1}" || proto=ssh
+  args=("${words[@]:0:sub+1}" "${HUB_ARGS[@]}")
+  hub::scan "$valued" "${args[@]}"
+  for i in "${HUB_OPTIONS[@]}"; do
+    w=${args[i]}
+    [[ $cmd != set-url || $w != --* || ${#w} -lt 3 || --delete != "$w"* ]] || delete=1
   done
+  for i in "${HUB_OPERANDS[@]}"; do ((i <= sub)) || ops+=("$i"); done
   # With --delete the URL operand is a regular expression for git.
   ((delete == 0)) || hub::exec_git remote "${args[@]}"
   hub::git_query rev-parse --git-dir >/dev/null || hub::exec_git remote "${args[@]}"
   case $cmd:${#ops[@]} in
     add:1)
       slot=${ops[0]} name=${args[slot]}
-      [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]] || hub::exec_git remote "${args[@]}"
+      hub::is_owner "$name" || hub::exec_git remote "${args[@]}"
       ;;
     add:2 | set-url:2)
       slot=${ops[1]}
@@ -76,29 +64,26 @@ hub_cmd_remote() {
       top=$(hub::toplevel) || top=$(hub::git_query rev-parse --absolute-git-dir)
       if ! hub::is_shorthand "$spec" || hub::local_source "$spec" \
         || (cd "$top" && hub::local_source "$spec") \
-        || [[ $spec != */* && ! $spec =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]]; then
+        || { [[ $spec != */* ]] && ! hub::is_owner "$spec"; }; then
         hub::exec_git remote "${args[@]}"
       fi
       ;;
     *) hub::exec_git remote "${args[@]}" ;;
   esac
   spec=${args[slot]}
-  # origin alone needs your login.
-  [[ $name != origin ]] || hub::require_gh
   # hub::repo_name also refuses an invalid GH_REPO.
   repo=$(hub::repo_name) || exit 1
   project=$(hub::project 2>/dev/null)
   host=${project%% *}
-  [[ -n $host ]] || host=$(hub::host)
+  [[ -n $host ]] || host=$(hub::host) || exit 1
   if [[ $spec == */* ]]; then
     owner=${spec%%/*} repo=${spec#*/}
     [[ $repo != ?*.git ]] || repo=${repo%.git}
   else
     owner=$spec
+    # origin alone means your own copy.
     if [[ $name == origin ]]; then owner=$(hub::login "$host") || exit 1; fi
   fi
-  # Without gh there is no git_protocol setting to read: https.
-  if [[ -z $proto ]] && command -v gh >/dev/null; then proto=$(hub::protocol "$host"); fi
   hub::exec_git remote "${args[@]:0:slot}" ${name:+"$name"} \
-    "$(hub::clone_url "$host" "$owner" "$repo" "${proto:-https}")" "${args[@]:slot+1}"
+    "$(hub::clone_url "$host" "$owner" "$repo" "$proto")" "${args[@]:slot+1}"
 }

@@ -24,13 +24,9 @@ hub_cmd_cherry_pick() {
   for ((i = 0; i < $#; i++)); do
     case ${args[i]} in
       -- | --end-of-options) break ;;
-      -h | --help) hub::exec_git cherry-pick "$@" ;;
+      -h | --help | --help-all) hub::exec_git cherry-pick "$@" ;;
     esac
-    hub::parse_github_url "${args[i]}" || continue
-    case ${HUB_URL[kind]}:${HUB_URL[number]-} in
-      commit:* | pull:?*) [[ -n ${HUB_URL[sha]-} ]] || continue ;;
-      *) continue ;;
-    esac
+    hub::patch_url "${args[i]}" && [[ -n ${HUB_URL[sha]-} ]] || continue
     urls+=("$i")
     hosts[i]=${HUB_URL[host]} owners[i]=${HUB_URL[owner]} repos[i]=${HUB_URL[repo]}
     shas[i]=${HUB_URL[sha],,}

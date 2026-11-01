@@ -25,74 +25,24 @@ hub_cmd_clone() {
   local -a table=(-o --origin -b --branch -u --upload-pack --reference --reference-if-able
     --separate-git-dir --depth --shallow-since --shallow-exclude -j --jobs --template -c
     --config --filter --bundle-uri --server-option --ref-format --revision)
-  local valued="${table[*]}" word flags repo owner host protocol="" i j
-  local -a args=("$@") line=()
+  local valued="${table[*]}" repo owner host protocol="" i
+  local -a line
   # hub's -p is dropped first, so every line handed to git, by hub::scan too, is git's alone.
-  for ((i = 0; i < $#; i++)); do
-    word=${args[i]}
-    if [[ $word == -- || $word == --end-of-options ]]; then
-      line+=("${args[@]:i}")
-      break
-    elif _hub_clone_takes_next "$word" "$valued"; then
-      line+=("${args[@]:i:2}")
-      ((i += 1))
-    else
-      # -p alone or among the flags before a letter that takes a value (-qp, -pomine).
-      for ((j = 1; j < ${#word}; j++)); do [[ $valued != *" -${word:j:1} "* ]] || break; done
-      flags=${word:1:j-1}
-      if [[ $word == -[A-Za-z]* && $flags =~ ^[A-Za-z]+$ && $flags == *p* ]]; then
-        protocol=ssh
-        word=-${flags//p/}${word:j}
-        [[ $word != - ]] || continue
-      fi
-      line+=("$word")
-    fi
-  done
+  ! hub::drop_flag p "$valued" "$@" || protocol=ssh
+  line=("${HUB_ARGS[@]}")
   hub::scan "$valued" "${line[@]}"
   ((${#HUB_OPERANDS[@]})) || hub::exec_git clone "${line[@]}"
   i=${HUB_OPERANDS[0]}
   repo=${line[i]%.git}
-  if ! hub::is_shorthand "$repo" || _hub_clone_local_source "${line[i]}"; then
+  if ! hub::is_shorthand "$repo" || hub::local_source "${line[i]}" bundle; then
     hub::exec_git clone "${line[@]}"
   fi
-  host=$(hub::host)
+  host=$(hub::host) || exit 1
   if [[ $repo == */* ]]; then
     owner=${repo%%/*} repo=${repo#*/}
   else
-    hub::require_gh
     owner=$(hub::login "$host") || exit 1
   fi
-  # Without gh there is no git_protocol setting to read: https.
-  if [[ -z $protocol ]] && command -v gh >/dev/null; then protocol=$(hub::protocol "$host"); fi
-  line[i]=$(hub::clone_url "$host" "$owner" "$repo" "${protocol:-https}")
+  line[i]=$(hub::clone_url "$host" "$owner" "$repo" "$protocol")
   hub::exec_git clone "${line[@]}"
-}
-
-# _hub_clone_takes_next WORD VALUED : git may read the word after WORD as WORD's value.
-_hub_clone_takes_next() {
-  local word=$1 valued=" $2 " long j
-  [[ $valued != *" $word "* ]] || return 0
-  case $word in
-    --*=* | --) return 1 ;;
-    --*)
-      # An abbreviation, such as --dep for --depth.
-      for long in $valued; do [[ $long != "$word"?* ]] || return 0; done
-      ;;
-    -?*)
-      # In a cluster the first letter that takes a value takes the rest, or the next word.
-      for ((j = 1; j < ${#word}; j++)); do
-        if [[ $valued == *" -${word:j:1} "* ]]; then
-          ((j == ${#word} - 1))
-          return
-        fi
-      done
-      ;;
-  esac
-  return 1
-}
-
-# _hub_clone_local_source STR : git reads STR as a local repository; hub::local_source misses
-# STR.git/.git, a work tree named STR.git.
-_hub_clone_local_source() {
-  hub::local_source "$1" bundle || git rev-parse --resolve-git-dir "$1.git/.git" >/dev/null 2>&1
 }

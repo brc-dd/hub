@@ -26,14 +26,6 @@ setup() {
 
 remotes() { git remote | tr '\n' ' '; }
 
-# no_gh : a directory holding only git and bash, for PATH (a gh in /usr/bin must not be found).
-no_gh() {
-  mkdir -p "$HUB_TEST_TMP/nogh"
-  ln -sf "$(command -v git)" "$HUB_TEST_TMP/nogh/git"
-  ln -sf "$(command -v bash)" "$HUB_TEST_TMP/nogh/bash"
-  printf '%s\n' "$HUB_TEST_TMP/nogh"
-}
-
 @test "hub fetch USER adds the user's copy as a remote and fetches it" {
   run hub fetch alice
   assert_success
@@ -142,9 +134,7 @@ no_gh() {
 }
 
 @test "hub fetch without gh says gh is needed before adding any remote" {
-  local path
-  path=$(no_gh)
-  PATH=$path run hub fetch alice
+  PATH=$(no_gh_path) run hub fetch alice
   assert_status 1
   assert_output_equals 'hub fetch: this command needs the GitHub CLI, gh (https://cli.github.com)'
   assert_equals "$(remotes)" 'origin '
@@ -253,6 +243,9 @@ no_gh() {
   run hub fetch -h alice
   assert_status 129
   assert_output_contains 'usage: git fetch'
+  run hub fetch -qh alice
+  assert_status 129
+  assert_output_contains 'usage: git fetch'
   run hub fetch --multiple=yes alice
   assert_status 129
   assert_output_contains "option \`multiple' takes no value"
@@ -279,6 +272,13 @@ no_gh() {
   assert_equals "$(remotes)" 'alice origin '
   assert_equals "$(gh_calls | grep -c 'repo view')" 1
   assert_equals "$(git rev-parse FETCH_HEAD)" "$(server_ref alice/dotfiles main)"
+}
+
+@test "hub fetch reads an option's value spelled like an option as a value" {
+  run hub --noop fetch -o -m alice
+  assert_success
+  assert_line_equals 0 'git remote add alice https://github.com/alice/dotfiles.git'
+  assert_line_equals 1 'git fetch -o -m alice'
 }
 
 @test "hub fetch hands the hidden submodule options to git, values and all" {
@@ -318,6 +318,13 @@ no_gh() {
   run hub --noop fetch alice --help
   assert_success
   assert_output_equals 'git fetch alice --help'
+  assert_gh_not_called
+}
+
+@test "hub fetch --help-all is git's usage, before any remote is added" {
+  run hub fetch --help-all alice
+  assert_status 129
+  assert_equals "$(remotes)" 'origin '
   assert_gh_not_called
 }
 
