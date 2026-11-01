@@ -4,6 +4,7 @@ STUB_LINKS := test/stubs/open test/stubs/xdg-open test/stubs/xclip test/stubs/wl
 SH_FILES := $(wildcard bin/hub lib/hub/*.sh lib/hub/cmd/*.sh script/* completions/hub.bash) \
 	$(filter-out $(STUB_LINKS),$(wildcard test/stubs/*)) $(wildcard test/*.bash)
 BATS_FILES := $(wildcard test/*.bats)
+WORKFLOWS := $(wildcard .github/workflows/*.yml)
 
 .PHONY: test lint fmt fmt-check selftest check install uninstall
 
@@ -14,7 +15,9 @@ lint:
 	shellcheck --external-sources --shell=bash $(SH_FILES)
 	shellcheck --external-sources --shell=bash --severity=warning $(BATS_FILES)
 	@awk 'length > 100 { print FILENAME ":" FNR ": longer than 100 columns"; bad = 1 } \
-	  END { exit bad }' Makefile $(SH_FILES) $(BATS_FILES)
+	  END { exit bad }' Makefile $(SH_FILES) $(BATS_FILES) $(WORKFLOWS) .github/dependabot.yml
+	@if command -v actionlint >/dev/null; then actionlint $(WORKFLOWS); \
+	  else echo 'make lint: actionlint is not installed; the workflows were not linted' >&2; fi
 
 fmt:
 	shfmt -w $(SH_FILES) $(BATS_FILES)
