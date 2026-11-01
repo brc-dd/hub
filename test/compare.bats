@@ -344,7 +344,7 @@ $page/feature"
   assert_output_equals "hub compare: cannot tell where feature pushes $hint"
 }
 
-@test "hub compare names an empty pushRemote or pushDefault as the reason" {
+@test "hub compare names a pushRemote or pushDefault that is no remote as the reason" {
   make_repo work origin=https://github.com/mislav/dotfiles.git
   git switch -q -c feature
   git update-ref refs/remotes/origin/feature HEAD
@@ -352,15 +352,19 @@ $page/feature"
   run hub compare -u
   assert_status 1
   local hint='(set it to a remote, or name a range)'
-  assert_output_equals "hub compare: remote.pushDefault is empty $hint"
+  assert_output_equals "hub compare: remote.pushDefault names no remote $hint"
   git config branch.feature.pushRemote ''
   run hub compare -u
   assert_status 1
-  assert_output_equals "hub compare: branch.feature.pushRemote is empty $hint"
+  assert_output_equals "hub compare: branch.feature.pushRemote names no remote $hint"
   git config remote.pushDefault origin
   run hub compare -u
   assert_status 1
-  assert_output_equals "hub compare: branch.feature.pushRemote is empty $hint"
+  assert_output_equals "hub compare: branch.feature.pushRemote names no remote $hint"
+  git config branch.feature.pushRemote https://github.com/mislav/dotfiles.git
+  run hub compare -u
+  assert_status 1
+  assert_output_equals "hub compare: branch.feature.pushRemote names no remote $hint"
   assert_equals "$(opened)" ''
 }
 

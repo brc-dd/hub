@@ -227,6 +227,21 @@ parses_to() {
   assert_equals "$(git remote)" origin
 }
 
+@test "require_new_remote refuses a name that differs from a remote's only in case" {
+  make_repo r origin=https://github.com/o/r.git Mislav=https://github.com/mislav/r.git
+  run hub::require_new_remote ORIGIN
+  assert_status 1
+  assert_output_equals \
+    'hub test: remote already exists: origin (name another with --remote-name NAME)'
+  run hub::require_new_remote mislav
+  assert_status 1
+  assert_output_equals \
+    'hub test: remote already exists: Mislav (name another with --remote-name NAME)'
+  run hub::require_new_remote mislav2
+  assert_success
+  assert_equals "$(git remote)" $'Mislav\norigin'
+}
+
 @test "remote_head names the branch the remote's HEAD points at, when both exist" {
   make_repo r origin=https://github.com/o/r.git
   run hub::remote_head origin
@@ -311,9 +326,9 @@ parses_to() {
 @test "push_remote takes branch.NAME.pushRemote, then remote.pushDefault" {
   make_repo r origin=https://github.com/o/r.git fork=https://github.com/mislav/r.git
   git config remote.pushDefault origin
-  git config branch.main.pushRemote other
+  git config branch.main.pushRemote fork
   run hub::push_remote main
-  assert_output_equals other
+  assert_output_equals fork
   git config --unset branch.main.pushRemote
   run hub::push_remote main
   assert_output_equals origin
@@ -332,6 +347,21 @@ parses_to() {
   run hub::push_remote main
   assert_status 1
   assert_output_equals ''
+}
+
+@test "push_remote fails on a pushRemote or pushDefault that names no remote, such as a URL" {
+  make_repo r origin=https://github.com/o/r.git
+  git config branch.main.pushRemote https://github.com/mislav/r.git
+  git config remote.pushDefault origin
+  run hub::push_remote main
+  assert_status 1
+  assert_output_equals ''
+  git config --unset branch.main.pushRemote
+  git config remote.pushDefault Origin
+  run hub::push_remote main
+  assert_status 1
+  assert_output_equals ''
+  assert_gh_not_called
 }
 
 @test "push_remote takes the remote of an upstream of the branch's own name" {
@@ -1233,6 +1263,21 @@ https://github.com/o/r/actions'
   PATH=$HUB_TEST_TMP/empty run hub::open_url https://github.com/o/r
   assert_status 1
   assert_output_contains 'no browser found'
+}
+
+@test "open_url runs gh's browser setting after GH_BROWSER and before BROWSER" {
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$1" >>"$HUB_TEST_TMP/setting.log"\n' >setting
+  chmod +x setting
+  stub_gh 'config get browser' "$HUB_TEST_TMP/setting"
+  run hub::open_url https://github.com/o/r
+  assert_success
+  assert_gh_not_called
+  unset GH_BROWSER
+  BROWSER=false run hub::open_url https://github.com/o/r/issues
+  assert_success
+  assert_equals "$(gh_calls)" 'gh config get browser'
+  assert_equals "$(<setting.log)" https://github.com/o/r/issues
+  assert_equals "$(<browser.log)" https://github.com/o/r
 }
 
 @test "open_url falls back to xdg-open without open" {

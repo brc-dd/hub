@@ -368,6 +368,22 @@ pushed_to_other() {
   assert_equals "$(opened)" https://github.com/cli/cli
 }
 
+@test "hub browse runs gh's browser setting before BROWSER, and GH_BROWSER before both" {
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$1" >>"$HUB_TEST_TMP/setting.log"\n' >setting
+  chmod +x setting
+  stub_gh 'config get browser' "$HUB_TEST_TMP/setting"
+  run hub browse cli/cli
+  assert_success
+  assert_equals "$(opened)" https://github.com/cli/cli
+  run ls setting.log
+  assert_failure
+  unset GH_BROWSER
+  BROWSER=false run hub browse cli/cli issues
+  assert_success
+  assert_equals "$(<setting.log)" https://github.com/cli/cli/issues
+  assert_equals "$(opened)" https://github.com/cli/cli
+}
+
 @test "hub browse refuses a project without a GitHub remote" {
   make_repo work origin=https://gitlab.com/mislav/dotfiles.git
   run hub browse

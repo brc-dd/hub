@@ -242,6 +242,17 @@ forks() {
   assert_equals "$(git remote get-url mislav)" https://example.com/elsewhere.git
 }
 
+@test "hub fork refuses a remote named after you in another case, before gh forks" {
+  dotfiles
+  git remote add Mislav https://github.com/mislav/dotfiles.git
+  run hub fork
+  assert_status 1
+  assert_output_equals \
+    'hub fork: remote already exists: Mislav (name another with --remote-name NAME)'
+  assert_equals "$(gh_calls)" 'gh config get user -h github.com'
+  assert_equals "$(git remote)" $'Mislav\norigin'
+}
+
 @test "hub fork stops before gh when your login is unknown" {
   dotfiles
   stub_gh 'config get user -h github.com' '' 1

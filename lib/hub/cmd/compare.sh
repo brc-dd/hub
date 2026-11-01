@@ -90,7 +90,7 @@ _hub_compare_head() {
     # Set but empty, the first of these keys is why there is no answer.
     for key in "branch.$branch.pushRemote" remote.pushDefault; do
       if git config "$key" >/dev/null; then
-        hub::die "$key is empty (set it to a remote, or name a range)"
+        hub::die "$key names no remote (set it to a remote, or name a range)"
       fi
     done
     hub::die "cannot tell where $branch pushes (git push -u REMOTE $branch first, or name a range)"

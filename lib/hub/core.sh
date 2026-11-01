@@ -142,9 +142,16 @@ hub::remote_head() {
     && git show-ref --verify --quiet "$ref" && printf '%s\n' "${ref#"$head"}"
 }
 
-# hub::require_new_remote NAME : die unless NAME can name a remote and no remote has it.
+# hub::require_new_remote NAME : die unless NAME is a valid, free remote name, ignoring case.
 hub::require_new_remote() {
+  local other
   hub::valid_remote_name "$1" || hub::die "not a remote name: $(hub::shown "$1")"
+  # On a case-insensitive file system, Mislav and mislav would share their remote-tracking refs.
+  while IFS= read -r other; do
+    [[ ${other,,} != "${1,,}" ]] \
+      || hub::die "remote already exists: $(hub::shown "$other")" \
+        '(name another with --remote-name NAME)'
+  done < <(hub::remotes)
   ! hub::remote_exists "$1" \
     || hub::die "remote already exists: $1 (name another with --remote-name NAME)"
 }
@@ -174,14 +181,14 @@ hub::repo_name() {
   printf '%s\n' "${dir//[^A-Za-z0-9_.-]/-}"
 }
 
-# hub::push_remote BRANCH : the remote hub pushes BRANCH to and reads it back from.
+# hub::push_remote BRANCH : BRANCH's push remote; none if pushRemote or pushDefault names no remote.
 hub::push_remote() {
   local branch=$1 remote ref host owner repo
   local -a remotes mine=()
   local -A logins=()
   if remote=$(git config "branch.$1.pushRemote") || remote=$(git config remote.pushDefault); then
-    # git refuses to push to an empty name; hub does not look further either.
-    [[ -n $remote ]] || return 1
+    # git refuses to push to an empty name, and a URL has no remote-tracking refs: no answer.
+    hub::remote_exists "$remote" || return 1
     printf '%s\n' "$remote"
     return 0
   fi
@@ -677,9 +684,12 @@ hub::show_url() {
   fi
 }
 
-# hub::open_url URL : open URL in the browser; the browser's status.
+# hub::open_url URL : open URL in GH_BROWSER, gh's browser, BROWSER or the system's; its status.
 hub::open_url() {
-  local browser=${GH_BROWSER:-${BROWSER-}}
+  local browser=${GH_BROWSER-}
+  # gh's own order. Without gh, bash's "command not found" goes to /dev/null too: no setting.
+  [[ -n $browser || ${HUB_NOOP-} == 1 ]] || browser=$(gh config get browser 2>/dev/null)
+  browser=${browser:-${BROWSER-}}
   if [[ ${HUB_NOOP-} == 1 ]]; then
     hub::quote open "$1"
   elif [[ -n $browser ]]; then
