@@ -47,8 +47,9 @@ surprises, `-c` and `--config-env` in git's order, `--git-dir`, `--work-tree`,
 `--bare`, `--namespace` and the rest) and exports their effect to every child
 process. The re-entry is `--run` with the `HUB_REEXEC` marker; without the
 marker, `--run` is an unknown option for git. hub checks bash 5 again, then
-repairs two things git does to a `!` alias. git runs it from the top of the
-work tree and exports the user's subdirectory as `GIT_PREFIX`: hub runs
+repairs two things git does to a `!` alias. When the current directory is
+inside the work tree, git runs the alias from the top of the work tree and
+exports the user's subdirectory as `GIT_PREFIX`: hub runs
 `cd -P -- "./$GIT_PREFIX"` and unsets it, so relative paths keep their
 meaning. git also exports the git directory it found as `GIT_DIR`, and without
 `GIT_WORK_TREE` every git hub starts would take the subdirectory for the top
@@ -56,7 +57,10 @@ of the work tree: hub unsets `GIT_DIR` unless the user set it (`GIT_DIR` in
 the environment, `--git-dir` or `--bare`, recorded as `HUB_KEEP_GIT_DIR=1`).
 With it hub unsets `GIT_IMPLICIT_WORK_TREE`, which git exports as 0 from a
 bare repository or a `.git` directory; left set, it would leave the hooks and
-submodules of a clone that hub starts without a work tree.
+submodules of a clone that hub starts without a work tree. hub also unsets
+`GIT_CONFIG`, which points git config, but no other git command, at another
+file: hub's own queries then read the configuration that git push and the
+rest read. A plain git command never reaches the re-entry and keeps it.
 hub then exports `HUB_COMMAND`, sources `core.sh` and the module, and calls
 `hub_cmd_NAME`. A word that is not a module is refused:
 `hub: not a hub command: X`. `GIT_CONFIG_PARAMETERS` stays as git exported it,
@@ -166,9 +170,12 @@ Options whose optional value is attached only, such as
 `--force-with-lease[=X]`, stay out: with `=` they are one word, bare they are
 flags. am, apply and cherry-pick convert only the operands before `--` (or
 `--end-of-options`), so a URL given as an option's value (`--include URL`)
-reaches git as given. checkout looks for a pull request URL before `--`; no
-value of git checkout's options can be one, so it needs no table. hub hands
-the command line to git untouched when it cannot read it with certainty:
+reaches git as given. checkout looks for a pull request URL before `--`; only
+`--pathspec-from-file`'s value can be one, so a line with a word starting
+`--pathspec-f` (the option, its prefixes, its `=` form or
+`--pathspec-file-nul`) goes to git untouched, and checkout needs no table.
+hub hands the command line to git untouched when it cannot read it with
+certainty:
 
 1. a `--word` without `=` that is not in the table but is a proper prefix of
    an entry, which git would expand (`--dep 1`);
@@ -301,22 +308,32 @@ out, with the command to use instead, is in
 - Inside a repository whose configuration git cannot read, hub's own
   commands, `version`, `alias` and `help` included, get git's fatal message,
   because the re-entry goes through git. Plain git commands are unaffected.
+- hub's own commands must run from inside the work tree: with `--work-tree`
+  or `GIT_WORK_TREE` and a current directory outside it,
+  `hub::require_repo` refuses. Plain git commands are unaffected.
 - For pull-request, browse and compare, `remote.*.push` refspecs,
   `push.default` modes, custom fetch mappings and mirror remotes are not read:
   the rules in [Where a branch pushes](#where-a-branch-pushes) decide, and
   `pull-request -p` pushes an explicit refspec. `hub push A,B` follows a
   remote's push refspecs and its mirror setting.
+- `hub push` asks git how it reads a word with a comma
+  (`git ls-remote --get-url`), so a word git rewrites through
+  `url.BASE.insteadOf` is one destination. A rewrite set only through
+  `url.BASE.pushInsteadOf` is not read, and such a word is split as a list
+  of remotes.
 - For a remote that fetches from one repository and pushes to another, the
   pushed check reads the push remote's remote-tracking branch by name; use
   `-p` or `-f` when it is wrong.
 - Legacy `.git/remotes` files and a flow-style `hosts.yml` are not supported.
 - sync runs `git fetch --prune` with your fetch settings on every tracked
   remote. Branches that `gh pr checkout` made for forks (upstream
-  `refs/pull/N/head`) are left alone. Nothing guards against other processes
-  changing refs meanwhile. sync leaves a branch checked out in another work
-  tree alone, but `git worktree list` does not show a branch that another
-  work tree is rebasing or bisecting: with git older than 2.35, sync can
-  fast-forward such a branch (git 2.35 and later refuse to move it).
+  `refs/pull/N/head`) are left alone, unless the fetch refspecs map
+  `refs/pull/*`; then sync fast-forwards them like any other branch.
+  Nothing guards against other processes changing refs meanwhile. sync
+  leaves a branch checked out in another work tree alone, but
+  `git worktree list` does not show a branch that another work tree is
+  rebasing or bisecting: with git older than 2.35, sync can fast-forward
+  such a branch (git 2.35 and later refuse to move it).
 - git cherry-pick also takes the revision walker's options (`--grep`,
   `--author` and others); hub's table leaves them out, so a commit URL given
   as their value is read as an operand.

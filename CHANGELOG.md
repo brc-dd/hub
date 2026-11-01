@@ -35,6 +35,29 @@ All notable changes to hub are documented here. The format follows
 - `push REMOTE1,REMOTE2` pushes the current branch when a later `--no-FLAG`
   cancels `--all`, `--branches`, `--mirror`, `--tags` or `--delete` (for
   example `--all --no-all`).
+- `push REMOTE1,REMOTE2` pushes the current branch when `--no-all` cancels
+  `--branches` or `--no-branches` cancels `--all`, git's alias of it, and
+  when `--no-delete` follows a repeated `-d`.
+- `push REMOTE1,REMOTE2` reads `remote.NAME.push` and `remote.NAME.mirror`
+  from the repository's configuration even with `GIT_CONFIG` set, as git push
+  does.
+- `push` hands a word with a comma that git rewrites through
+  `url.BASE.insteadOf` to git as one destination instead of splitting it.
+- `sync` fast-forwards the default branch it switched to after deleting the
+  current branch, when the default branch tracks a local branch; git refused
+  to fetch into it.
+- `sync` fast-forwards branches that are not checked out in a repository
+  whose git directory is separate from its work tree (`--git-dir` and
+  `--work-tree`, or `GIT_DIR` and `GIT_WORK_TREE`), and no longer reads a
+  repository that happens to sit at the top of the work tree.
+- `sync` shows a `GH_REPO` that no remote points to quoted, so a newline
+  cannot split the message.
+- `checkout --pathspec-from-file FILE` is git's even when FILE looks like a
+  pull request URL; so is a line with `--pathspec-file-nul`.
+- `checkout` refuses `--detach` together with `-b BRANCH` or a BRANCH
+  operand; gh dropped the branch and reported success.
+- `am` and `apply` leave a two-dot compare URL (`compare/A..B`) to git as
+  given, since GitHub's API compares only `BASE...HEAD`.
 - `pull-request -o` and `-c` find the new pull request by its head, so a
   branch named like a number (`123`) no longer opens another pull request.
 - `pull-request` refuses before pushing when gh's configuration has prompt
