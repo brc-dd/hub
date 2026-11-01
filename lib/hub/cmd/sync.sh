@@ -35,7 +35,7 @@
 
 hub_cmd_sync() {
   local remote='' default='' current='' failed=0 line name oid symref tracked upstream track r there
-  local host owner repo worktrees stuck moved
+  local host owner repo worktrees gitdir stuck moved
   local format='%(refname:lstrip=2)%1f%(objectname)%1f%(symref)%1f%(upstream:remotename)'
   local -a operands=() lines=() locals=() last=() fetched=() others=() ordered=()
   local -A waiting=()
@@ -60,7 +60,7 @@ hub_cmd_sync() {
     # An invalid GH_REPO dies here with its own message.
     hub::project >/dev/null
     remote=$(hub::project_remote) \
-      || hub::die "no remote points to GH_REPO: $GH_REPO (name the remote to sync)"
+      || hub::die "no remote points to GH_REPO: $(hub::shown "$GH_REPO") (name the remote to sync)"
   else
     remote=$(hub::project_remote) || hub::die 'no GitHub remote found (name the remote to sync)'
   fi
@@ -80,6 +80,7 @@ hub_cmd_sync() {
   default=$(hub::default_branch "$host" "$owner" "$repo" "$remote") || default=''
   current=$(hub::current_branch) || current=''
   worktrees=$(git worktree list --porcelain)
+  gitdir=$(git rev-parse --absolute-git-dir) || exit
   # The unit separator keeps empty fields: a run of spaces would merge them.
   # Branches tracking a local branch, the current one included, come at the end, each after the
   # branch it tracks, as that branch may move first; the rest of a cycle follows in any order.
@@ -116,7 +117,7 @@ hub_cmd_sync() {
       && git merge-base --is-ancestor "$oid" "$there"; then
       if [[ $there != "$oid" ]]; then
         _hub_sync_update "$name" "$oid" "refs/remotes/$remote/$default" "$current" "$worktrees" \
-          || failed=1
+          "$gitdir" || failed=1
       fi
       continue
     fi
@@ -125,7 +126,9 @@ hub_cmd_sync() {
       track=$(git for-each-ref --format='%(upstream:track,nobracket)' "refs/heads/$name")
     fi
     case $track in
-      behind*) _hub_sync_update "$name" "$oid" "$upstream" "$current" "$worktrees" || failed=1 ;;
+      behind*)
+        _hub_sync_update "$name" "$oid" "$upstream" "$current" "$worktrees" "$gitdir" || failed=1
+        ;;
       ahead*)
         if [[ $tracked == . ]]; then
           hub::warn "$name is ahead of ${upstream#refs/heads/}"
@@ -145,6 +148,8 @@ hub_cmd_sync() {
         elif git merge-base --is-ancestor "refs/heads/$name" "refs/remotes/$remote/$default" \
           2>/dev/null; then
           _hub_sync_delete "$name" "$default" "$current" "$tracked" || failed=1
+          # It may have switched to the default branch, which the branches after it may track.
+          current=$(hub::current_branch) || current=''
         else
           hub::warn "$name was deleted on $tracked, but is not merged into $remote/$default"
         fi
@@ -154,8 +159,9 @@ hub_cmd_sync() {
   return "$failed"
 }
 
-# _hub_sync_update BRANCH OID REF CURRENT WORKTREES : fast-forward BRANCH, at OID, to REF, unless
-# git worktree list --porcelain's WORKTREES has it checked out elsewhere.
+# _hub_sync_update BRANCH OID REF CURRENT WORKTREES GITDIR : fast-forward BRANCH, at OID, to REF
+# in the repository at GITDIR, unless git worktree list --porcelain's WORKTREES has it checked out
+# elsewhere.
 _hub_sync_update() {
   if [[ $1 == "$4" ]]; then
     # --no-squash: branch.*.mergeOptions may say --squash, which would not move the branch.
@@ -165,8 +171,9 @@ _hub_sync_update() {
     hub::warn "$1 is checked out in another work tree; leaving it alone"
     return 1
   else
-    # A branch that is not checked out moves by a local fetch, which refuses a non-fast-forward.
-    hub::git fetch --quiet . "$3:refs/heads/$1" || return
+    # A branch that is not checked out moves by a fetch from the repository itself, which refuses
+    # a non-fast-forward. Not from ".": that is the top of the work tree, not the git directory.
+    hub::git fetch --quiet "$6" "$3:refs/heads/$1" || return
   fi
   [[ ${HUB_NOOP-} == 1 ]] && return 0
   printf 'Updated branch %s (was %s).\n' "$1" "$(git rev-parse --short "$2")"

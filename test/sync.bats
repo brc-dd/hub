@@ -156,6 +156,30 @@ $warning topic is ahead of main"
   assert_equals "$(tip topic)" ''
 }
 
+@test "hub sync fast-forwards the default branch it switched to when it tracks a local branch" {
+  serve_github mislav/dotfiles
+  clone_served mislav/dotfiles
+  git branch -q -t base refs/remotes/origin/main
+  git branch -q --set-upstream-to=base main
+  was_main=$(tip main)
+  pushed_branch topic
+  git switch -q topic
+  was=$(tip topic)
+  server_merge_and_delete mislav/dotfiles topic
+  main=$(server_commit mislav/dotfiles main 'after merge' README hello)
+  run hub sync
+  assert_success
+  assert_output_equals "Updated branch base (was $(short "$was_main")).
+Deleted branch topic (was $(short "$was")).
+Updated branch main (was $(short "$was_main"))."
+  assert_equals "$(git symbolic-ref HEAD)" refs/heads/main
+  assert_equals "$(tip main)" "$main"
+  assert_equals "$(tip base)" "$main"
+  assert_equals "$(tip topic)" ''
+  assert_equals "$(git status --porcelain)" ''
+  assert_equals "$(<README)" hello
+}
+
 @test "hub sync keeps the current branch when the default branch is not a local branch" {
   serve_github mislav/dotfiles
   clone_served mislav/dotfiles
@@ -331,8 +355,33 @@ Updated branch main (was $(short "$was"))."
   run hub --noop sync
   assert_status 1
   assert_output_contains "$warning busy is checked out in another work tree; leaving it alone"
-  assert_output_contains 'git fetch --quiet . refs/remotes/origin/feature:refs/heads/feature'
+  assert_output_contains "git fetch --quiet $(git rev-parse --absolute-git-dir) \
+refs/remotes/origin/feature:refs/heads/feature"
   assert_output_lacks 'refs/heads/busy'
+}
+
+@test "hub sync fast-forwards other branches in a repository whose git directory is elsewhere" {
+  serve_github mislav/dotfiles
+  clone_served mislav/dotfiles
+  pushed_branch feature
+  git switch -q feature
+  gd=$HUB_TEST_TMP/gd.git
+  git init -q --separate-git-dir="$gd"
+  was=$(tip main)
+  rm .git
+  main=$(server_commit mislav/dotfiles main 'new on main')
+  GIT_DIR=$gd GIT_WORK_TREE=$PWD run hub sync
+  assert_success
+  assert_output_equals "Updated branch main (was $(git --git-dir="$gd" rev-parse --short "$was"))."
+  assert_equals "$(git --git-dir="$gd" rev-parse refs/heads/main)" "$main"
+  assert_equals "$(git --git-dir="$gd" symbolic-ref HEAD)" refs/heads/feature
+  # A repository in the work tree whose origin/main went elsewhere is not read.
+  cp -R "$gd" .git
+  git update-ref refs/remotes/origin/main "$(git commit-tree -p "$main" -m stray "$main^{tree}")"
+  main=$(server_commit mislav/dotfiles main 'newer on main')
+  run hub --git-dir="$gd" --work-tree=. sync
+  assert_success
+  assert_equals "$(git --git-dir="$gd" rev-parse refs/heads/main)" "$main"
 }
 
 @test "hub sync exits 1 when a merged branch cannot be deleted" {
@@ -676,6 +725,10 @@ Updated branch main (was $(short "$was_main"))."
   assert_status 1
   assert_output_equals \
     'hub sync: no remote points to GH_REPO: octo/other (name the remote to sync)'
+  GH_REPO=$'https://a\nb@github.com/octo/other' run hub sync
+  assert_status 1
+  assert_output_equals "hub sync: no remote points to GH_REPO: \
+\$'https://a\\nb@github.com/octo/other' (name the remote to sync)"
   assert_equals "$(git rev-parse refs/remotes/origin/main)" "$was"
   assert_gh_not_called
 }
