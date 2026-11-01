@@ -440,8 +440,9 @@ hub::patch_url() {
     pull) [[ -n ${HUB_URL[number]-} ]] && [[ -n ${HUB_URL[sha]-} || $1 =~ $page ]] ;;
     # hub::parse_github_url has checked the commit's sha.
     commit) ;;
-    # compare/BRANCH (GitHub's "Compare & pull request" link) has no range to download.
-    compare) [[ ${HUB_URL[range]-} == *..* ]] ;;
+    # compare/BRANCH (GitHub's "Compare & pull request" link) has no range to download, and the
+    # API compares BASE...HEAD only (ref names cannot contain '..', so A..B is the two-dot form).
+    compare) [[ ${HUB_URL[range]-} == *...* ]] ;;
     *) return 1 ;;
   esac
 }

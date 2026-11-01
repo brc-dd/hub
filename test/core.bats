@@ -863,13 +863,14 @@ parses_to() {
   assert_equals "${HUB_URL[number]}:${HUB_URL[sha]}:${HUB_URL[format]}" 12:abc1234:diff
 }
 
-@test "patch_url refuses deeper pages, URLs without a number, sha or range, and other kinds" {
+@test "patch_url refuses deeper pages, two-dot ranges, URLs without a number, sha or range" {
   local url
   for url in https://github.com/o/r/pull/12/files/abc1234 \
     https://github.com/o/r/pull/12/changes/abc1234 https://github.com/o/r/pull/12/files/a..b \
     https://github.com/o/r/pull/abc/commits/abc1234 https://github.com/o/r/pull/new/topic \
     https://github.com/o/r/compare https://github.com/o/r/compare/ \
     https://github.com/o/r/compare/feature 'https://github.com/o/r/compare/feature?expand=1' \
+    https://github.com/o/r/compare/a..b https://github.com/o/r/compare/v1.0..fork:x.y.patch \
     https://github.com/o/r/issues/3 https://github.com/o/r/tree/main https://github.com/o/r \
     https://gitlab.com/o/r/commit/abc1234 https://github.com/o/r/commit/main not-a-url; do
     run hub::patch_url "$url"

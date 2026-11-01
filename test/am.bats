@@ -199,6 +199,7 @@ make_series() {
   local url
   for url in https://github.com/o/r https://github.com/o/r/issues/8 \
     https://github.com/o/r/compare https://github.com/o/r/commit/main \
+    https://github.com/o/r/compare/a..b \
     https://github.com/o/r/pull/abc https://github.com/o/r/pull/abc/commits/abcd \
     https://gist.github.com/o/0123abcd \
     https://gitlab.com/o/r/pull/8 https://ghe.other.test/o/r/pull/8; do
