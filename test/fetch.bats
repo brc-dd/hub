@@ -272,6 +272,58 @@ remotes() { git remote | tr '\n' ' '; }
   assert_gh_not_called
 }
 
+@test "hub fetch hands a word git rewrites through insteadOf to git" {
+  git init -q -b main ../team
+  git -C ../team commit -q --allow-empty -m 'team'
+  git config "url.$HUB_TEST_TMP/team.insteadOf" alice
+  run hub fetch alice main
+  assert_success
+  assert_equals "$(git rev-parse FETCH_HEAD)" "$(git -C ../team rev-parse HEAD)"
+  git config --unset "url.$HUB_TEST_TMP/team.insteadOf"
+  git config "url.$HUB_TEST_TMP/team.insteadOf" alice,bob
+  git -C ../team commit -q --allow-empty -m 'team again'
+  run hub fetch alice,bob main
+  assert_success
+  assert_equals "$(git rev-parse FETCH_HEAD)" "$(git -C ../team rev-parse HEAD)"
+  assert_equals "$(remotes)" 'origin '
+  assert_gh_not_called
+}
+
+@test "hub fetch hands a URL with a comma to git" {
+  local name
+  for name in 'repo,' 'repo,,archive' 'repo,-archive'; do
+    git init -q -b main "../$name"
+    git -C "../$name" commit -q --allow-empty -m "$name"
+    run hub fetch "file://$HUB_TEST_TMP/$name"
+    assert_success
+    assert_equals "$(git rev-parse FETCH_HEAD)" "$(git -C "../$name" rev-parse HEAD)"
+  done
+  assert_equals "$(remotes)" 'origin '
+  assert_gh_not_called
+}
+
+@test "hub fetch hands a host:path word with a comma to git" {
+  run hub --noop fetch example.invalid:repo,
+  assert_success
+  assert_output_equals 'git fetch example.invalid:repo\,'
+  assert_gh_not_called
+}
+
+@test "hub fetch refuses a login that is a remote group in another case" {
+  git config remotes.friends origin
+  run hub fetch Friends,alice
+  assert_status 1
+  assert_output_equals 'hub fetch: Friends is not a remote group, but friends is (use friends)'
+  assert_equals "$(remotes)" 'origin '
+  assert_gh_not_called
+  serve_branch mislav/dotfiles fresh 'fresh on origin'
+  run hub fetch friends,alice
+  assert_success
+  assert_equals "$(remotes)" 'alice origin '
+  assert_equals "$(git rev-parse refs/remotes/origin/fresh)" "$(server_ref mislav/dotfiles fresh)"
+  assert_equals "$(git rev-parse refs/remotes/alice/topic)" "$(server_ref alice/dotfiles topic)"
+}
+
 @test "hub fetch with --multiple, --all, -m or -h is git's" {
   run hub fetch --multiple alice
   assert_failure

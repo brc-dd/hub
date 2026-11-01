@@ -7,13 +7,14 @@
 # and not a remote or a remote group, names that user's copy of the project (the project's
 # repository name, on the project's host). hub checks with gh that it exists, adds it as the
 # remote USER (https, or ssh when gh's git_protocol is ssh), then runs git fetch with the command
-# line as given. A user name that matches a remote except for case is refused; use the remote's
-# spelling. A comma-separated list adds every missing user the same way and fetches all members
-# with git fetch --multiple; members that are remotes or groups stay as they are, and a list that
-# names one missing user in two cases is refused. The remote is added before git runs, with
-# --dry-run too. With --multiple, --no-multiple or --all, without an operand, with a word that
-# names an existing path or that git reads as a local repository, or with any other operand,
-# this is plain git fetch.
+# line as given. A user name that matches a remote or a remote group except for case is refused;
+# use its spelling. A comma-separated list adds every missing user the same way and fetches all
+# members with git fetch --multiple; members that are remotes or groups stay as they are, and a
+# list that names one missing user in two cases is refused. The remote is added before git runs,
+# with --dry-run too. With --multiple, --no-multiple or --all, without an operand, with a URL or
+# host:path word, a word that names an existing path, that git reads as a local repository or
+# that git rewrites through url.BASE.insteadOf, or with any other operand, this is plain git
+# fetch.
 #
 #   $ hub fetch alice
 #   > git remote add alice https://github.com/alice/REPO.git
@@ -35,11 +36,15 @@ hub_cmd_fetch() {
   op=${HUB_OPERANDS[0]} name=${args[op]}
   hub::git_query rev-parse --git-dir >/dev/null || hub::exec_git fetch "$@"
   top=$(hub::toplevel) || top=$(hub::git_query rev-parse --absolute-git-dir)
-  if _hub_fetch_remote "$name" || _hub_fetch_local "$top" "$name"; then
+  # git prints the word unchanged unless it is a remote or an insteadOf rewrite.
+  if _hub_fetch_remote "$name" || _hub_fetch_local "$top" "$name" \
+    || [[ $(hub::git_query ls-remote --get-url -- "$name") != "$name" ]]; then
     hub::exec_git fetch "$@"
   fi
   # read would stop at a newline and drop the rest of the list.
   [[ $name != *$'\n'* ]] || hub::exec_git fetch "$@"
+  # A URL or host:path is one destination; no remote name or login has a colon.
+  [[ $name != *:* ]] || hub::exec_git fetch "$@"
   if [[ $name == *,* ]]; then
     [[ $name != ,* && $name != *, && $name != *,,* ]] \
       || hub::die "empty name in the list: $(hub::shown "$name")"
@@ -60,6 +65,8 @@ hub_cmd_fetch() {
       [[ ${other,,} != "${user,,}" ]] \
         || hub::die "$user is not a remote, but $other is (use $other)"
     done < <(hub::remotes)
+    ! hub::git_query config --get "remotes.$user" >/dev/null \
+      || hub::die "$user is not a remote group, but ${user,,} is (use ${user,,})"
     for other in "${missing[@]}"; do
       [[ $other == "$user" || ${other,,} != "${user,,}" ]] \
         || hub::die "$(hub::shown "$other") is listed twice as $(hub::shown "$user")" \
@@ -91,7 +98,9 @@ hub_cmd_fetch() {
 
 # _hub_fetch_remote NAME : NAME is a remote or a remote group.
 _hub_fetch_remote() {
-  hub::remote_exists "$1" || hub::git_query config --get "remotes.$1" >/dev/null
+  # git config ignores case in the key; git fetch takes a group only by its lowercase key.
+  hub::remote_exists "$1" \
+    || { [[ $1 == "${1,,}" ]] && hub::git_query config --get "remotes.$1" >/dev/null; }
 }
 
 # _hub_fetch_local TOP NAME : git would read NAME as a local repository, from here or from TOP.
