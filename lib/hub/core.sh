@@ -379,9 +379,10 @@ hub::login() {
   hub::require_gh
   # A token variable overrides gh's stored account, whose cached user may be someone else.
   if [[ -z ${GH_TOKEN-}${GITHUB_TOKEN-}${GH_ENTERPRISE_TOKEN-}${GITHUB_ENTERPRISE_TOKEN-} ]]; then
-    login=$(hub::gh_query config get user -h "$host")
+    login=$(hub::gh_query config get user -h "$host") || login=
   else
-    login=$(hub::gh_query api --hostname "$host" user --jq .login)
+    # gh api prints GitHub's error body on stdout: a failed lookup is no login.
+    login=$(hub::gh_query api --hostname "$host" user --jq .login) || login=
   fi
   [[ -n $login ]] \
     || hub::die "could not determine your GitHub login for $host (run: gh auth login -h $host)"

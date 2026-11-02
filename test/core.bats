@@ -797,6 +797,11 @@ parses_to() {
   GH_TOKEN=token run hub::login ghe.example
   assert_status 1
   assert_output_equals "$message (run: gh auth login -h ghe.example)"
+  # gh api prints GitHub's error body on stdout when the token is bad.
+  stub_gh 'api --hostname ghe.example user --jq .login' '{"message": "Bad credentials"}' 1
+  GH_TOKEN=bad run hub::login ghe.example
+  assert_status 1
+  assert_output_equals "$message (run: gh auth login -h ghe.example)"
 }
 
 @test "login without gh says gh is needed, once" {

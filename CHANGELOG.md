@@ -13,6 +13,12 @@ All notable changes to hub are documented here. The format follows
   and the Pages workflow publishes them on every push to `main` that changes
   a manual.
 
+### Fixed
+
+- A token variable that GitHub rejects no longer passes gh's error body as
+  your login: `clone REPO`, `fork` and the other commands that need the login
+  say it could not be determined.
+
 ## [0.3.0] - 2026-11-01
 
 ### Changed
